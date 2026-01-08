@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="*" 
+             Name="wtmux" 
+             Language="1033" 
+             Version="0.1.0" 
+             Manufacturer="wtmux" 
+             UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        
+        <Package InstallerVersion="200" 
+                 Compressed="yes" 
+                 InstallScope="perMachine"
+                 Description="wtmux - Terminal Multiplexer for Windows"
+                 Comments="A tmux-like terminal multiplexer for Windows" />
+        
+        <MajorUpgrade DowngradeErrorMessage="A newer version of wtmux is already installed." />
+        <MediaTemplate EmbedCab="yes" />
+        
+        <!-- Features -->
+        <Feature Id="ProductFeature" Title="wtmux" Level="1">
+            <ComponentGroupRef Id="ProductComponents" />
+            <ComponentRef Id="PathEnvComponent" />
+        </Feature>
+        
+        <!-- Directory Structure -->
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="wtmux">
+                    <Directory Id="BinFolder" Name="bin" />
+                </Directory>
+            </Directory>
+        </Directory>
+        
+        <!-- Components -->
+        <ComponentGroup Id="ProductComponents" Directory="BinFolder">
+            <Component Id="WtmuxExe" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+                <File Id="WtmuxExeFile" 
+                      Source="$(var.SourceDir)\wtmux.exe" 
+                      KeyPath="yes" />
+            </Component>
+        </ComponentGroup>
+        
+        <!-- Add to PATH -->
+        <DirectoryRef Id="TARGETDIR">
+            <Component Id="PathEnvComponent" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+                <Environment Id="PathEnv" 
+                             Name="PATH" 
+                             Value="[BinFolder]" 
+                             Permanent="no" 
+                             Part="last" 
+                             Action="set" 
+                             System="yes" />
+            </Component>
+        </DirectoryRef>
+        
+        <!-- UI -->
+        <UI>
+            <UIRef Id="WixUI_Minimal" />
+            <Publish Dialog="ExitDialog" 
+                     Control="Finish" 
+                     Event="DoAction" 
+                     Value="LaunchApplication">
+                WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
+            </Publish>
+        </UI>
+        
+        <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch wtmux" />
+        <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+        <Property Id="WixShellExecTarget" Value="[#WtmuxExeFile]" />
+        <CustomAction Id="LaunchApplication" 
+                      BinaryKey="WixCA" 
+                      DllEntry="WixShellExec" 
+                      Impersonate="yes" />
+        
+        <!-- License -->
+        <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\license.rtf" />
+        
+    </Product>
+</Wix>

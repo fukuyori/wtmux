@@ -1,0 +1,63 @@
+[package]
+name = "wtmux"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "A tmux-like terminal multiplexer for Windows"
+authors = ["wtmux contributors"]
+license = "MIT"
+repository = "https://github.com/user/wtmux"
+homepage = "https://github.com/user/wtmux"
+documentation = "https://github.com/user/wtmux#readme"
+readme = "README.md"
+keywords = ["terminal", "multiplexer", "tmux", "windows", "conpty"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# Terminal rendering
+crossterm = "0.27"
+
+# Unicode width calculation
+unicode-width = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Bit flags
+bitflags = "2.4"
+
+# Clipboard
+arboard = "3.4"
+
+[target.'cfg(windows)'.dependencies]
+# Windows API
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }
+
+[[bin]]
+name = "wtmux"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

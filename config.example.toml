@@ -1,0 +1,66 @@
+# wtmux configuration file
+# Place this file at ~/.wtmux/config.toml
+
+# ==============================================================================
+# General Settings
+# ==============================================================================
+
+# Default shell (optional)
+# Options: "cmd", "powershell", "pwsh", "wsl", or full path to executable
+# shell = "pwsh.exe"
+# shell = "cmd.exe"
+# shell = "wsl.exe"
+
+# Default codepage (optional)
+# codepage = 65001  # UTF-8
+# codepage = 932    # Shift-JIS (Japanese)
+
+# ==============================================================================
+# Appearance
+# ==============================================================================
+
+# Color scheme
+# Available: default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
+color_scheme = "default"
+
+# ==============================================================================
+# Tab Bar
+# ==============================================================================
+
+[tab_bar]
+visible = true
+
+# ==============================================================================
+# Status Bar
+# ==============================================================================
+
+[status_bar]
+visible = true
+show_time = true
+
+# ==============================================================================
+# Pane Settings
+# ==============================================================================
+
+[pane]
+# Border style: "single", "double", "rounded", "none"
+border_style = "single"
+
+# ==============================================================================
+# Cursor Settings
+# ==============================================================================
+
+[cursor]
+# Cursor shape: "block", "underline", "bar"
+shape = "block"
+
+# Cursor blinking
+blink = true
+
+# ==============================================================================
+# Scrollback
+# ==============================================================================
+
+[scrollback]
+# Maximum number of lines to keep in scrollback buffer
+lines = 10000
