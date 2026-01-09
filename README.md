@@ -111,6 +111,7 @@ wtmux --help
 | Option | Description |
 |--------|-------------|
 | `-1, --simple` | Simple single-pane mode |
+| `-c, --cmd` | Use Command Prompt (cmd.exe) |
 | `-p, --powershell` | Use Windows PowerShell |
 | `-7, --pwsh` | Use PowerShell 7 (pwsh.exe) |
 | `-w, --wsl` | Use WSL |

@@ -37,15 +37,18 @@ struct Config {
     codepage: Option<u32>,
     /// Enable tmux-like multi-pane mode (default: true)
     multipane: bool,
+    /// Shell was explicitly set via command line
+    shell_from_cli: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            shell: Some("cmd.exe".to_string()),
+            shell: None,  // Will be set from config.toml or default to cmd.exe
             native_console: false,
             codepage: Some(65001), // UTF-8 by default
             multipane: true, // Multi-pane mode is now default
+            shell_from_cli: false,
         }
     }
 }
@@ -67,7 +70,8 @@ fn print_help() {
     eprintln!("  -1, --simple          Simple single-pane mode");
     eprintln!();
     eprintln!("Shell options:");
-    eprintln!("  (default)             Command Prompt (cmd.exe)");
+    eprintln!("  (default)             From config.toml or Command Prompt (cmd.exe)");
+    eprintln!("  -c, --cmd             Command Prompt (cmd.exe)");
     eprintln!("  -p, --powershell      Windows PowerShell (powershell.exe)");
     eprintln!("  -7, --pwsh            PowerShell 7 (pwsh.exe)");
     eprintln!("  -w, --wsl             WSL (Windows Subsystem for Linux)");
@@ -141,14 +145,21 @@ fn parse_args() -> Result<Config, String> {
                 config.multipane = false;
             }
             // Shell selection
+            "-c" | "--cmd" => {
+                config.shell = Some("cmd.exe".to_string());
+                config.shell_from_cli = true;
+            }
             "-p" | "--powershell" => {
                 config.shell = Some("powershell.exe".to_string());
+                config.shell_from_cli = true;
             }
             "-7" | "--pwsh" => {
                 config.shell = Some("pwsh.exe".to_string());
+                config.shell_from_cli = true;
             }
             "-w" | "--wsl" => {
                 config.shell = Some("wsl.exe".to_string());
+                config.shell_from_cli = true;
                 // WSL uses UTF-8 (already default, but explicit)
                 config.codepage = Some(65001);
             }
@@ -158,6 +169,7 @@ fn parse_args() -> Result<Config, String> {
                     return Err("Missing shell argument".to_string());
                 }
                 config.shell = Some(args[i].clone());
+                config.shell_from_cli = true;
             }
             // Encoding
             "-u" | "--utf8" => {
@@ -436,8 +448,31 @@ fn main() -> anyhow::Result<()> {
 
 /// Run the terminal (Windows only)
 #[cfg(windows)]
-fn run_terminal(config: Config) -> anyhow::Result<()> {
+fn run_terminal(mut config: Config) -> anyhow::Result<()> {
     use crossterm::terminal;
+    
+    // Load wtmux config file
+    let wtmux_config = WtmuxConfig::load();
+    
+    // Merge config: command line args override config file
+    // Only use config file shell if not explicitly set via CLI
+    if !config.shell_from_cli {
+        if let Some(ref shell) = wtmux_config.shell {
+            config.shell = Some(shell.clone());
+        }
+    }
+    // Default to cmd.exe if still not set
+    if config.shell.is_none() {
+        config.shell = Some("cmd.exe".to_string());
+    }
+    
+    // Codepage from config file (CLI always overrides since it has default)
+    // Note: codepage is always Some due to default, so we check wtmux_config
+    if let Some(cp) = wtmux_config.codepage {
+        // Only override if CLI didn't explicitly set a different value
+        // For now, config file codepage is not applied (CLI default takes precedence)
+        let _ = cp; // Suppress unused warning
+    }
     
     // Detect terminal environment
     let terminal_env = detect_terminal_env();
@@ -457,7 +492,7 @@ fn run_terminal(config: Config) -> anyhow::Result<()> {
 
     if config.multipane {
         // Multi-pane mode
-        return run_terminal_wm(config, cols, rows, shell_name, encoding_name, &terminal_env);
+        return run_terminal_wm(config, cols, rows, shell_name, encoding_name, &terminal_env, wtmux_config);
     }
 
     // Simple single-pane mode
@@ -499,12 +534,11 @@ fn run_terminal(config: Config) -> anyhow::Result<()> {
 
 /// Run terminal in multi-pane mode
 #[cfg(windows)]
-fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encoding_name: &str, terminal_env: &str) -> anyhow::Result<()> {
+fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encoding_name: &str, terminal_env: &str, wtmux_config: WtmuxConfig) -> anyhow::Result<()> {
     use crossterm::terminal;
     use crate::ui::WmRenderer;
     
-    // Load wtmux config and color scheme
-    let wtmux_config = WtmuxConfig::load();
+    // Get color scheme from config
     let color_scheme = wtmux_config.get_color_scheme();
     
     // Create window manager

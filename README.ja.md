@@ -111,6 +111,7 @@ wtmux --help
 | オプション | 説明 |
 |--------|-------------|
 | `-1, --simple` | シンプルモード（単一ペイン） |
+| `-c, --cmd` | コマンドプロンプトを使用 |
 | `-p, --powershell` | Windows PowerShellを使用 |
 | `-7, --pwsh` | PowerShell 7を使用 |
 | `-w, --wsl` | WSLを使用 |
