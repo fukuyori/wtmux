@@ -44,7 +44,11 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 ### 方法1: リリース版をダウンロード
 
-[Releases](https://github.com/user/wtmux/releases) ページから最新のインストーラーをダウンロードしてください。
+[Releases](https://github.com/user/wtmux/releases) ページからダウンロード：
+
+- **インストーラー** (`wtmux-x.x.x-setup.exe`) - 一般ユーザー向け推奨
+- **ポータブル版** (`wtmux-x.x.x-portable-x64.zip`) - インストール不要、展開して実行するだけ
+- **MSI** (`wtmux-x.x.x-x64.msi`) - 企業展開向け
 
 ### 方法2: PowerShellインストールスクリプト
 
@@ -71,6 +75,9 @@ copy target\release\wtmux.exe C:\your\bin\path\
 ### インストーラーのビルド
 
 ```powershell
+# ポータブル版（ZIP）
+.\build-portable.ps1
+
 # Inno Setup使用（エンドユーザー向け推奨）
 # ダウンロード: https://jrsoftware.org/isinfo.php
 .\build-inno-installer.ps1
@@ -108,7 +115,8 @@ wtmux --help
 | `-7, --pwsh` | PowerShell 7を使用 |
 | `-w, --wsl` | WSLを使用 |
 | `-s, --shell <CMD>` | カスタムシェルコマンド |
-| `-u, --utf8` | UTF-8エンコーディング |
+| `--sjis` | Shift-JISエンコーディング（デフォルト: UTF-8） |
+| `-v, --version` | バージョン表示 |
 | `-h, --help` | ヘルプ表示 |
 
 ## キーバインド
@@ -174,6 +182,16 @@ wtmux --help
 | `Ctrl+B, t` | テーマ選択 |
 | `Ctrl+B, b` | アプリケーションにCtrl+Bを送信 |
 | `Esc` | プレフィックスモードをキャンセル |
+
+### 履歴機能
+
+wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴機能が搭載されています。入力したコマンドを記録し、複雑なコマンドを何度も入力する必要がなくなります。
+
+| キー | 動作 |
+|-----|--------|
+| `Ctrl+R` | 履歴検索表示 |
+
+詳細は: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 
 ## 設定
 
@@ -250,8 +268,10 @@ wtmux/
 ├── README.md
 ├── README.ja.md
 ├── LICENSE
+├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
+├── build-portable.ps1
 ├── build-installer.ps1
 ├── build-inno-installer.ps1
 ├── installer/

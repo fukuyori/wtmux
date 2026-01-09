@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2024-01-08
+## [0.2.0] - 2025-01-09
+
+### Changed
+
+- **Default encoding changed to UTF-8** - UTF-8 is now the default encoding instead of Shift-JIS
+- Added `--sjis` option for Shift-JIS encoding when needed
+
+### Added
+
+- **Command History** - Record and reuse entered commands with `Ctrl+R`
+  - Persistent storage in `~/.wtmux/history`
+  - Shared across all panes
+  - Automatic sensitive data exclusion
+  - Maximum 1000 entries
+
+## [0.1.0] - 2025-01-08
 
 ### Added
 

@@ -42,14 +42,21 @@ impl Default for Config {
         Self {
             shell: Some("cmd.exe".to_string()),
             native_console: false,
-            codepage: None,
+            codepage: Some(65001), // UTF-8 by default
             multipane: true, // Multi-pane mode is now default
         }
     }
 }
 
+/// Version string from Cargo.toml
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn print_version() {
+    eprintln!("wtmux {}", VERSION);
+}
+
 fn print_help() {
-    eprintln!("wtmux - A tmux-like terminal multiplexer for Windows");
+    eprintln!("wtmux {} - A tmux-like terminal multiplexer for Windows", VERSION);
     eprintln!();
     eprintln!("Usage: wtmux [OPTIONS]");
     eprintln!();
@@ -65,11 +72,12 @@ fn print_help() {
     eprintln!("  -s, --shell <CMD>     Custom shell command");
     eprintln!();
     eprintln!("Encoding options:");
-    eprintln!("  (default)             Shift-JIS (CP932)");
-    eprintln!("  -u, --utf8            UTF-8 mode");
+    eprintln!("  (default)             UTF-8 (CP65001)");
+    eprintln!("  --sjis                Shift-JIS mode (CP932)");
     eprintln!();
     eprintln!("Other options:");
     eprintln!("  -n, --native          Run in native console window");
+    eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
     eprintln!();
     eprintln!("Multi-pane mode keybindings (tmux compatible, Ctrl+B prefix):");
@@ -122,6 +130,10 @@ fn parse_args() -> Result<Config, String> {
                 print_help();
                 std::process::exit(0);
             }
+            "-v" | "--version" => {
+                print_version();
+                std::process::exit(0);
+            }
             // Mode selection
             "-1" | "--simple" => {
                 config.multipane = false;
@@ -135,10 +147,8 @@ fn parse_args() -> Result<Config, String> {
             }
             "-w" | "--wsl" => {
                 config.shell = Some("wsl.exe".to_string());
-                // WSL uses UTF-8
-                if config.codepage.is_none() {
-                    config.codepage = Some(65001);
-                }
+                // WSL uses UTF-8 (already default, but explicit)
+                config.codepage = Some(65001);
             }
             "-s" | "--shell" => {
                 i += 1;
@@ -150,6 +160,9 @@ fn parse_args() -> Result<Config, String> {
             // Encoding
             "-u" | "--utf8" => {
                 config.codepage = Some(65001);
+            }
+            "--sjis" => {
+                config.codepage = Some(932);
             }
             // Other
             "-n" | "--native" => {

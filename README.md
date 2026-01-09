@@ -44,7 +44,11 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 ### Option 1: Download Release
 
-Download the latest installer from the [Releases](https://github.com/user/wtmux/releases) page.
+Download from the [Releases](https://github.com/user/wtmux/releases) page:
+
+- **Installer** (`wtmux-x.x.x-setup.exe`) - Recommended for most users
+- **Portable** (`wtmux-x.x.x-portable-x64.zip`) - No installation required, just extract and run
+- **MSI** (`wtmux-x.x.x-x64.msi`) - For enterprise deployment
 
 ### Option 2: PowerShell Install Script
 
@@ -71,6 +75,9 @@ copy target\release\wtmux.exe C:\your\bin\path\
 ### Building Installers
 
 ```powershell
+# Portable package (ZIP)
+.\build-portable.ps1
+
 # Using Inno Setup (recommended for end users)
 # Download from: https://jrsoftware.org/isinfo.php
 .\build-inno-installer.ps1
@@ -108,7 +115,8 @@ wtmux --help
 | `-7, --pwsh` | Use PowerShell 7 (pwsh.exe) |
 | `-w, --wsl` | Use WSL |
 | `-s, --shell <CMD>` | Custom shell command |
-| `-u, --utf8` | UTF-8 encoding |
+| `--sjis` | Shift-JIS encoding (default: UTF-8) |
+| `-v, --version` | Show version |
 | `-h, --help` | Show help |
 
 ## Keybindings
@@ -174,6 +182,16 @@ In copy mode:
 | `Ctrl+B, t` | Theme selector |
 | `Ctrl+B, b` | Send Ctrl+B to application |
 | `Esc` | Cancel prefix mode |
+
+### Command History
+
+wtmux includes its own command history feature, separate from your shell's built-in history. It records the commands you enter, eliminating the need to retype complex commands repeatedly.
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+R` | Show history search |
+
+For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 
 ## Configuration
 
@@ -250,8 +268,10 @@ wtmux/
 ├── README.md
 ├── README.ja.md
 ├── LICENSE
+├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
+├── build-portable.ps1
 ├── build-installer.ps1
 ├── build-inno-installer.ps1
 ├── installer/
