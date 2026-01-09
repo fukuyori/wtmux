@@ -148,13 +148,19 @@ impl ConPty {
         // If codepage is specified, run chcp first then the shell
         let cmd = match (command, codepage) {
             (Some(cmd), Some(cp)) => {
-                // Check if command is cmd.exe itself
                 let cmd_lower = cmd.to_lowercase();
                 if cmd_lower == "cmd.exe" || cmd_lower == "cmd" {
                     // Just cmd.exe with codepage change (avoid double cmd.exe)
                     format!("cmd.exe /k \"chcp {} >nul\"", cp)
+                } else if cmd_lower.contains("powershell") || cmd_lower.contains("pwsh") {
+                    // PowerShell handles encoding internally, launch directly
+                    // Set console output encoding via command
+                    format!("{} -NoExit -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\"", cmd)
+                } else if cmd_lower.contains("wsl") {
+                    // WSL handles encoding internally, launch directly
+                    cmd.to_string()
                 } else {
-                    // Use cmd.exe to run chcp, then start the actual shell
+                    // Other shells: use cmd.exe to run chcp, then start the shell
                     format!("cmd.exe /k \"chcp {} >nul & {}\"", cp, cmd)
                 }
             }
