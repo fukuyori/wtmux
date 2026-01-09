@@ -148,8 +148,15 @@ impl ConPty {
         // If codepage is specified, run chcp first then the shell
         let cmd = match (command, codepage) {
             (Some(cmd), Some(cp)) => {
-                // Use cmd.exe to run chcp, then start the actual shell
-                format!("cmd.exe /k \"chcp {} >nul & {}\"", cp, cmd)
+                // Check if command is cmd.exe itself
+                let cmd_lower = cmd.to_lowercase();
+                if cmd_lower == "cmd.exe" || cmd_lower == "cmd" {
+                    // Just cmd.exe with codepage change (avoid double cmd.exe)
+                    format!("cmd.exe /k \"chcp {} >nul\"", cp)
+                } else {
+                    // Use cmd.exe to run chcp, then start the actual shell
+                    format!("cmd.exe /k \"chcp {} >nul & {}\"", cp, cmd)
+                }
             }
             (Some(cmd), None) => cmd.to_string(),
             (None, Some(cp)) => {

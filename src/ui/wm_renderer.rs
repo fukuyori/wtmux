@@ -10,6 +10,7 @@ use crossterm::{
     },
     terminal::{self, Clear, ClearType},
 };
+use unicode_width::UnicodeWidthChar;
 
 use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
@@ -634,8 +635,6 @@ impl WmRenderer {
 
     /// Render history selector overlay
     fn render_selector<W: Write>(&self, stdout: &mut W, wm: &WindowManager, selector: &crate::history::HistorySelector) -> io::Result<()> {
-        use unicode_width::UnicodeWidthStr;
-        
         let cs = &self.color_scheme;
         let box_width = 60.min(wm.width.saturating_sub(4)) as usize;
         let box_height = (selector.max_visible + 4).min(wm.height.saturating_sub(4) as usize);
@@ -660,21 +659,30 @@ impl WmRenderer {
 
         // Search line: "│ > query                           │"
         let prompt = "> ";
-        let prompt_width = prompt.len(); // 2
+        let prompt_len = 2; // "> "
+        let prefix_len = 2; // "│ "
         execute!(stdout, MoveTo(start_x as u16, (start_y + 1) as u16))?;
         write!(stdout, "│ {}", prompt)?;
         execute!(stdout, SetForegroundColor(cs.status_prefix_bg.to_crossterm()))?;
         
         // Calculate query display width
-        let max_query_width = box_width.saturating_sub(4 + prompt_width); // "│ > " and " │"
+        let max_query_width = box_width.saturating_sub(prefix_len + prompt_len + 1); // "│ " + "> " + "│"
+        let mut query_width = 0;
         let query_display: String = selector.query.chars()
-            .take(max_query_width)
+            .take_while(|c| {
+                let w = c.width().unwrap_or(1);
+                if query_width + w <= max_query_width {
+                    query_width += w;
+                    true
+                } else {
+                    false
+                }
+            })
             .collect();
-        let query_width = query_display.width();
         write!(stdout, "{}", query_display)?;
         
         execute!(stdout, SetForegroundColor(cs.selector_fg.to_crossterm()))?;
-        let padding = box_width.saturating_sub(3 + prompt_width + query_width + 1);
+        let padding = box_width.saturating_sub(prefix_len + prompt_len + query_width + 1);
         write!(stdout, "{:padding$}│", "", padding = padding)?;
 
         // Separator
@@ -707,20 +715,30 @@ impl WmRenderer {
                 )?;
             }
             
+            // Fixed width number format: "│ XX. " (always 2 digits for alignment)
             let num = display_idx + 1;
-            let prefix = format!("│ {}. ", num);
-            let prefix_width = prefix.width();
+            let prefix = format!("│{:2}. ", num);
+            let prefix_len = 5; // "│" + 2digit + ". " = 5 chars
             write!(stdout, "{}", prefix)?;
             
-            // Truncate command to fit
-            let max_cmd_width = box_width.saturating_sub(prefix_width + 2); // space for " │"
+            // Truncate command to fit: box_width - prefix_len - 1 (for trailing "│")
+            let max_cmd_width = box_width.saturating_sub(prefix_len + 1);
+            let mut cmd_width = 0;
             let cmd: String = command.chars()
-                .take(max_cmd_width)
+                .take_while(|c| {
+                    let w = c.width().unwrap_or(1);
+                    if cmd_width + w <= max_cmd_width {
+                        cmd_width += w;
+                        true
+                    } else {
+                        false
+                    }
+                })
                 .collect();
-            let cmd_width = cmd.width();
             write!(stdout, "{}", cmd)?;
             
-            let padding = box_width.saturating_sub(prefix_width + cmd_width + 1);
+            // Padding to fill the rest
+            let padding = box_width.saturating_sub(prefix_len + cmd_width + 1);
             if padding > 0 {
                 write!(stdout, "{:padding$}", "", padding = padding)?;
             }
@@ -743,7 +761,7 @@ impl WmRenderer {
         }
 
         // Bottom border with help (English)
-        let help_text = "Up/Down:Select 1-9:Quick Enter:Insert Esc:Close";
+        let help_text = "Enter:Run S-Enter:&& C-Enter:& Esc:Close";
         let help_width = help_text.len();
         execute!(stdout, MoveTo(start_x as u16, (start_y + box_height - 1) as u16))?;
         write!(stdout, "└ {} ", help_text)?;
@@ -755,7 +773,7 @@ impl WmRenderer {
         execute!(stdout, ResetColor)?;
         
         // Position cursor in search box (after "│ > ")
-        let cursor_x = start_x + 2 + prompt_width + query_width;
+        let cursor_x = start_x + prefix_len + prompt_len + query_width;
         execute!(stdout, MoveTo(cursor_x as u16, (start_y + 1) as u16), Show)?;
 
         Ok(())

@@ -6,13 +6,25 @@
 #   .\build-portable.ps1 -SkipBuild   # Package only (use existing build)
 
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "",
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "=== wtmux Portable Package Builder ===" -ForegroundColor Cyan
+
+# Get version from Cargo.toml if not specified
+if (-not $Version) {
+    $cargoToml = Get-Content ".\Cargo.toml" -Raw
+    if ($cargoToml -match 'version\s*=\s*"([0-9.]+)"') {
+        $Version = $matches[1]
+        Write-Host "Version from Cargo.toml: $Version" -ForegroundColor Gray
+    } else {
+        Write-Host "Error: Could not determine version from Cargo.toml" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # Check for release build or build it
 $exePath = ".\target\release\wtmux.exe"

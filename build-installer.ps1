@@ -6,13 +6,25 @@
 #   2. Build wtmux in release mode first: cargo build --release
 
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "",
     [string]$OutputDir = ".\installer\output"
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "=== wtmux Installer Build Script ===" -ForegroundColor Cyan
+
+# Get version from Cargo.toml if not specified
+if (-not $Version) {
+    $cargoToml = Get-Content ".\Cargo.toml" -Raw
+    if ($cargoToml -match 'version\s*=\s*"([0-9.]+)"') {
+        $Version = $matches[1]
+        Write-Host "Version from Cargo.toml: $Version" -ForegroundColor Gray
+    } else {
+        Write-Host "Error: Could not determine version from Cargo.toml" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # Find WiX tools - check for v6.x first (wix.exe), then v3.x (candle.exe/light.exe)
 $wixPaths = @(

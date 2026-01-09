@@ -180,6 +180,7 @@ In copy mode:
 | Key | Action |
 |-----|--------|
 | `Ctrl+B, t` | Theme selector |
+| `Ctrl+B, r` | Reset cursor shape |
 | `Ctrl+B, b` | Send Ctrl+B to application |
 | `Esc` | Cancel prefix mode |
 
@@ -190,6 +191,9 @@ wtmux includes its own command history feature, separate from your shell's built
 | Key | Action |
 |-----|--------|
 | `Ctrl+R` | Show history search |
+| `Enter` | Execute selected command (replace current input) |
+| `Shift+Enter` | Append with `&&` (run if previous succeeds) |
+| `Ctrl+Enter` | Append with `&` (background/parallel) |
 
 For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 

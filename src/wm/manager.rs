@@ -296,7 +296,7 @@ impl WindowManager {
     /// Process output for all tabs and handle closed panes
     pub fn process_output(&mut self) -> bool {
         let mut any_output = false;
-        let mut tabs_to_check: Vec<TabId> = self.tabs.keys().cloned().collect();
+        let tabs_to_check: Vec<TabId> = self.tabs.keys().cloned().collect();
         
         for tab_id in tabs_to_check.iter() {
             if let Some(tab) = self.tabs.get_mut(tab_id) {
@@ -309,10 +309,11 @@ impl WindowManager {
         }
         
         // Remove empty tabs
-        tabs_to_check.retain(|id| {
-            self.tabs.get(id).map(|t| t.panes.is_empty()).unwrap_or(false)
-        });
-        for tab_id in tabs_to_check {
+        let empty_tabs: Vec<TabId> = self.tabs.iter()
+            .filter(|(_, tab)| tab.panes.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for tab_id in empty_tabs {
             self.tabs.remove(&tab_id);
             self.tab_order.retain(|&id| id != tab_id);
         }
@@ -361,11 +362,12 @@ impl WindowManager {
     }
 
     /// Handle mouse down at position (start selection)
-    pub fn handle_mouse_down(&mut self, col: u16, row: u16) {
+    /// Returns true if focus changed to a different pane
+    pub fn handle_mouse_down(&mut self, col: u16, row: u16) -> bool {
         // Check if click is on tab bar
         if row < self.tab_bar_height {
             // TODO: Calculate which tab was clicked
-            return;
+            return false;
         }
         
         // Adjust row for content area
@@ -373,6 +375,7 @@ impl WindowManager {
         
         // Find pane at position and focus it
         if let Some(tab) = self.active_tab_mut() {
+            let old_focus = tab.focused_pane;
             if let Some(pane_id) = tab.pane_at(col, content_row) {
                 tab.focus_pane(pane_id);
                 
@@ -383,8 +386,12 @@ impl WindowManager {
                     let pane_row = content_row.saturating_sub(inner_y);
                     pane.session.state.start_selection(pane_col, pane_row);
                 }
+                
+                // Return true if focus changed
+                return old_focus != pane_id;
             }
         }
+        false
     }
 
     /// Handle mouse drag (extend selection)

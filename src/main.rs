@@ -15,6 +15,8 @@ use std::io::Write;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::cursor::SetCursorStyle;
+use crossterm::execute;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -245,6 +247,12 @@ fn get_shell_name(shell_cmd: &str) -> &str {
     } else {
         shell_cmd
     }
+}
+
+/// Reset cursor shape to default block cursor
+fn reset_cursor_shape() {
+    let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, SetCursorStyle::SteadyBlock);
 }
 
 /// Get encoding name
@@ -575,6 +583,12 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
         // Process output from all panes
         let has_output = wm.process_output();
         
+        // Check again after processing output (panes may have exited)
+        if !wm.is_running() {
+            info!("All sessions ended after output processing");
+            break;
+        }
+        
         // Render based on current mode
         if copy_mode.active || rename_mode {
             // In copy mode or rename mode, only render on key events
@@ -765,6 +779,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             if c.is_ascii_digit() {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
                                 wm.select_pane_by_number(num);
+                                reset_cursor_shape();
                             }
                         }
                         pane_numbers_visible = false;
@@ -816,10 +831,19 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             }
                             KeyCode::Enter => {
                                 if let Some(command) = selector.confirm() {
-                                    // Clear current input and insert history command
-                                    // Use Escape key which works on cmd.exe to clear line
-                                    wm.clear_current_input();
-                                    let _ = wm.write(command.as_bytes());
+                                    if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                        // Shift+Enter: append with && (run if previous succeeds)
+                                        let append_cmd = format!(" && {}", command);
+                                        let _ = wm.write(append_cmd.as_bytes());
+                                    } else if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                                        // Ctrl+Enter: append with & (background/parallel)
+                                        let append_cmd = format!(" & {}", command);
+                                        let _ = wm.write(append_cmd.as_bytes());
+                                    } else {
+                                        // Enter: replace current input with history command
+                                        wm.clear_current_input();
+                                        let _ = wm.write(command.as_bytes());
+                                    }
                                 }
                             }
                             KeyCode::Up => {
@@ -910,6 +934,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                     wm.resize_pane_direction(SplitDirection::Horizontal, true);
                                 } else {
                                     wm.focus_direction(SplitDirection::Horizontal, false);
+                                    reset_cursor_shape();
                                 }
                                 wm.prefix_mode = false;
                             }
@@ -919,6 +944,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                     wm.resize_pane_direction(SplitDirection::Horizontal, false);
                                 } else {
                                     wm.focus_direction(SplitDirection::Horizontal, true);
+                                    reset_cursor_shape();
                                 }
                                 wm.prefix_mode = false;
                             }
@@ -928,6 +954,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                     wm.resize_pane_direction(SplitDirection::Vertical, true);
                                 } else {
                                     wm.focus_direction(SplitDirection::Vertical, false);
+                                    reset_cursor_shape();
                                 }
                                 wm.prefix_mode = false;
                             }
@@ -937,6 +964,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                     wm.resize_pane_direction(SplitDirection::Vertical, false);
                                 } else {
                                     wm.focus_direction(SplitDirection::Vertical, true);
+                                    reset_cursor_shape();
                                 }
                                 wm.prefix_mode = false;
                             }
@@ -949,11 +977,18 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             // Next pane (tmux: o)
                             KeyCode::Char('o') => {
                                 wm.focus_next_pane();
+                                reset_cursor_shape();
                                 wm.prefix_mode = false;
                             }
                             // Previous pane (tmux: ;)
                             KeyCode::Char(';') => {
                                 wm.focus_prev_pane();
+                                reset_cursor_shape();
+                                wm.prefix_mode = false;
+                            }
+                            // Reset cursor shape (tmux: r)
+                            KeyCode::Char('r') => {
+                                reset_cursor_shape();
                                 wm.prefix_mode = false;
                             }
                             // Zoom pane toggle (tmux: z)
@@ -1095,7 +1130,10 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                     
                     match mouse_event.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
-                            wm.handle_mouse_down(mouse_event.column, mouse_event.row);
+                            let focus_changed = wm.handle_mouse_down(mouse_event.column, mouse_event.row);
+                            if focus_changed {
+                                reset_cursor_shape();
+                            }
                             renderer.render_with_selector(wm, Some(&selector))?;
                         }
                         MouseEventKind::Drag(MouseButton::Left) => {

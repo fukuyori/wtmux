@@ -156,6 +156,13 @@ impl Session {
     /// Read and process output from PTY (non-blocking)
     #[cfg(windows)]
     pub fn process_output(&mut self) -> Result<bool, PtyError> {
+        // Check if PTY process is still running
+        if let Some(pty) = &self.pty {
+            if !pty.is_running() {
+                self.running.store(false, Ordering::SeqCst);
+            }
+        }
+        
         // First, collect all available data from the channel
         let mut all_data: Vec<Vec<u8>> = Vec::new();
         
