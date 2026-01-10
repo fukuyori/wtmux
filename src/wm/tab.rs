@@ -37,9 +37,8 @@ impl Tab {
     /// Create a new tab with a single pane
     pub fn new(id: TabId, name: String, cols: u16, rows: u16) -> Self {
         let pane_id = 1;
-        let mut pane = Pane::new(pane_id, cols, rows);
+        let mut pane = Pane::new_without_border(pane_id, cols, rows);
         pane.focused = true;
-        pane.border = BorderStyle::None; // No border for single pane
         
         let mut panes = HashMap::new();
         panes.insert(pane_id, pane);

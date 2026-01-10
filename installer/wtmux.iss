@@ -2,7 +2,7 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "wtmux"
-#define MyAppVersion "0.3.2"
+#define MyAppVersion "0.3.3"
 #define MyAppPublisher "wtmux"
 #define MyAppURL "https://github.com/user/wtmux"
 #define MyAppExeName "wtmux.exe"

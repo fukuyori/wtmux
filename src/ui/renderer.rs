@@ -321,9 +321,15 @@ impl Renderer {
                     continue;
                 }
 
+                let cell_width = cell.width.max(1) as u16;
+                
+                // Skip if this cell would overflow the screen width
+                if col_idx + cell_width > num_cols as u16 {
+                    break;
+                }
+
                 let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
                 let ch = cell.display_char().to_string();
-                let cell_width = cell.width.max(1) as u16;
 
                 // Build current cell
                 let current = RenderCell {
@@ -432,6 +438,7 @@ impl Renderer {
     fn render_full<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let num_rows = state.rows as usize;
+        let num_cols = state.cols as usize;
         let has_selection = state.selection.is_some();
 
         // Hide cursor during rendering
@@ -453,16 +460,19 @@ impl Renderer {
                 None => continue,
             };
 
-            let mut col_idx: u16 = 0;
-            for cell in &row.cells {
-                // Skip continuation cells
+            // Output cells sequentially, letting the terminal handle positioning
+            for (col_idx, cell) in row.cells.iter().enumerate() {
+                if col_idx >= num_cols {
+                    break;
+                }
+                
+                // Skip continuation cells - they are placeholders for wide characters
                 if cell.is_continuation() {
-                    col_idx += 1;
                     continue;
                 }
 
                 // Check if this cell is selected
-                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
+                let is_selected = has_selection && state.is_selected(col_idx as u16, row_idx as u16);
                 
                 // Check if we need to flush and change attributes
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
@@ -481,7 +491,6 @@ impl Renderer {
 
                 // Add character to buffer
                 line_buffer.push_str(cell.display_char());
-                col_idx += cell.width.max(1) as u16;
             }
 
             // Flush remaining text for this line
@@ -509,6 +518,7 @@ impl Renderer {
     fn render_dirty<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let has_selection = state.selection.is_some();
+        let num_cols = state.cols as usize;
 
         execute!(stdout, Hide)?;
 
@@ -534,14 +544,18 @@ impl Renderer {
             current_attrs = CellAttrs::default();
             current_selected = false;
 
-            let mut col_idx: u16 = 0;
-            for cell in &row.cells {
+            // Output cells sequentially, letting the terminal handle positioning
+            for (col_idx, cell) in row.cells.iter().enumerate() {
+                if col_idx >= num_cols {
+                    break;
+                }
+                
+                // Skip continuation cells
                 if cell.is_continuation() {
-                    col_idx += 1;
                     continue;
                 }
 
-                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
+                let is_selected = has_selection && state.is_selected(col_idx as u16, row_idx as u16);
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
                 
                 if attrs_changed && !line_buffer.is_empty() {
@@ -556,7 +570,6 @@ impl Renderer {
                 }
 
                 line_buffer.push_str(cell.display_char());
-                col_idx += cell.width.max(1) as u16;
             }
 
             if !line_buffer.is_empty() {

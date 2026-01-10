@@ -119,8 +119,10 @@ impl TerminalState {
             (cursor.row, cursor.col)
         };
 
-        // Handle line wrap
-        if cursor_col + width > self.cols {
+        // Handle line wrap - only when cursor is completely beyond the screen edge
+        // We allow writing at cols-1 even for wide characters, trusting ConPTY to handle wrapping
+        // This prevents premature wrapping when unicode-width differs from ConPTY's calculation
+        if cursor_col >= self.cols {
             if self.modes.auto_wrap {
                 {
                     let screen = self.active_screen_mut();
@@ -129,7 +131,8 @@ impl TerminalState {
                 self.active_cursor_mut().col = 0;
                 self.linefeed();
             } else {
-                self.active_cursor_mut().col = self.cols.saturating_sub(width);
+                // No wrap - clamp to last position
+                self.active_cursor_mut().col = self.cols.saturating_sub(1);
             }
         }
 
@@ -138,6 +141,11 @@ impl TerminalState {
             let cursor = self.active_cursor();
             (cursor.row as usize, cursor.col as usize)
         };
+        
+        // Ensure col is within bounds for writing
+        if col >= self.cols as usize {
+            return;
+        }
 
         // Handle overwriting wide characters
         self.handle_wide_char_overwrite(row, col);
@@ -155,14 +163,14 @@ impl TerminalState {
             attrs: attrs.clone(),
         };
 
-        // For wide characters, mark next cell as continuation
+        // For wide characters, mark next cell as continuation (only if it fits)
         if width == 2 && col + 1 < cols as usize {
             screen.rows[row].cells[col + 1] = Cell::continuation(&attrs);
         }
 
         screen.mark_dirty(row);
 
-        // Move cursor
+        // Move cursor by character width
         self.active_cursor_mut().col += width;
     }
 

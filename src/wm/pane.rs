@@ -42,8 +42,28 @@ impl Default for BorderStyle {
 }
 
 impl Pane {
-    /// Create a new pane
+    /// Create a new pane with border (default)
     pub fn new(id: PaneId, cols: u16, rows: u16) -> Self {
+        // Calculate inner size (accounting for border)
+        // Default border is Single, so subtract 2 from each dimension
+        let inner_cols = if cols > 2 { cols - 2 } else { 1 };
+        let inner_rows = if rows > 2 { rows - 2 } else { 1 };
+        
+        Self {
+            id,
+            session: Session::new(id, inner_cols, inner_rows),
+            x: 0,
+            y: 0,
+            width: cols,
+            height: rows,
+            focused: false,
+            border: BorderStyle::default(),
+            title: None,
+        }
+    }
+    
+    /// Create a new pane without border (full size)
+    pub fn new_without_border(id: PaneId, cols: u16, rows: u16) -> Self {
         Self {
             id,
             session: Session::new(id, cols, rows),
@@ -52,7 +72,7 @@ impl Pane {
             width: cols,
             height: rows,
             focused: false,
-            border: BorderStyle::default(),
+            border: BorderStyle::None,
             title: None,
         }
     }
@@ -79,6 +99,11 @@ impl Pane {
 
     /// Resize the pane
     pub fn resize(&mut self, width: u16, height: u16) {
+        // Only resize if size actually changed
+        if self.width == width && self.height == height {
+            return;
+        }
+        
         self.width = width;
         self.height = height;
         let (inner_w, inner_h) = self.inner_size();

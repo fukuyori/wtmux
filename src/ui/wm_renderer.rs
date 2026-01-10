@@ -330,6 +330,7 @@ impl WmRenderer {
         // Calculate which rows to display based on copy mode scroll
         let bottom_row = total_lines.saturating_sub(1);
         let visible_start = bottom_row.saturating_sub(copy_mode.scroll_offset + visible_rows - 1);
+        let render_w = inner_w as usize;
 
         for row_idx in 0..inner_h as usize {
             let abs_row = visible_start + row_idx;
@@ -338,10 +339,17 @@ impl WmRenderer {
             execute!(stdout, MoveTo(inner_x, screen_y))?;
             
             if let Some(line) = screen.get_line_at_absolute(abs_row) {
-                let mut col: u16 = 0;
+                let mut line_buffer = String::with_capacity(256);
+                let mut last_style: Option<(bool, bool, bool)> = None; // (selected, current_match, search_match)
+                
                 for (cell_idx, cell) in line.iter().enumerate() {
-                    if col >= inner_w {
+                    if cell_idx >= render_w {
                         break;
+                    }
+                    
+                    // Skip continuation cells
+                    if cell.width == 0 {
+                        continue;
                     }
                     
                     let cell_col = cell_idx as u16;
@@ -351,39 +359,49 @@ impl WmRenderer {
                     let is_current_match = copy_mode.is_current_match(abs_row, cell_col);
                     let is_search_match = copy_mode.is_search_match(abs_row, cell_col);
                     
-                    // Apply highlighting
-                    if is_current_match {
-                        // Current search match - bright highlight
-                        execute!(stdout, 
-                            SetBackgroundColor(CtColor::Yellow),
-                            SetForegroundColor(CtColor::Black)
-                        )?;
-                    } else if is_search_match {
-                        // Other search matches
-                        execute!(stdout,
-                            SetBackgroundColor(CtColor::DarkYellow),
-                            SetForegroundColor(CtColor::Black)
-                        )?;
-                    } else if is_selected {
-                        // Selection
-                        execute!(stdout,
-                            SetBackgroundColor(cs.selection_bg.to_crossterm()),
-                            SetForegroundColor(cs.selection_fg.to_crossterm())
-                        )?;
-                    } else {
-                        // Normal - apply cell attributes
-                        self.apply_attrs_with_selection(stdout, &cell.attrs, false)?;
+                    let current_style = (is_selected, is_current_match, is_search_match);
+                    
+                    // Check if style changed
+                    if last_style != Some(current_style) {
+                        // Flush buffer
+                        if !line_buffer.is_empty() {
+                            write!(stdout, "{}", line_buffer)?;
+                            line_buffer.clear();
+                        }
+                        
+                        // Apply new style
+                        if is_current_match {
+                            execute!(stdout, 
+                                SetBackgroundColor(CtColor::Yellow),
+                                SetForegroundColor(CtColor::Black)
+                            )?;
+                        } else if is_search_match {
+                            execute!(stdout,
+                                SetBackgroundColor(CtColor::DarkYellow),
+                                SetForegroundColor(CtColor::Black)
+                            )?;
+                        } else if is_selected {
+                            execute!(stdout,
+                                SetBackgroundColor(cs.selection_bg.to_crossterm()),
+                                SetForegroundColor(cs.selection_fg.to_crossterm())
+                            )?;
+                        } else {
+                            self.apply_attrs_with_selection(stdout, &cell.attrs, false)?;
+                        }
+                        
+                        last_style = Some(current_style);
                     }
                     
-                    write!(stdout, "{}", cell.display_char())?;
-                    col += cell.width.max(1) as u16;
+                    line_buffer.push_str(cell.display_char());
+                }
+                
+                // Flush remaining
+                if !line_buffer.is_empty() {
+                    write!(stdout, "{}", line_buffer)?;
                 }
                 
                 // Clear rest of line
                 execute!(stdout, ResetColor)?;
-                if (col as usize) < inner_w as usize {
-                    write!(stdout, "{:width$}", "", width = inner_w as usize - col as usize)?;
-                }
             } else {
                 // Empty line
                 execute!(stdout, ResetColor)?;
@@ -861,6 +879,10 @@ impl WmRenderer {
         let (inner_x, inner_y) = pane.inner_pos();
         let (inner_w, inner_h) = pane.inner_size();
         let has_selection = pane.session.state.selection.is_some();
+        
+        // Use the minimum of pane inner width and session columns
+        // to handle cases where they might be temporarily out of sync
+        let render_w = inner_w.min(pane.session.state.cols) as usize;
 
         // Draw border if needed
         if pane.border != BorderStyle::None {
@@ -870,9 +892,11 @@ impl WmRenderer {
         // Render content
         let mut current_attrs = CellAttrs::default();
         let mut current_selected = false;
+        let mut line_buffer = String::with_capacity(256);
         
         for row_idx in 0..inner_h as usize {
             execute!(stdout, MoveTo(inner_x, y_offset + inner_y + row_idx as u16))?;
+            line_buffer.clear();
             
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
@@ -883,38 +907,47 @@ impl WmRenderer {
                 }
             };
 
-            let mut col: u16 = 0;
-            for cell in &row.cells {
-                if col >= inner_w as u16 {
+            // Output cells sequentially, letting the terminal handle positioning
+            // Only output cells up to render_w to respect pane boundary
+            for (col_idx, cell) in row.cells.iter().enumerate() {
+                if col_idx >= render_w {
                     break;
                 }
 
                 if cell.is_continuation() {
-                    col += 1;
                     continue;
                 }
 
                 // Check if this cell is selected
-                let is_selected = has_selection && pane.session.state.is_selected(col, row_idx as u16);
+                let is_selected = has_selection && pane.session.state.is_selected(col_idx as u16, row_idx as u16);
 
-                // Apply attributes if changed
-                if cell.attrs != current_attrs || is_selected != current_selected {
-                    self.apply_attrs_with_selection(stdout, &cell.attrs, is_selected)?;
+                // Check if we need to flush and change attributes
+                let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
+                
+                if attrs_changed && !line_buffer.is_empty() {
+                    self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
+                    write!(stdout, "{}", line_buffer)?;
+                    line_buffer.clear();
+                }
+                
+                if attrs_changed {
                     current_attrs = cell.attrs.clone();
                     current_selected = is_selected;
                 }
 
-                write!(stdout, "{}", cell.display_char())?;
-                col += cell.width.max(1) as u16;
+                line_buffer.push_str(cell.display_char());
             }
 
-            // Clear rest of line
-            if (col as usize) < inner_w as usize {
-                execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
-                current_attrs = CellAttrs::default();
-                current_selected = false;
-                write!(stdout, "{:width$}", "", width = inner_w as usize - col as usize)?;
+            // Flush remaining text
+            if !line_buffer.is_empty() {
+                self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
+                write!(stdout, "{}", line_buffer)?;
+                line_buffer.clear();
             }
+
+            // Clear rest of line if needed
+            // Note: We rely on the clear at line start (if any) or the previous render
+            // The terminal handles the actual positioning
         }
 
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;

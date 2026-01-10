@@ -416,12 +416,35 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Initialize logging
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .with_writer(std::io::stderr)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+    // Initialize logging to file
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from);
+    
+    let log_path = home
+        .map(|h| h.join(".wtmux").join("wtmux.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("wtmux.log"));
+    
+    // Create log directory if needed
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    
+    // Open log file (append mode)
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok();
+    
+    if let Some(file) = log_file {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::INFO)
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
 
     info!("wtmux starting...");
     
@@ -554,6 +577,9 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
         error!("Failed to start session: {}", e);
         return Err(anyhow::anyhow!(e));
     }
+    
+    // Force resize to ensure PTY has correct size
+    wm.resize(cols, rows);
 
     // Initialize renderer with color scheme
     let mut renderer = WmRenderer::with_color_scheme(color_scheme);
