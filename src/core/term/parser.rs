@@ -52,6 +52,7 @@ enum ParserState {
     CsiParam,
     CsiIntermediate,
     OscString,
+    EscapeInOsc,  // ESC received within OSC, waiting for backslash
 }
 
 impl Default for VtParser {
@@ -73,8 +74,8 @@ impl VtParser {
 
     /// Feed a single byte to the parser
     pub fn feed(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
-        // Handle C0 controls anywhere (except in OSC)
-        if byte < 0x20 && self.state != ParserState::OscString {
+        // Handle C0 controls anywhere (except in OSC-related states)
+        if byte < 0x20 && self.state != ParserState::OscString && self.state != ParserState::EscapeInOsc {
             match byte {
                 0x1B => {
                     self.enter_escape();
@@ -109,7 +110,24 @@ impl VtParser {
             ParserState::CsiParam => self.csi_param(byte, state),
             ParserState::CsiIntermediate => self.csi_intermediate(byte, state),
             ParserState::OscString => self.osc_string_state(byte, state),
+            ParserState::EscapeInOsc => self.escape_in_osc(byte, state),
         }
+    }
+
+    /// Handle ESC received within OSC sequence
+    fn escape_in_osc(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
+        if byte == b'\\' {
+            // ST (ESC \) - String Terminator
+            self.execute_osc(state);
+            self.state = ParserState::Ground;
+        } else {
+            // Not ST, execute OSC and process this byte as new escape sequence
+            self.execute_osc(state);
+            // Re-enter escape mode and process this byte
+            self.enter_escape();
+            return self.escape(byte, state);
+        }
+        None
     }
 
     fn enter_escape(&mut self) {
@@ -292,9 +310,8 @@ impl VtParser {
             }
             0x1B => {
                 // Could be ST (ESC \)
-                // For simplicity, treat as terminator
-                self.execute_osc(state);
-                self.state = ParserState::Ground;
+                // Move to EscapeInOsc state to check for backslash
+                self.state = ParserState::EscapeInOsc;
             }
             0x9C => {
                 // ST (String Terminator)

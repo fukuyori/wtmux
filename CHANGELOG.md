@@ -5,15 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.3] - 2025-01-10
+## [0.3.4] - 2025-01-11
 
 ### Fixed
 
 - Fixed wide character (CJK) rendering issues
   - Japanese text no longer truncated or displayed incorrectly
   - Fixed mismatch between unicode-width calculation and Windows Terminal rendering
-  - Renderer now outputs characters sequentially, letting terminal handle positioning
-  - Affects both single-pane and multi-pane modes
+  - Renderer now properly handles character width differences
+
+- Fixed progress bar artifacts (backslash characters appearing on screen)
+  - This was a bug since v0.1.0
+  - Properly parse OSC sequence terminator (ESC \)
+  - Cargo build progress and other progress indicators now display correctly
+
+- Fixed carriage return not marking line as dirty for redraw
 
 ## [0.3.2] - 2025-01-09
 

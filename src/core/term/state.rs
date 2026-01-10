@@ -213,7 +213,10 @@ impl TerminalState {
 
     /// Carriage return - move cursor to column 0
     pub fn carriage_return(&mut self) {
+        let row = self.active_cursor().row as usize;
         self.active_cursor_mut().col = 0;
+        // Mark the line dirty since content may be overwritten
+        self.active_screen_mut().mark_dirty(row);
     }
 
     /// Line feed - move cursor down, scroll if needed

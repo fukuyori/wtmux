@@ -438,7 +438,7 @@ impl Renderer {
     fn render_full<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let num_rows = state.rows as usize;
-        let num_cols = state.cols as usize;
+        let num_cols = state.cols as u16;
         let has_selection = state.selection.is_some();
 
         // Hide cursor during rendering
@@ -449,7 +449,7 @@ impl Renderer {
         let mut line_buffer = String::with_capacity(256);
 
         for row_idx in 0..num_rows {
-            // Move to line start and clear line (reduces flicker vs Clear::All)
+            // Move to line start and clear line
             execute!(stdout, MoveTo(0, row_idx as u16))?;
             write!(stdout, "\x1b[K")?; // Clear to end of line
             line_buffer.clear();
@@ -460,19 +460,20 @@ impl Renderer {
                 None => continue,
             };
 
-            // Output cells sequentially, letting the terminal handle positioning
-            for (col_idx, cell) in row.cells.iter().enumerate() {
+            let mut col_idx: u16 = 0;
+            for cell in &row.cells {
                 if col_idx >= num_cols {
                     break;
                 }
                 
-                // Skip continuation cells - they are placeholders for wide characters
+                // Skip continuation cells (placeholders for wide characters)
                 if cell.is_continuation() {
+                    col_idx += 1;
                     continue;
                 }
 
                 // Check if this cell is selected
-                let is_selected = has_selection && state.is_selected(col_idx as u16, row_idx as u16);
+                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
                 
                 // Check if we need to flush and change attributes
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
@@ -491,6 +492,9 @@ impl Renderer {
 
                 // Add character to buffer
                 line_buffer.push_str(cell.display_char());
+                
+                // Advance column by actual cell width
+                col_idx += cell.width.max(1) as u16;
             }
 
             // Flush remaining text for this line
@@ -518,7 +522,7 @@ impl Renderer {
     fn render_dirty<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let has_selection = state.selection.is_some();
-        let num_cols = state.cols as usize;
+        let num_cols = state.cols as u16;
 
         execute!(stdout, Hide)?;
 
@@ -544,18 +548,18 @@ impl Renderer {
             current_attrs = CellAttrs::default();
             current_selected = false;
 
-            // Output cells sequentially, letting the terminal handle positioning
-            for (col_idx, cell) in row.cells.iter().enumerate() {
+            let mut col_idx: u16 = 0;
+            for cell in &row.cells {
                 if col_idx >= num_cols {
                     break;
                 }
                 
-                // Skip continuation cells
                 if cell.is_continuation() {
+                    col_idx += 1;
                     continue;
                 }
 
-                let is_selected = has_selection && state.is_selected(col_idx as u16, row_idx as u16);
+                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
                 
                 if attrs_changed && !line_buffer.is_empty() {
@@ -570,6 +574,7 @@ impl Renderer {
                 }
 
                 line_buffer.push_str(cell.display_char());
+                col_idx += cell.width.max(1) as u16;
             }
 
             if !line_buffer.is_empty() {
