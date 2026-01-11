@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-01-11
+
+### Changed
+
+- **Major rendering architecture refactoring**
+  - Unified frame management with `with_frame()` wrapper
+  - All render functions now use `stdout.lock()` for thread safety
+  - Consistent begin/end frame handling across all rendering paths
+  - Terminal state (cursor, autowrap, synchronized update) always restored on error
+
+- **Layout management overhaul**
+  - `reflow()` is now the single entry point for all geometry changes
+  - `apply_geometry()` ensures consistent order: border → position → resize
+  - Generation-based full redraw detection (replaces boolean flag)
+  - Removed double-reflow bugs in `cleanup_dead_panes()`
+
+### Fixed
+
+- Fixed zoom causing black screen
+  - Zoom now preserves terminal content instead of clearing it
+  - Zoom/unzoom transitions are seamless
+
+- Fixed potential cursor disappearing after render errors
+  - `with_cursor_hidden()` ensures Show on all exit paths
+
+- Fixed synchronized update boundary issues with BufWriter
+  - Begin/end sequences now written to same buffer
+
+- Fixed autowrap state leaking between render frames
+
+### Removed
+
+- Removed unused `resize_and_clear()` methods
+- Removed unused `send_clear_screen()` methods
+- Removed redundant synchronized update ON from `init()`
+
+### Internal
+
+- Added `with_frame()` for RAII-like frame management
+- Added `with_cursor_hidden()` for lightweight cursor-only updates
+- Improved error logging with PaneId and size information
+- Cleaner separation between full renders and partial updates
+
 ## [0.3.4] - 2025-01-11
 
 ### Fixed

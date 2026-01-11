@@ -4,6 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+[![Version](https://img.shields.io/badge/version-0.4.0-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -12,15 +13,17 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 - **tmux-compatible keybindings** - Familiar `Ctrl+B` prefix commands
 - **Multiple tabs (windows)** - Create, switch, rename, and manage tabs
 - **Split panes** - Horizontal and vertical splits with resize support
-- **Pane zoom** - Toggle full-screen for any pane
+- **Pane zoom** - Toggle full-screen for any pane (v0.4.0: seamless transitions)
 - **Layout presets** - 5 layouts (even-horizontal, even-vertical, main-horizontal, main-vertical, tiled)
 - **Copy mode** - vim-like scrollback navigation and text selection
 - **Search** - Search through scrollback buffer with highlighting
+- **Command history** - Record and reuse commands with Ctrl+R
 - **Color schemes** - 8 built-in themes (default, solarized, monokai, nord, dracula, gruvbox, tokyo-night)
 - **Configuration** - TOML config file support
 - **ConPTY support** - Native Windows pseudo-terminal
 - **Multiple shells** - cmd.exe, PowerShell, PowerShell 7, WSL
 - **Encoding support** - UTF-8 and Shift-JIS (CP932)
+- **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
 
 ## Screenshots
 

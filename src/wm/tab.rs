@@ -7,6 +7,17 @@ use super::layout::{Layout, LayoutType, SplitDirection};
 /// Unique identifier for a tab
 pub type TabId = u64;
 
+/// Reason for reflow (used for debugging and optimization)
+#[derive(Debug, Clone, Copy)]
+pub enum ReflowReason {
+    Split,
+    Close,
+    ZoomToggle,
+    FocusChanged,
+    WindowResized,
+    LayoutChanged,
+}
+
 /// A tab containing multiple panes
 pub struct Tab {
     /// Unique identifier
@@ -31,6 +42,8 @@ pub struct Tab {
     zoomed_pane: Option<PaneId>,
     /// Current layout type
     current_layout: LayoutType,
+    /// Layout generation (incremented on each reflow)
+    pub layout_generation: u64,
 }
 
 impl Tab {
@@ -55,6 +68,7 @@ impl Tab {
             height: rows,
             zoomed_pane: None,
             current_layout: LayoutType::Custom,
+            layout_generation: 0,
         }
     }
 
@@ -80,6 +94,7 @@ impl Tab {
             .find(|(id, _, _, _, _)| *id == new_pane_id)
             .unwrap_or(&default_size);
         
+        // Create pane with Single border (will be confirmed by reflow)
         let mut new_pane = Pane::new(new_pane_id, *new_width, *new_height);
         new_pane.border = BorderStyle::Single;
         
@@ -92,13 +107,8 @@ impl Tab {
         self.panes.insert(new_pane_id, new_pane);
         self.pane_order.push(new_pane_id);
         
-        // Update all pane borders (add borders when we have multiple panes)
-        for pane in self.panes.values_mut() {
-            pane.border = BorderStyle::Single;
-        }
-        
-        // Update all pane positions
-        self.update_pane_positions();
+        // Reflow handles all geometry and border changes
+        self.reflow(ReflowReason::Split);
         
         // Focus the new pane
         self.focus_pane(new_pane_id);
@@ -113,6 +123,11 @@ impl Tab {
         }
         
         let pane_id = self.focused_pane;
+        
+        // Unzoom if zoomed pane was closed
+        if self.zoomed_pane == Some(pane_id) {
+            self.zoomed_pane = None;
+        }
         
         // Remove from layout
         if let Some(new_layout) = self.layout.remove(pane_id) {
@@ -130,22 +145,22 @@ impl Tab {
             self.focus_pane(new_focus);
         }
         
-        // Update positions
-        self.update_pane_positions();
-        
-        // If only one pane left, remove its border
-        if self.panes.len() == 1 {
-            for pane in self.panes.values_mut() {
-                pane.border = BorderStyle::None;
-            }
-            self.update_pane_positions();
-        }
+        // Reflow handles all geometry and border changes
+        self.reflow(ReflowReason::Close);
         
         true
     }
 
     /// Focus a specific pane
     pub fn focus_pane(&mut self, pane_id: PaneId) {
+        // Check if zoom target will change
+        let zoom_target_changed = self.zoomed_pane.is_some() && self.zoomed_pane != Some(pane_id);
+        
+        // If zoomed, update zoom target to follow focus
+        if self.zoomed_pane.is_some() {
+            self.zoomed_pane = Some(pane_id);
+        }
+        
         // Unfocus current
         if let Some(pane) = self.panes.get_mut(&self.focused_pane) {
             pane.focused = false;
@@ -155,6 +170,11 @@ impl Tab {
         if let Some(pane) = self.panes.get_mut(&pane_id) {
             pane.focused = true;
             self.focused_pane = pane_id;
+        }
+        
+        // If zoom target changed, reflow to update geometry
+        if zoom_target_changed {
+            self.reflow(ReflowReason::FocusChanged);
         }
     }
 
@@ -176,28 +196,49 @@ impl Tab {
     }
 
     /// Resize the tab
-    pub fn resize(&mut self, width: u16, height: u16) {
-        self.width = width;
-        self.height = height;
-        self.update_pane_positions();
-    }
-
     /// Update all pane positions based on layout
-    fn update_pane_positions(&mut self) {
-        let positions = self.layout.calculate_positions(0, 0, self.width, self.height);
+    /// Reflow: apply layout, border, and resize to all panes
+    /// This is the ONLY place that should modify pane geometry and border
+    fn reflow(&mut self, reason: ReflowReason) {
+        let _ = reason; // For future debugging/logging
         
-        for (pane_id, x, y, width, height) in positions {
-            if let Some(pane) = self.panes.get_mut(&pane_id) {
-                pane.move_to(x, y);
-                pane.resize(width, height);
+        if let Some(zoomed_id) = self.zoomed_pane {
+            // Zoomed mode: only the zoomed pane is visible at full size
+            for (id, pane) in self.panes.iter_mut() {
+                if *id == zoomed_id {
+                    // Zoomed pane: full screen, no border
+                    pane.apply_geometry(0, 0, self.width, self.height, BorderStyle::None);
+                } else {
+                    // Other panes: keep border for when unzoomed (geometry unchanged)
+                    pane.border = BorderStyle::Single;
+                }
+            }
+        } else {
+            // Normal mode: apply layout positions
+            let positions = self.layout.calculate_positions(0, 0, self.width, self.height);
+            
+            // Determine border style based on pane count
+            let border = if self.panes.len() > 1 {
+                BorderStyle::Single
+            } else {
+                BorderStyle::None
+            };
+            
+            for (pane_id, x, y, width, height) in positions {
+                if let Some(pane) = self.panes.get_mut(&pane_id) {
+                    pane.apply_geometry(x, y, width, height, border);
+                }
             }
         }
+        
+        // Increment generation to signal layout change
+        self.layout_generation += 1;
     }
 
     /// Adjust pane size
     pub fn resize_pane(&mut self, delta: f32) {
         if self.layout.adjust_ratio(self.focused_pane, delta) {
-            self.update_pane_positions();
+            self.reflow(ReflowReason::LayoutChanged);
         }
     }
 
@@ -240,12 +281,17 @@ impl Tab {
             .map(|(id, _)| *id)
             .collect();
         
+        if dead_panes.is_empty() {
+            return;
+        }
+        
         for pane_id in dead_panes {
             // Remove from layout
             if let Some(new_layout) = self.layout.remove(pane_id) {
                 self.layout = new_layout;
             }
             self.panes.remove(&pane_id);
+            self.pane_order.retain(|&id| id != pane_id);
             
             // Unzoom if zoomed pane was closed
             if self.zoomed_pane == Some(pane_id) {
@@ -260,17 +306,9 @@ impl Tab {
             }
         }
         
-        // Update pane positions
+        // Single reflow handles all geometry and border changes
         if !self.panes.is_empty() {
-            self.update_pane_positions();
-            
-            // Remove borders if only one pane left
-            if self.panes.len() == 1 {
-                for pane in self.panes.values_mut() {
-                    pane.border = BorderStyle::None;
-                }
-                self.update_pane_positions();
-            }
+            self.reflow(ReflowReason::Close);
         }
     }
 
@@ -283,22 +321,30 @@ impl Tab {
         if self.zoomed_pane.is_some() {
             // Unzoom
             self.zoomed_pane = None;
-            self.update_pane_positions();
         } else {
             // Zoom the focused pane
             self.zoomed_pane = Some(self.focused_pane);
-            if let Some(pane) = self.panes.get_mut(&self.focused_pane) {
-                pane.x = 0;
-                pane.y = 0;
-                pane.resize(self.width, self.height);
-                pane.border = BorderStyle::None;
-            }
         }
+        
+        // reflow() handles all geometry and border changes
+        self.reflow(ReflowReason::ZoomToggle);
     }
 
     /// Check if currently zoomed
     pub fn is_zoomed(&self) -> bool {
         self.zoomed_pane.is_some()
+    }
+
+    /// Get zoomed pane ID
+    pub fn zoomed_pane_id(&self) -> Option<PaneId> {
+        self.zoomed_pane
+    }
+
+    /// Resize the tab
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.width = width;
+        self.height = height;
+        self.reflow(ReflowReason::WindowResized);
     }
 
     /// Resize pane in a specific direction (tmux compatible)
@@ -308,7 +354,7 @@ impl Tab {
             return;
         }
         self.layout.resize_in_direction(self.focused_pane, direction, arrow_up_or_left);
-        self.update_pane_positions();
+        self.reflow(ReflowReason::LayoutChanged);
     }
 
     /// Swap current pane with next pane in order
@@ -330,7 +376,7 @@ impl Tab {
         // Swap in order
         self.pane_order.swap(current_idx, next_idx);
         
-        self.update_pane_positions();
+        self.reflow(ReflowReason::LayoutChanged);
     }
 
     /// Swap current pane with previous pane in order
@@ -356,7 +402,7 @@ impl Tab {
         // Swap in order
         self.pane_order.swap(current_idx, prev_idx);
         
-        self.update_pane_positions();
+        self.reflow(ReflowReason::LayoutChanged);
     }
 
     /// Get focused pane index (for display)
@@ -383,6 +429,6 @@ impl Tab {
         self.layout = Layout::from_preset(self.current_layout, &self.pane_order);
         
         // Update pane positions
-        self.update_pane_positions();
+        self.reflow(ReflowReason::LayoutChanged);
     }
 }

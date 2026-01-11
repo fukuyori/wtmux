@@ -17,6 +17,47 @@ use crate::core::term::{AttrFlags, CellAttrs, Color};
 use crate::config::ColorScheme;
 use crate::copymode::CopyMode;
 
+/// Begin a render frame (synchronized update, hide cursor, disable autowrap)
+fn begin_frame<W: Write>(out: &mut W) -> io::Result<()> {
+    write!(out, "\x1b[?2026h")?;  // Begin synchronized update
+    write!(out, "\x1b[?7l")?;      // Disable autowrap
+    execute!(out, Hide)?;
+    Ok(())
+}
+
+/// End a render frame (show cursor, enable autowrap, end synchronized update, flush)
+fn end_frame<W: Write>(out: &mut W) -> io::Result<()> {
+    execute!(out, Show)?;          // Show cursor
+    write!(out, "\x1b[?7h")?;      // Enable autowrap
+    write!(out, "\x1b[?2026l")?;   // End synchronized update
+    out.flush()?;
+    Ok(())
+}
+
+/// Execute a render operation with frame guards, ensuring cleanup on error
+fn with_frame<W: Write, F, R>(out: &mut W, f: F) -> io::Result<R>
+where
+    F: FnOnce(&mut W) -> io::Result<R>,
+{
+    begin_frame(out)?;
+    let result = f(out);
+    // Always end frame, even on error
+    let _ = end_frame(out);
+    result
+}
+
+/// Execute an operation with cursor hidden, ensuring Show on exit
+fn with_cursor_hidden<W: Write, F, R>(out: &mut W, f: F) -> io::Result<R>
+where
+    F: FnOnce(&mut W) -> io::Result<R>,
+{
+    execute!(out, Hide)?;
+    let result = f(out);
+    let _ = execute!(out, Show);
+    let _ = out.flush();
+    result
+}
+
 /// Border characters
 #[allow(dead_code)]
 struct BorderChars {
@@ -55,6 +96,8 @@ impl BorderChars {
 pub struct WmRenderer {
     initialized: bool,
     pub color_scheme: ColorScheme,
+    /// Last rendered layout generation (for detecting changes)
+    last_generation: u64,
 }
 
 impl WmRenderer {
@@ -63,6 +106,7 @@ impl WmRenderer {
         Self {
             initialized: false,
             color_scheme: ColorScheme::default(),
+            last_generation: 0,
         }
     }
 
@@ -70,6 +114,7 @@ impl WmRenderer {
         Self {
             initialized: false,
             color_scheme,
+            last_generation: 0,
         }
     }
 
@@ -87,12 +132,8 @@ impl WmRenderer {
             stdout,
             crossterm::terminal::EnterAlternateScreen,
             crossterm::event::EnableMouseCapture,
-            Hide,
             Clear(ClearType::All)
         )?;
-        
-        // Enable synchronized output
-        write!(stdout, "\x1b[?2026h")?;
         stdout.flush()?;
         
         self.initialized = true;
@@ -106,6 +147,12 @@ impl WmRenderer {
         }
         
         let mut stdout = io::stdout();
+        
+        // Restore terminal state (in case of abnormal exit)
+        write!(stdout, "\x1b[?7h")?;      // Enable autowrap
+        write!(stdout, "\x1b[?2026l")?;   // End synchronized update (if active)
+        stdout.flush()?;
+        
         execute!(
             stdout,
             Show,
@@ -124,91 +171,64 @@ impl WmRenderer {
     }
 
     /// Render the window manager state
-    pub fn render(&self, wm: &WindowManager) -> io::Result<()> {
+    pub fn render(&mut self, wm: &WindowManager) -> io::Result<()> {
         self.render_with_selector(wm, None)
     }
 
     /// Render with optional snippet selector
-    pub fn render_with_selector(&self, wm: &WindowManager, selector: Option<&crate::history::HistorySelector>) -> io::Result<()> {
+    pub fn render_with_selector(&mut self, wm: &WindowManager, selector: Option<&crate::history::HistorySelector>) -> io::Result<()> {
         let stdout = io::stdout();
-        let mut stdout = io::BufWriter::with_capacity(65536, stdout.lock());
+        let mut out = io::BufWriter::with_capacity(65536, stdout.lock());
 
-        // Begin synchronized update
-        write!(stdout, "\x1b[?2026h")?;
-        execute!(stdout, Hide)?;
+        with_frame(&mut out, |out| {
+            self.render_tab_bar(out, wm)?;
+            self.render_panes(out, wm)?;
+            self.render_status_bar(out, wm)?;
 
-        // Render tab bar
-        self.render_tab_bar(&mut stdout, wm)?;
-
-        // Render panes
-        self.render_panes(&mut stdout, wm)?;
-
-        // Render status bar
-        self.render_status_bar(&mut stdout, wm)?;
-
-        // Render snippet selector if visible
-        if let Some(selector) = selector {
-            if selector.visible {
-                self.render_selector(&mut stdout, wm, selector)?;
+            if let Some(sel) = selector {
+                if sel.visible {
+                    self.render_selector(out, wm, sel)?;
+                }
             }
-        }
 
-        // Show cursor at focused pane's cursor position (unless snippet selector is visible)
-        let snippet_visible = selector.map(|s| s.visible).unwrap_or(false);
-        if !snippet_visible {
-            if let Some(tab) = wm.active_tab() {
-                if let Some(pane) = tab.focused_pane() {
-                    let cursor = pane.session.state.active_cursor();
-                    let (inner_x, inner_y) = pane.inner_pos();
-                    if cursor.visible {
-                        // Apply cursor shape
-                        let shape_code = cursor.shape.to_decscusr();
-                        write!(stdout, "\x1b[{} q", shape_code)?;
-                        
-                        execute!(
-                            stdout,
-                            MoveTo(inner_x + cursor.col, wm.tab_bar_height + inner_y + cursor.row),
-                            Show
-                        )?;
+            // Show cursor at focused pane's cursor position (unless snippet selector is visible)
+            let snippet_visible = selector.map(|s| s.visible).unwrap_or(false);
+            if !snippet_visible {
+                if let Some(tab) = wm.active_tab() {
+                    if let Some(pane) = tab.focused_pane() {
+                        let cursor = pane.session.state.active_cursor();
+                        let (inner_x, inner_y) = pane.inner_pos();
+                        if cursor.visible {
+                            let shape_code = cursor.shape.to_decscusr();
+                            write!(out, "\x1b[{} q", shape_code)?;
+                            execute!(
+                                out,
+                                MoveTo(inner_x + cursor.col, wm.tab_bar_height + inner_y + cursor.row)
+                            )?;
+                        }
                     }
                 }
             }
-        }
-
-        // End synchronized update
-        write!(stdout, "\x1b[?2026l")?;
-        stdout.flush()?;
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Render with pane numbers overlay
     pub fn render_with_pane_numbers(&mut self, wm: &WindowManager) -> io::Result<()> {
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
 
-        // Initialize if needed
         if !self.initialized {
             self.init()?;
         }
 
-        // Begin synchronized update
-        write!(stdout, "\x1b[?2026h")?;
-
-        execute!(stdout, Hide)?;
-
-        // Render all components
-        self.render_tab_bar(&mut stdout, wm)?;
-        self.render_panes(&mut stdout, wm)?;
-        self.render_status_bar(&mut stdout, wm)?;
-        
-        // Render pane numbers
-        self.render_pane_numbers(&mut stdout, wm)?;
-
-        // End synchronized update
-        write!(stdout, "\x1b[?2026l")?;
-        stdout.flush()?;
-
-        Ok(())
+        with_frame(&mut out, |out| {
+            self.render_tab_bar(out, wm)?;
+            self.render_panes(out, wm)?;
+            self.render_status_bar(out, wm)?;
+            self.render_pane_numbers(out, wm)?;
+            Ok(())
+        })
     }
 
     /// Render pane numbers overlay
@@ -237,72 +257,51 @@ impl WmRenderer {
 
     /// Render with copy mode overlay
     pub fn render_with_copy_mode(&mut self, wm: &WindowManager, copy_mode: &CopyMode) -> io::Result<()> {
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
 
-        // Initialize if needed
         if !self.initialized {
             self.init()?;
         }
 
-        // Begin synchronized update
-        write!(stdout, "\x1b[?2026h")?;
+        with_frame(&mut out, |out| {
+            self.render_pane_with_copy_mode(out, wm, copy_mode)?;
+            self.render_copy_mode_status(out, wm, copy_mode)?;
 
-        execute!(stdout, Hide)?;
-
-        // Render pane content with highlighting
-        self.render_pane_with_copy_mode(&mut stdout, wm, copy_mode)?;
-        
-        // Render status bar
-        self.render_copy_mode_status(&mut stdout, wm, copy_mode)?;
-
-        // Show cursor at copy mode position
-        if let Some(tab) = wm.active_tab() {
-            if let Some(pane) = tab.focused_pane() {
-                if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
-                    let (inner_x, inner_y) = pane.inner_pos();
-                    let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
-                    execute!(
-                        stdout,
-                        MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row),
-                        Show
-                    )?;
+            // Position cursor at copy mode location
+            if let Some(tab) = wm.active_tab() {
+                if let Some(pane) = tab.focused_pane() {
+                    if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
+                        let (inner_x, inner_y) = pane.inner_pos();
+                        let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
+                        execute!(out, MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row))?;
+                    }
                 }
             }
-        }
-
-        // End synchronized update
-        write!(stdout, "\x1b[?2026l")?;
-        stdout.flush()?;
-
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Fast update for copy mode - only update cursor and status
     pub fn render_copy_mode_cursor_only(&mut self, wm: &WindowManager, copy_mode: &CopyMode) -> io::Result<()> {
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
 
-        execute!(stdout, Hide)?;
-        
-        // Update status bar
-        self.render_copy_mode_status(&mut stdout, wm, copy_mode)?;
+        with_cursor_hidden(&mut out, |out| {
+            self.render_copy_mode_status(out, wm, copy_mode)?;
 
-        // Show cursor at copy mode position
-        if let Some(tab) = wm.active_tab() {
-            if let Some(pane) = tab.focused_pane() {
-                if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
-                    let (inner_x, inner_y) = pane.inner_pos();
-                    let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
-                    execute!(
-                        stdout,
-                        MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row),
-                        Show
-                    )?;
+            // Position cursor at copy mode location
+            if let Some(tab) = wm.active_tab() {
+                if let Some(pane) = tab.focused_pane() {
+                    if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
+                        let (inner_x, inner_y) = pane.inner_pos();
+                        let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
+                        execute!(out, MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row))?;
+                    }
                 }
             }
-        }
-
-        stdout.flush()?;
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Render pane content in copy mode with selection/search highlighting
@@ -450,31 +449,20 @@ impl WmRenderer {
 
     /// Render with rename input overlay
     pub fn render_with_rename(&mut self, wm: &WindowManager, rename_buffer: &str) -> io::Result<()> {
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
 
-        // Initialize if needed
         if !self.initialized {
             self.init()?;
         }
 
-        // Begin synchronized update
-        write!(stdout, "\x1b[?2026h")?;
-
-        execute!(stdout, Hide)?;
-
-        // Render all components
-        self.render_tab_bar(&mut stdout, wm)?;
-        self.render_panes(&mut stdout, wm)?;
-        self.render_status_bar(&mut stdout, wm)?;
-        
-        // Render rename popup
-        self.render_rename_popup(&mut stdout, wm, rename_buffer)?;
-
-        // End synchronized update
-        write!(stdout, "\x1b[?2026l")?;
-        stdout.flush()?;
-
-        Ok(())
+        with_frame(&mut out, |out| {
+            self.render_tab_bar(out, wm)?;
+            self.render_panes(out, wm)?;
+            self.render_status_bar(out, wm)?;
+            self.render_rename_popup(out, wm, rename_buffer)?;
+            Ok(())
+        })
     }
 
     /// Render rename popup in center of screen
@@ -536,31 +524,20 @@ impl WmRenderer {
 
     /// Render with theme selector overlay
     pub fn render_with_theme_selector(&mut self, wm: &WindowManager, themes: &[&str], selected: usize) -> io::Result<()> {
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
 
-        // Initialize if needed
         if !self.initialized {
             self.init()?;
         }
 
-        // Begin synchronized update
-        write!(stdout, "\x1b[?2026h")?;
-
-        execute!(stdout, Hide)?;
-
-        // Render all components
-        self.render_tab_bar(&mut stdout, wm)?;
-        self.render_panes(&mut stdout, wm)?;
-        self.render_status_bar(&mut stdout, wm)?;
-        
-        // Render theme selector
-        self.render_theme_selector(&mut stdout, wm, themes, selected)?;
-
-        // End synchronized update
-        write!(stdout, "\x1b[?2026l")?;
-        stdout.flush()?;
-
-        Ok(())
+        with_frame(&mut out, |out| {
+            self.render_tab_bar(out, wm)?;
+            self.render_panes(out, wm)?;
+            self.render_status_bar(out, wm)?;
+            self.render_theme_selector(out, wm, themes, selected)?;
+            Ok(())
+        })
     }
 
     /// Render theme selector overlay
@@ -853,16 +830,28 @@ impl WmRenderer {
     }
 
     /// Render all panes
-    fn render_panes<W: Write>(&self, stdout: &mut W, wm: &WindowManager) -> io::Result<()> {
+    fn render_panes<W: Write>(&mut self, stdout: &mut W, wm: &WindowManager) -> io::Result<()> {
         let tab = match wm.active_tab() {
             Some(t) => t,
             None => return Ok(()),
         };
 
+        // Full redraw if generation changed
+        let needs_full_redraw = tab.layout_generation != self.last_generation;
+        if needs_full_redraw {
+            execute!(stdout, ResetColor)?;
+            for row in wm.tab_bar_height..(wm.height.saturating_sub(1)) {
+                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            }
+            self.last_generation = tab.layout_generation;
+        }
+
         // If zoomed, only render the zoomed pane
         if tab.is_zoomed() {
-            if let Some(pane) = tab.focused_pane() {
-                self.render_pane(stdout, pane, wm.tab_bar_height)?;
+            if let Some(zoomed_id) = tab.zoomed_pane_id() {
+                if let Some(pane) = tab.panes.get(&zoomed_id) {
+                    self.render_pane(stdout, pane, wm.tab_bar_height)?;
+                }
             }
         } else {
             for pane in tab.panes.values() {
@@ -880,9 +869,9 @@ impl WmRenderer {
         let (inner_w, inner_h) = pane.inner_size();
         let has_selection = pane.session.state.selection.is_some();
         
-        // Use the minimum of pane inner width and session columns
-        // to handle cases where they might be temporarily out of sync
-        let render_w = inner_w.min(pane.session.state.cols) as usize;
+        // Always render full inner_w to prevent remnants
+        // If session.cols is smaller, we'll pad with spaces
+        let session_cols = pane.session.state.cols as usize;
 
         // Draw border if needed
         if pane.border != BorderStyle::None {
@@ -898,19 +887,21 @@ impl WmRenderer {
             execute!(stdout, MoveTo(inner_x, y_offset + inner_y + row_idx as u16))?;
             line_buffer.clear();
             
+            let mut rendered_width: usize = 0;
+            
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
                 None => {
-                    // Clear empty row
+                    // Clear empty row - fill with spaces
+                    execute!(stdout, ResetColor)?;
                     write!(stdout, "{:width$}", "", width = inner_w as usize)?;
                     continue;
                 }
             };
 
             // Output cells sequentially, letting the terminal handle positioning
-            // Only output cells up to render_w to respect pane boundary
             for (col_idx, cell) in row.cells.iter().enumerate() {
-                if col_idx >= render_w {
+                if col_idx >= session_cols || rendered_width >= inner_w as usize {
                     break;
                 }
 
@@ -935,7 +926,9 @@ impl WmRenderer {
                     current_selected = is_selected;
                 }
 
-                line_buffer.push_str(cell.display_char());
+                let ch = cell.display_char();
+                line_buffer.push_str(ch);
+                rendered_width += unicode_width::UnicodeWidthStr::width(ch);
             }
 
             // Flush remaining text
@@ -945,9 +938,11 @@ impl WmRenderer {
                 line_buffer.clear();
             }
 
-            // Clear rest of line if needed
-            // Note: We rely on the clear at line start (if any) or the previous render
-            // The terminal handles the actual positioning
+            // Pad the rest of the line with spaces to prevent remnants
+            if rendered_width < inner_w as usize {
+                execute!(stdout, ResetColor)?;
+                write!(stdout, "{:width$}", "", width = inner_w as usize - rendered_width)?;
+            }
         }
 
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;

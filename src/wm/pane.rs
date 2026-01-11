@@ -97,17 +97,26 @@ impl Pane {
         }
     }
 
+    /// Apply geometry (border, position, size) in a consistent order
+    /// This is the single entry point for geometry changes
+    pub(crate) fn apply_geometry(&mut self, x: u16, y: u16, width: u16, height: u16, border: BorderStyle) {
+        // Order is important: border affects inner_size calculation
+        self.border = border;
+        self.move_to(x, y);
+        self.resize(width, height);
+    }
+
     /// Resize the pane
     pub fn resize(&mut self, width: u16, height: u16) {
-        // Only resize if size actually changed
-        if self.width == width && self.height == height {
-            return;
-        }
-        
         self.width = width;
         self.height = height;
         let (inner_w, inner_h) = self.inner_size();
-        let _ = self.session.resize(inner_w, inner_h);
+        if let Err(e) = self.session.resize(inner_w, inner_h) {
+            eprintln!(
+                "Pane {} resize failed: outer={}x{}, inner={}x{}: {}",
+                self.id, width, height, inner_w, inner_h, e
+            );
+        }
     }
 
     /// Move the pane
