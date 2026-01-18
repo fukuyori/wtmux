@@ -1,4 +1,28 @@
-//! Multi-pane renderer for window manager
+//! Multi-pane renderer for the window manager.
+//!
+//! This module handles all visual rendering for wtmux, including:
+//! - Tab bar with clickable tabs
+//! - Pane borders and content
+//! - Status bar with session information
+//! - Context menus, theme selectors, and other overlays
+//!
+//! # Rendering Architecture
+//!
+//! The renderer uses synchronized updates to prevent screen tearing:
+//!
+//! ```text
+//! begin_frame()  → Hide cursor, disable autowrap, start sync
+//!     ↓
+//! render content → Tab bar, panes, status bar
+//!     ↓
+//! end_frame()    → Show cursor, enable autowrap, end sync, flush
+//! ```
+//!
+//! # Performance Optimizations
+//!
+//! - Generation-based dirty tracking to minimize redraws
+//! - Partial updates for cursor movement and selection
+//! - Separate overlay rendering for context menus (avoids full redraw)
 
 use std::io::{self, Write};
 use crossterm::{
@@ -16,6 +40,7 @@ use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
 use crate::config::ColorScheme;
 use crate::copymode::CopyMode;
+use super::context_menu::ContextMenu;
 
 /// Begin a render frame (synchronized update, hide cursor, disable autowrap)
 fn begin_frame<W: Write>(out: &mut W) -> io::Result<()> {
@@ -1101,6 +1126,102 @@ impl WmRenderer {
     #[allow(dead_code)]
     fn apply_attrs<W: Write>(&self, stdout: &mut W, attrs: &CellAttrs) -> io::Result<()> {
         self.apply_attrs_with_selection(stdout, attrs, false)
+    }
+
+    /// Render with context menu overlay
+    pub fn render_with_context_menu(&mut self, wm: &mut WindowManager, menu: &ContextMenu) -> io::Result<()> {
+        // First render normally
+        self.render(wm)?;
+        
+        // Then overlay the menu if visible
+        if menu.visible {
+            let mut stdout = io::stdout().lock();
+            with_cursor_hidden(&mut stdout, |out| {
+                self.render_context_menu(out, menu)
+            })?;
+        }
+        
+        Ok(())
+    }
+
+    /// Render only the context menu (for hover updates without full redraw)
+    pub fn render_context_menu_only(&self, menu: &ContextMenu) -> io::Result<()> {
+        if menu.visible {
+            let mut stdout = io::stdout().lock();
+            with_cursor_hidden(&mut stdout, |out| {
+                self.render_context_menu(out, menu)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Render the context menu
+    fn render_context_menu<W: Write>(&self, stdout: &mut W, menu: &ContextMenu) -> io::Result<()> {
+        let cs = &self.color_scheme;
+        let content_width = menu.content_width() as usize;
+        let (_, height) = menu.dimensions();
+        
+        // Use pre-adjusted position from menu.show()
+        let x = menu.x;
+        let y = menu.y;
+        
+        // Menu colors
+        let menu_bg = cs.status_bar_bg.to_crossterm();
+        let menu_fg = cs.status_bar_fg.to_crossterm();
+        let selected_bg = cs.tab_active_bg.to_crossterm();
+        let selected_fg = cs.tab_active_fg.to_crossterm();
+        
+        // Draw border
+        execute!(stdout, SetBackgroundColor(menu_bg), SetForegroundColor(menu_fg))?;
+        
+        // Top border: ┌────────┐
+        execute!(stdout, MoveTo(x, y))?;
+        write!(stdout, "┌")?;
+        for _ in 0..content_width {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┐")?;
+        
+        // Menu items
+        for (i, item) in menu.items.iter().enumerate() {
+            let row = y + 1 + i as u16;
+            execute!(stdout, MoveTo(x, row))?;
+            
+            // Left border
+            execute!(stdout, SetBackgroundColor(menu_bg), SetForegroundColor(menu_fg))?;
+            write!(stdout, "│")?;
+            
+            // Item content (with selection highlight)
+            if i == menu.selected {
+                execute!(stdout, SetBackgroundColor(selected_bg), SetForegroundColor(selected_fg))?;
+            } else {
+                execute!(stdout, SetBackgroundColor(menu_bg), SetForegroundColor(menu_fg))?;
+            }
+            
+            // Format: " label (shortcut)"
+            let shortcut_str = item.shortcut.map(|s| format!(" ({})", s)).unwrap_or_default();
+            let label_with_shortcut = format!(" {}{}", item.label, shortcut_str);
+            let label_len = label_with_shortcut.chars().count();
+            let padding = content_width.saturating_sub(label_len);
+            write!(stdout, "{}{:padding$}", label_with_shortcut, "", padding = padding)?;
+            
+            // Right border
+            execute!(stdout, SetBackgroundColor(menu_bg), SetForegroundColor(menu_fg))?;
+            write!(stdout, "│")?;
+        }
+        
+        // Bottom border: └────────┘
+        execute!(stdout, MoveTo(x, y + height - 1))?;
+        write!(stdout, "└")?;
+        for _ in 0..content_width {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┘")?;
+        
+        execute!(stdout, ResetColor)?;
+        stdout.flush()?;
+        
+        Ok(())
     }
 }
 

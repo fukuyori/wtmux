@@ -1,6 +1,33 @@
-//! Command history for wtmux
+//! Command history for wtmux.
 //!
-//! Provides command history storage, search, and selection functionality.
+//! Provides persistent command history storage, search, and selection functionality.
+//! History is stored in `~/.wtmux/history` and shared across all panes.
+//!
+//! # Features
+//!
+//! - Persistent storage (survives restart)
+//! - Maximum 1000 entries (configurable)
+//! - Duplicate removal (most recent kept)
+//! - Sensitive data filtering (passwords, tokens)
+//! - Interactive search with Ctrl+R
+//!
+//! # Usage
+//!
+//! | Key | Action |
+//! |-----|--------|
+//! | Ctrl+R | Open history selector |
+//! | ↑/↓ | Navigate history |
+//! | Enter | Insert selected command |
+//! | Shift+Enter | Append with `&&` |
+//! | Ctrl+Enter | Append with `&` |
+//! | Escape | Close selector |
+//!
+//! # Sensitive Data Filtering
+//!
+//! Commands containing the following are automatically excluded:
+//! - `password`, `passwd`, `secret`, `token`
+//! - `api_key`, `apikey`, `auth`
+//! - Patterns like `--password=` or `-p=`
 
 use std::fs;
 use std::path::PathBuf;

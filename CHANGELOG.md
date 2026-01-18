@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2025-01-18
+
+### Added
+
+- **Tab bar mouse click support**
+  - Click on tabs in the tab bar to switch between windows
+  - Intuitive window navigation with mouse
+
+- **Context menu (right-click menu)**
+  - Right-click on any pane to show context menu
+  - Menu items: Zoom/Unzoom, Split ─, Split │, Kill Pane, Cancel
+  - Keyboard navigation: ↑/↓ or j/k to navigate, Enter to select, Esc to close
+  - Mouse hover to highlight menu items
+  - Useful when a pane becomes unresponsive
+
+- **Comprehensive documentation**
+  - Added documentation comments to all public APIs
+  - Module-level documentation for all components
+
+### Fixed
+
+- Fixed Split ─ and Split │ direction mapping
+- Fixed context menu flickering on mouse hover
+
 ## [0.4.0] - 2025-01-11
 
 ### Changed

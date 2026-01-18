@@ -1,4 +1,42 @@
-//! Configuration and color scheme management for wtmux
+//! Configuration and color scheme management for wtmux.
+//!
+//! This module provides:
+//! - TOML configuration file loading from `~/.wtmux/config.toml`
+//! - Built-in color schemes (default, solarized, monokai, nord, etc.)
+//! - Runtime theme switching
+//!
+//! # Configuration File
+//!
+//! The configuration file is located at `~/.wtmux/config.toml`:
+//!
+//! ```toml
+//! # Default shell (optional)
+//! shell = "pwsh.exe"
+//!
+//! # Color scheme: default, solarized-dark, solarized-light,
+//! #               monokai, nord, dracula, gruvbox-dark, tokyo-night
+//! color_scheme = "tokyo-night"
+//!
+//! [tab_bar]
+//! visible = true
+//!
+//! [status_bar]
+//! visible = true
+//! show_time = true
+//!
+//! [pane]
+//! border_style = "single"
+//! ```
+//!
+//! # Available Color Schemes
+//!
+//! - `default` - Classic terminal colors
+//! - `solarized-dark` / `solarized-light` - Ethan Schoonover's Solarized
+//! - `monokai` - Sublime Text inspired
+//! - `nord` - Arctic, bluish color palette
+//! - `dracula` - Dark theme with vibrant colors
+//! - `gruvbox-dark` - Retro groove colors
+//! - `tokyo-night` - VS Code Tokyo Night theme
 
 use std::fs;
 use std::path::PathBuf;

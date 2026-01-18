@@ -1,4 +1,40 @@
-//! Copy mode - vim-like scrollback navigation and text selection
+//! Copy mode - vim-like scrollback navigation and text selection.
+//!
+//! Copy mode allows users to navigate the scrollback buffer, select text,
+//! and copy it to the clipboard, all using vim-style keybindings.
+//!
+//! # Entering Copy Mode
+//!
+//! - `Ctrl+B, [` - Enter copy mode
+//! - `Ctrl+B, /` - Enter copy mode with search
+//!
+//! # Navigation (vim-style)
+//!
+//! | Key | Action |
+//! |-----|--------|
+//! | h/j/k/l | Move cursor |
+//! | w/b | Word forward/backward |
+//! | 0/$ | Line start/end |
+//! | g/G | Buffer top/bottom |
+//! | Ctrl+U/D | Half page up/down |
+//! | Ctrl+B/F | Full page up/down |
+//!
+//! # Selection and Copy
+//!
+//! | Key | Action |
+//! |-----|--------|
+//! | Space/v | Start selection |
+//! | Enter/y | Copy and exit |
+//! | Escape | Cancel and exit |
+//!
+//! # Search
+//!
+//! | Key | Action |
+//! |-----|--------|
+//! | / | Search forward |
+//! | ? | Search backward |
+//! | n | Next match |
+//! | N | Previous match |
 
 use crate::wm::WindowManager;
 

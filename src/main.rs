@@ -2,6 +2,36 @@
 //!
 //! wtmux provides tmux-style window/pane management using ConPTY on Windows.
 //! Features include multiple tabs, split panes, and familiar keybindings.
+//!
+//! # Features
+//!
+//! - **Multiple Tabs**: Create and switch between independent workspaces
+//! - **Split Panes**: Divide tabs horizontally or vertically
+//! - **tmux Keybindings**: Familiar Ctrl+B prefix shortcuts
+//! - **Mouse Support**: Click tabs, select text, right-click context menu
+//! - **Copy Mode**: vim-style navigation and text selection
+//! - **Color Schemes**: 8 built-in themes with runtime switching
+//! - **Command History**: Ctrl+R to search and reuse commands
+//!
+//! # Quick Start
+//!
+//! ```text
+//! wtmux              # Start with default shell (cmd.exe)
+//! wtmux -7           # Start with PowerShell 7
+//! wtmux -w           # Start with WSL
+//! ```
+//!
+//! # Keybindings (Ctrl+B prefix)
+//!
+//! | Key | Action |
+//! |-----|--------|
+//! | c | New tab |
+//! | n/p | Next/Previous tab |
+//! | " | Split horizontal |
+//! | % | Split vertical |
+//! | x | Close pane |
+//! | z | Toggle zoom |
+//! | Arrow keys | Navigate panes |
 
 mod core;
 mod ui;
@@ -21,7 +51,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::core::session::Session;
-use crate::ui::{KeyMapper, Renderer};
+use crate::ui::{KeyMapper, Renderer, ContextMenu, ContextMenuAction};
 use crate::wm::{WindowManager, SplitDirection};
 use crate::history::HistorySelector;
 use crate::config::{Config as WtmuxConfig, ColorScheme};
@@ -627,6 +657,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
     // Window rename mode state
     let mut rename_mode = false;
     let mut rename_buffer = String::new();
+    
+    // Context menu state
+    let mut context_menu = ContextMenu::new();
 
     loop {
         // Check if any session is still running
@@ -650,8 +683,8 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
         }
         
         // Render based on current mode
-        if copy_mode.active || rename_mode {
-            // In copy mode or rename mode, only render on key events
+        if copy_mode.active || rename_mode || context_menu.visible {
+            // In copy mode, rename mode, or context menu, only render on key events
             // (rendering happens in the key handler below)
         } else if has_output {
             if theme_selector_visible {
@@ -668,6 +701,32 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
             match event::read()? {
                 Event::Key(key_event) => {
                     if key_event.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    
+                    // Handle context menu keyboard navigation
+                    if context_menu.visible {
+                        match key_event.code {
+                            KeyCode::Esc => {
+                                context_menu.hide();
+                                renderer.render(wm)?;
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                context_menu.up();
+                                renderer.render_with_context_menu(wm, &context_menu)?;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                context_menu.down();
+                                renderer.render_with_context_menu(wm, &context_menu)?;
+                            }
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                let action = context_menu.selected_action();
+                                execute_context_menu_action(wm, action);
+                                context_menu.hide();
+                                renderer.render(wm)?;
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
                     
@@ -1188,6 +1247,37 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         renderer.render_with_selector(wm, Some(&selector))?;
                     }
                     
+                    // Handle context menu interactions
+                    if context_menu.visible {
+                        match mouse_event.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                if let Some(action) = context_menu.handle_click(mouse_event.column, mouse_event.row) {
+                                    // Execute the action
+                                    execute_context_menu_action(wm, action);
+                                    context_menu.hide();
+                                    renderer.render(wm)?;
+                                } else {
+                                    // Clicked outside menu - close it
+                                    context_menu.hide();
+                                    renderer.render(wm)?;
+                                }
+                            }
+                            MouseEventKind::Down(MouseButton::Right) => {
+                                // Close menu on right click
+                                context_menu.hide();
+                                renderer.render(wm)?;
+                            }
+                            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                                // Highlight item under cursor
+                                if context_menu.update_hover(mouse_event.column, mouse_event.row) {
+                                    renderer.render_context_menu_only(&context_menu)?;
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    
                     match mouse_event.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
                             let focus_changed = wm.handle_mouse_down(mouse_event.column, mouse_event.row);
@@ -1213,9 +1303,11 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             renderer.render_with_selector(wm, Some(&selector))?;
                         }
                         MouseEventKind::Down(MouseButton::Right) => {
-                            // Clear selection
-                            wm.clear_selection();
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            // Show context menu
+                            if let Some((pane_id, x, y)) = wm.handle_right_click(mouse_event.column, mouse_event.row) {
+                                context_menu.show(pane_id, x, y, wm.width, wm.height);
+                                renderer.render_with_context_menu(wm, &context_menu)?;
+                            }
                         }
                         MouseEventKind::ScrollUp => {
                             wm.handle_scroll(3);
@@ -1240,6 +1332,27 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
     }
 
     Ok(())
+}
+
+/// Execute a context menu action
+fn execute_context_menu_action(wm: &mut WindowManager, action: ContextMenuAction) {
+    match action {
+        ContextMenuAction::KillPane => {
+            wm.close_pane();
+        }
+        ContextMenuAction::SplitHorizontal => {
+            wm.split_horizontal();
+        }
+        ContextMenuAction::SplitVertical => {
+            wm.split_vertical();
+        }
+        ContextMenuAction::ToggleZoom => {
+            wm.toggle_zoom();
+        }
+        ContextMenuAction::Cancel => {
+            // Do nothing
+        }
+    }
 }
 
 /// Main event loop

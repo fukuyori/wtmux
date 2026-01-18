@@ -1,11 +1,56 @@
-//! Window Manager - Manages multiple tabs and provides tmux-like functionality
+//! Window Manager - Core component for managing tabs and panes.
+//!
+//! This module provides tmux-like terminal multiplexing functionality,
+//! allowing users to create multiple tabs (windows) and split panes within each tab.
+//!
+//! # Architecture
+//!
+//! ```text
+//! WindowManager
+//! ├── Tab 1
+//! │   ├── Pane 1 (Session)
+//! │   └── Pane 2 (Session)
+//! ├── Tab 2
+//! │   └── Pane 1 (Session)
+//! └── Tab 3
+//!     ├── Pane 1 (Session)
+//!     ├── Pane 2 (Session)
+//!     └── Pane 3 (Session)
+//! ```
+//!
+//! # Features
+//!
+//! - Multiple tabs with independent pane layouts
+//! - Horizontal and vertical pane splitting
+//! - Pane zoom (fullscreen toggle)
+//! - Mouse support for tab switching and pane focus
+//! - tmux-compatible keybindings
 
 use std::collections::HashMap;
 use super::tab::{Tab, TabId};
 use super::pane::PaneId;
 use super::layout::SplitDirection;
 
-/// Window Manager - handles tabs and pane operations
+/// The central manager for all tabs and pane operations.
+///
+/// `WindowManager` is the top-level component that coordinates:
+/// - Tab creation, switching, and deletion
+/// - Pane splitting, resizing, and focus management
+/// - Terminal resize handling
+/// - Mouse event routing
+///
+/// # Example
+///
+/// ```ignore
+/// let mut wm = WindowManager::new(80, 24, None, None);
+/// wm.start()?;  // Start the initial shell session
+///
+/// // Create a new tab
+/// wm.new_tab();
+///
+/// // Split the current pane
+/// wm.split_horizontal();
+/// ```
 pub struct WindowManager {
     /// All tabs
     tabs: HashMap<TabId, Tab>,
@@ -361,13 +406,45 @@ impl WindowManager {
         }
     }
 
+    /// Find which tab is at a given column position on the tab bar
+    /// Returns Some(TabId) if a tab was clicked, None otherwise
+    pub fn tab_at_position(&self, col: u16) -> Option<TabId> {
+        let tabs = self.tab_info();
+        let mut x: u16 = 0;
+        
+        for (id, name, _active) in tabs {
+            // Tab format: " name " with separator "│"
+            let tab_width = name.chars().count() as u16 + 2; // " name "
+            
+            if col >= x && col < x + tab_width {
+                return Some(id);
+            }
+            
+            x += tab_width + 1; // +1 for separator "│"
+        }
+        
+        None
+    }
+
+    /// Handle tab bar click - switches to clicked tab
+    /// Returns true if tab changed
+    pub fn handle_tab_click(&mut self, col: u16) -> bool {
+        if let Some(tab_id) = self.tab_at_position(col) {
+            if tab_id != self.active_tab {
+                self.last_active_tab = Some(self.active_tab);
+                self.active_tab = tab_id;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Handle mouse down at position (start selection)
     /// Returns true if focus changed to a different pane
     pub fn handle_mouse_down(&mut self, col: u16, row: u16) -> bool {
         // Check if click is on tab bar
         if row < self.tab_bar_height {
-            // TODO: Calculate which tab was clicked
-            return false;
+            return self.handle_tab_click(col);
         }
         
         // Adjust row for content area
@@ -392,6 +469,32 @@ impl WindowManager {
             }
         }
         false
+    }
+
+    /// Handle right click at position
+    /// Returns Some((pane_id, pane_local_col, pane_local_row)) if clicked on a pane
+    pub fn handle_right_click(&mut self, col: u16, row: u16) -> Option<(PaneId, u16, u16)> {
+        // Ignore clicks on tab bar
+        if row < self.tab_bar_height {
+            return None;
+        }
+        
+        let content_row = row - self.tab_bar_height;
+        
+        if let Some(tab) = self.active_tab_mut() {
+            if let Some(pane_id) = tab.pane_at(col, content_row) {
+                // Focus the pane
+                tab.focus_pane(pane_id);
+                
+                // Clear any selection
+                if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                    pane.session.state.clear_selection();
+                }
+                
+                return Some((pane_id, col, row));
+            }
+        }
+        None
     }
 
     /// Handle mouse drag (extend selection)
@@ -448,6 +551,7 @@ impl WindowManager {
     }
 
     /// Clear selection in focused pane
+    #[allow(dead_code)]
     pub fn clear_selection(&mut self) {
         if let Some(tab) = self.active_tab_mut() {
             if let Some(pane) = tab.focused_pane_mut() {
