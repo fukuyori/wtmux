@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-01-21
+
+### Added
+
+- **Mouse event passthrough to child applications**
+  - TUI applications that enable mouse capture now receive mouse events
+  - Automatically detects when child apps request mouse tracking (DECSET 1000/1002/1003)
+  - Supports SGR extended mouse mode (1006) for large terminals
+  - Supports URXVT mouse mode (1015)
+  - Hold Shift to bypass passthrough and use wtmux's text selection
+  - Works with applications like htop, mc, vim with mouse support, and custom TUI apps
+
 ## [1.0.0] - 2025-01-18
 
 ### Added

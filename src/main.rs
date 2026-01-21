@@ -1152,6 +1152,8 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 theme_selector_visible = true;
                                 theme_selector_index = 0;
                                 wm.prefix_mode = false;
+                                renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                                continue;
                             }
                             // Resize pane (tmux: Ctrl+arrow)
                             KeyCode::Char('+') | KeyCode::Char('=') => {
@@ -1278,6 +1280,48 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         continue;
                     }
                     
+                    // Check for mouse passthrough to child application
+                    // Shift key bypasses passthrough for wtmux's own text selection
+                    let shift_held = mouse_event.modifiers.contains(KeyModifiers::SHIFT);
+                    
+                    // Determine if this event should be passed to child app:
+                    // 1. Child app has enabled mouse tracking (DECSET 1000/1002/1003)
+                    // 2. Shift is not being held (Shift = force wtmux handling)
+                    // 3. Event is within the pane content area (not tab bar/status bar)
+                    if !shift_held && wm.focused_pane_wants_mouse() {
+                        // Check if event is in content area (not tab bar or status bar)
+                        let in_content_area = mouse_event.row >= wm.tab_bar_height 
+                            && mouse_event.row < wm.height.saturating_sub(wm.status_bar_height);
+                        
+                        if in_content_area {
+                            // Convert to content-area relative coordinates
+                            let content_y = mouse_event.row - wm.tab_bar_height;
+                            
+                            // Check if within focused pane and get pane-relative coords
+                            if let Some((pane_x, pane_y)) = wm.screen_to_pane_coords(
+                                mouse_event.column,
+                                content_y
+                            ) {
+                                let (sgr, urxvt) = wm.focused_pane_mouse_mode();
+                                
+                                // Create adjusted event with pane-relative coordinates
+                                let adjusted_event = crossterm::event::MouseEvent {
+                                    kind: mouse_event.kind,
+                                    column: pane_x,
+                                    row: pane_y,
+                                    modifiers: mouse_event.modifiers,
+                                };
+                                
+                                let bytes = KeyMapper::encode_mouse_event(&adjusted_event, sgr, urxvt);
+                                if !bytes.is_empty() {
+                                    let _ = wm.write(&bytes);
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    // Normal wtmux mouse handling
                     match mouse_event.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
                             let focus_changed = wm.handle_mouse_down(mouse_event.column, mouse_event.row);
@@ -1524,6 +1568,25 @@ fn run_main_loop(session: &mut Session, renderer: &mut Renderer) -> anyhow::Resu
                     // Debug: log mouse event
                     renderer.log_mouse_event(&format!("Mouse event: {:?}", mouse_event));
                     
+                    // Check for mouse passthrough to child application
+                    // Shift key bypasses passthrough for text selection
+                    let shift_held = mouse_event.modifiers.contains(KeyModifiers::SHIFT);
+                    
+                    if !shift_held && session.state.modes.mouse_enabled() {
+                        // Child app has mouse tracking enabled, pass through the event
+                        let (sgr, urxvt) = (
+                            session.state.modes.mouse_sgr_mode,
+                            session.state.modes.mouse_urxvt_mode,
+                        );
+                        
+                        let bytes = KeyMapper::encode_mouse_event(&mouse_event, sgr, urxvt);
+                        if !bytes.is_empty() {
+                            let _ = session.write(&bytes);
+                        }
+                        continue;
+                    }
+                    
+                    // Normal simple mode mouse handling
                     match mouse_event.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
                             renderer.log_mouse_event(&format!("Left down at ({}, {})", mouse_event.column, mouse_event.row));

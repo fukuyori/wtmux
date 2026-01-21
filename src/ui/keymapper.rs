@@ -3,7 +3,7 @@
 //! Converts key events to VT sequences for PTY input.
 
 use bitflags::bitflags;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
 
 use crate::core::term::TerminalModes;
 
@@ -226,6 +226,75 @@ impl KeyMapper {
             + if mods.contains(Modifiers::ALT) { 2 } else { 0 }
             + if mods.contains(Modifiers::CTRL) { 4 } else { 0 }
     }
+    
+    /// Encode mouse event to terminal escape sequence for passthrough to child applications.
+    ///
+    /// # Arguments
+    /// * `event` - The mouse event with pane-relative coordinates
+    /// * `sgr_mode` - Whether SGR extended mouse mode (1006) is enabled
+    /// * `urxvt_mode` - Whether URXVT mouse mode (1015) is enabled
+    ///
+    /// # Returns
+    /// The encoded escape sequence bytes, or empty if event cannot be encoded
+    pub fn encode_mouse_event(
+        event: &MouseEvent,
+        sgr_mode: bool,
+        urxvt_mode: bool,
+    ) -> Vec<u8> {
+        let (button, pressed) = match event.kind {
+            MouseEventKind::Down(btn) => (Self::mouse_button_code(btn), true),
+            MouseEventKind::Up(btn) => (Self::mouse_button_code(btn), false),
+            MouseEventKind::Drag(btn) => (Self::mouse_button_code(btn) + 32, true),
+            MouseEventKind::Moved => (35, true), // No button, movement only
+            MouseEventKind::ScrollUp => (64, true),
+            MouseEventKind::ScrollDown => (65, true),
+            MouseEventKind::ScrollLeft => (66, true),
+            MouseEventKind::ScrollRight => (67, true),
+        };
+        
+        // Add modifier keys to button code
+        let mut cb = button;
+        if event.modifiers.contains(KeyModifiers::SHIFT) {
+            cb += 4;
+        }
+        if event.modifiers.contains(KeyModifiers::ALT) {
+            cb += 8;
+        }
+        if event.modifiers.contains(KeyModifiers::CONTROL) {
+            cb += 16;
+        }
+        
+        // 1-based coordinates for terminal protocol
+        let x = event.column.saturating_add(1);
+        let y = event.row.saturating_add(1);
+        
+        if sgr_mode {
+            // SGR mode: \x1b[<Cb;Cx;CyM (press) or \x1b[<Cb;Cx;Cym (release)
+            let suffix = if pressed { 'M' } else { 'm' };
+            format!("\x1b[<{};{};{}{}", cb, x, y, suffix).into_bytes()
+        } else if urxvt_mode {
+            // URXVT mode: \x1b[Cb;Cx;CyM
+            format!("\x1b[{};{};{}M", cb + 32, x, y).into_bytes()
+        } else {
+            // X10 mode: \x1b[MCbCxCy (encoded as bytes + 32)
+            // Only works for coordinates <= 223
+            if x <= 223 && y <= 223 {
+                vec![0x1b, b'[', b'M', (cb + 32) as u8, (x as u8 + 32), (y as u8 + 32)]
+            } else {
+                // Coordinates out of range for X10 mode
+                vec![]
+            }
+        }
+    }
+    
+    /// Convert crossterm MouseButton to protocol button code
+    fn mouse_button_code(button: MouseButton) -> u8 {
+        match button {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -275,5 +344,93 @@ mod tests {
 
         let event = key_event(KeyCode::F(5), KeyModifiers::NONE);
         assert_eq!(KeyMapper::map(&event, &modes), Some(b"\x1b[15~".to_vec()));
+    }
+    
+    #[test]
+    fn test_mouse_encoding_x10() {
+        // X10 mode: \x1b[MCbCxCy (cb + 32, x + 32, y + 32)
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        
+        // Button 0 (left) at (0,0) -> cb=0+32=32, x=1+32=33, y=1+32=33
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, false, false),
+            vec![0x1b, b'[', b'M', 32, 33, 33]
+        );
+        
+        // Right click at (10, 5)
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Button 2 (right) at (10,5) -> cb=2+32=34, x=11+32=43, y=6+32=38
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, false, false),
+            vec![0x1b, b'[', b'M', 34, 43, 38]
+        );
+    }
+    
+    #[test]
+    fn test_mouse_encoding_sgr() {
+        // SGR mode: \x1b[<Cb;Cx;CyM or m
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, true, false),
+            b"\x1b[<0;1;1M".to_vec()
+        );
+        
+        // Mouse up (release)
+        let event = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 10,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        };
+        
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, true, false),
+            b"\x1b[<0;11;21m".to_vec()
+        );
+    }
+    
+    #[test]
+    fn test_mouse_encoding_scroll() {
+        // Scroll up = button code 64
+        let event = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, true, false),
+            b"\x1b[<64;6;6M".to_vec()
+        );
+        
+        // Scroll down = button code 65
+        let event = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        
+        assert_eq!(
+            KeyMapper::encode_mouse_event(&event, true, false),
+            b"\x1b[<65;6;6M".to_vec()
+        );
     }
 }

@@ -516,6 +516,14 @@ impl TerminalState {
                 self.active_screen_mut().mark_all_dirty();
             }
             2004 => self.modes.bracketed_paste = enable,
+            
+            // Mouse tracking modes
+            1000 => self.modes.mouse_tracking = enable,
+            1002 => self.modes.mouse_button_tracking = enable,
+            1003 => self.modes.mouse_any_event = enable,
+            1006 => self.modes.mouse_sgr_mode = enable,
+            1015 => self.modes.mouse_urxvt_mode = enable,
+            
             _ => {} // Ignore unknown modes
         }
     }
@@ -1056,6 +1064,18 @@ pub struct TerminalModes {
     pub insert_mode: bool,
     pub linefeed_newline: bool,
     pub bracketed_paste: bool,
+    
+    // Mouse tracking modes
+    /// 1000 - X10 mouse reporting (click only)
+    pub mouse_tracking: bool,
+    /// 1002 - Button event mouse tracking (click + drag)
+    pub mouse_button_tracking: bool,
+    /// 1003 - Any event mouse tracking (all movements)
+    pub mouse_any_event: bool,
+    /// 1006 - SGR extended mouse mode (allows coordinates > 223)
+    pub mouse_sgr_mode: bool,
+    /// 1015 - URXVT mouse mode (decimal format)
+    pub mouse_urxvt_mode: bool,
 }
 
 impl Default for TerminalModes {
@@ -1068,6 +1088,18 @@ impl Default for TerminalModes {
             insert_mode: false,
             linefeed_newline: false,
             bracketed_paste: false,
+            mouse_tracking: false,
+            mouse_button_tracking: false,
+            mouse_any_event: false,
+            mouse_sgr_mode: false,
+            mouse_urxvt_mode: false,
         }
+    }
+}
+
+impl TerminalModes {
+    /// Returns true if any mouse tracking mode is enabled
+    pub fn mouse_enabled(&self) -> bool {
+        self.mouse_tracking || self.mouse_button_tracking || self.mouse_any_event
     }
 }

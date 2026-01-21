@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-0.4.0-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.0.1-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -24,6 +24,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 - **Multiple shells** - cmd.exe, PowerShell, PowerShell 7, WSL
 - **Encoding support** - UTF-8 and Shift-JIS (CP932)
 - **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
+- **Mouse passthrough** - TUI apps receive mouse events (hold Shift for wtmux selection)
 
 ## Screenshots
 
@@ -249,6 +250,44 @@ if ($env:WTMUX) { "Running in wtmux" }
 # bash/WSL
 [ -n "$WTMUX" ] && echo "Running in wtmux"
 ```
+
+## Mouse Support
+
+wtmux provides comprehensive mouse support:
+
+### Text Selection and Copy
+
+You can select text with the mouse and copy it to the clipboard:
+
+1. **Click and drag** to select text
+2. **Release the mouse button** - selected text is automatically copied to clipboard
+3. **Paste** with `Ctrl+V` or right-click in your shell
+
+This works the same as standard terminal text selection.
+
+### Mouse Passthrough for TUI Applications
+
+When running TUI applications that use mouse input (e.g., htop, mc, vim with mouse, or apps using crossterm's `EnableMouseCapture`), mouse events are automatically passed through to the application.
+
+**How it works:**
+- wtmux detects when a child application enables mouse tracking (DECSET 1000/1002/1003)
+- Mouse events within the pane are forwarded to the application
+- Supports SGR extended mouse mode (1006) for terminals larger than 223 columns/rows
+- Tab bar and status bar clicks still work as expected
+
+**Text selection in TUI apps:**
+- Hold **Shift** while clicking/dragging to use wtmux's text selection instead of passing events to the child application
+- This is useful when you need to copy text from a mouse-enabled TUI app
+
+### Mouse Actions Summary
+
+| Action | In normal shell | In TUI app (mouse-enabled) |
+|--------|-----------------|---------------------------|
+| Left drag | Select text | App receives event |
+| Shift + Left drag | Select text | Select text |
+| Left click on tab bar | Switch tab | Switch tab |
+| Right click | Context menu | Context menu |
+| Scroll wheel | Scroll buffer | App receives event |
 
 ## Comparison with tmux
 

@@ -638,4 +638,63 @@ impl WindowManager {
         // Trim trailing spaces
         Some(line.trim_end().to_string())
     }
+    
+    // =========================================================================
+    // Mouse passthrough support
+    // =========================================================================
+    
+    /// Check if the focused pane has mouse tracking enabled.
+    ///
+    /// Returns true if the child application has requested mouse events
+    /// via DECSET 1000, 1002, or 1003.
+    pub fn focused_pane_wants_mouse(&self) -> bool {
+        self.tabs.get(&self.active_tab)
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| pane.session.state.modes.mouse_enabled())
+            .unwrap_or(false)
+    }
+    
+    /// Get mouse encoding mode for focused pane.
+    ///
+    /// Returns (sgr_mode, urxvt_mode) tuple indicating which extended
+    /// mouse encoding the child application has requested.
+    pub fn focused_pane_mouse_mode(&self) -> (bool, bool) {
+        self.tabs.get(&self.active_tab)
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| {
+                let modes = &pane.session.state.modes;
+                (modes.mouse_sgr_mode, modes.mouse_urxvt_mode)
+            })
+            .unwrap_or((false, false))
+    }
+    
+    /// Convert screen coordinates to pane-relative coordinates.
+    ///
+    /// Takes absolute screen coordinates and returns coordinates relative
+    /// to the focused pane's content area, if the point is within the pane.
+    ///
+    /// # Arguments
+    /// * `x` - Screen column (0-based)
+    /// * `y` - Screen row relative to content area (excluding tab bar)
+    ///
+    /// # Returns
+    /// Some((pane_x, pane_y)) if coordinates are within the focused pane,
+    /// None otherwise.
+    pub fn screen_to_pane_coords(&self, x: u16, y: u16) -> Option<(u16, u16)> {
+        self.tabs.get(&self.active_tab)
+            .and_then(|tab| tab.focused_pane())
+            .and_then(|pane| {
+                let px = pane.x;
+                let py = pane.y;
+                let pw = pane.width;
+                let ph = pane.height;
+                
+                // Check if coordinates are within pane content area
+                if x >= px && x < px + pw && y >= py && y < py + ph {
+                    Some((x - px, y - py))
+                } else {
+                    None
+                }
+            })
+    }
 }

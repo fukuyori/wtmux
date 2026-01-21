@@ -580,11 +580,15 @@ impl WmRenderer {
             SetForegroundColor(cs.selector_fg.to_crossterm())
         )?;
 
-        // Top border
+        // Top border: ┌─ Theme [Ctrl+B, t] ───...───┐
         let title = "Theme [Ctrl+B, t]";
+        let title_display_width = title.chars().count();  // Use char count, not byte length
         execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
         write!(stdout, "┌─ {} ", title)?;
-        for _ in 0..(box_width.saturating_sub(title.len() + 5)) {
+        // "┌─ " = 3 display chars, " " after title = 1 char, "┐" = 1 char
+        // Total fixed chars = 3 + 1 + 1 = 5
+        let remaining = box_width.saturating_sub(title_display_width + 5);
+        for _ in 0..remaining {
             write!(stdout, "─")?;
         }
         write!(stdout, "┐")?;
@@ -612,11 +616,13 @@ impl WmRenderer {
             
             let num = i + 1;
             let prefix = format!("│ {}. ", num);
+            let prefix_display_width = prefix.chars().count();  // Use char count
             write!(stdout, "{}", prefix)?;
             write!(stdout, "{}", theme)?;
             
-            let used = prefix.len() + theme.len();
-            let padding = box_width.saturating_sub(used + 1);
+            let theme_display_width = theme.chars().count();
+            let used = prefix_display_width + theme_display_width;
+            let padding = box_width.saturating_sub(used + 1);  // +1 for closing │
             write!(stdout, "{:padding$}", "", padding = padding)?;
             
             execute!(stdout, 
@@ -637,8 +643,9 @@ impl WmRenderer {
 
         execute!(stdout, MoveTo(start_x as u16, (help_y + 1) as u16))?;
         let help = "Up/Down:Select Enter:Apply Esc:Cancel";
+        let help_display_width = help.chars().count();  // Use char count
         write!(stdout, "│ {}", help)?;
-        let padding = box_width.saturating_sub(help.len() + 3);
+        let padding = box_width.saturating_sub(help_display_width + 3);  // "│ " = 2 chars, "│" = 1 char
         write!(stdout, "{:padding$}│", "", padding = padding)?;
 
         execute!(stdout, MoveTo(start_x as u16, (help_y + 2) as u16))?;
