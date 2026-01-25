@@ -584,6 +584,35 @@ impl WindowManager {
         }
         Ok(())
     }
+    
+    /// Paste text to the focused pane with bracketed paste support
+    pub fn paste(&mut self, text: &str) -> Result<(), String> {
+        let use_bracketed = self.tabs.get(&self.active_tab)
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| pane.session.state.modes.bracketed_paste)
+            .unwrap_or(false);
+        
+        let bytes = if use_bracketed {
+            format!("\x1b[200~{}\x1b[201~", text).into_bytes()
+        } else {
+            text.as_bytes().to_vec()
+        };
+        
+        self.write(&bytes)
+    }
+    
+    /// Paste from system clipboard to the focused pane
+    pub fn paste_from_clipboard(&mut self) -> Result<(), String> {
+        // Try to get text from clipboard
+        let text = arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.get_text())
+            .map_err(|e| e.to_string())?;
+        
+        if !text.is_empty() {
+            self.paste(&text)?;
+        }
+        Ok(())
+    }
 
     /// Toggle prefix mode
     #[allow(dead_code)]

@@ -1381,6 +1381,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
 /// Execute a context menu action
 fn execute_context_menu_action(wm: &mut WindowManager, action: ContextMenuAction) {
     match action {
+        ContextMenuAction::Paste => {
+            let _ = wm.paste_from_clipboard();
+        }
         ContextMenuAction::KillPane => {
             wm.close_pane();
         }

@@ -29,6 +29,8 @@ use crate::wm::PaneId;
 /// otherwise require a keyboard shortcut (Ctrl+B prefix).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextMenuAction {
+    /// Paste clipboard content to the current pane.
+    Paste,
     /// Kill (close) the current pane.
     /// Equivalent to `Ctrl+B, x`.
     KillPane,
@@ -99,6 +101,7 @@ impl ContextMenu {
     /// Creates a new context menu with default menu items.
     ///
     /// The default menu includes:
+    /// - Paste (Ctrl+V)
     /// - Zoom/Unzoom (z)
     /// - Split ─ (") - horizontal split
     /// - Split │ (%) - vertical split
@@ -112,6 +115,7 @@ impl ContextMenu {
             y: 0,
             selected: 0,
             items: vec![
+                MenuItem::new("Paste", ContextMenuAction::Paste, Some("Ctrl+V")),
                 MenuItem::new("Zoom/Unzoom", ContextMenuAction::ToggleZoom, Some("z")),
                 MenuItem::new("Split ─", ContextMenuAction::SplitVertical, Some("\"")),
                 MenuItem::new("Split │", ContextMenuAction::SplitHorizontal, Some("%")),

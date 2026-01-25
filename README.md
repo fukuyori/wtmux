@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.0.1-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.0.2-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -261,7 +261,7 @@ You can select text with the mouse and copy it to the clipboard:
 
 1. **Click and drag** to select text
 2. **Release the mouse button** - selected text is automatically copied to clipboard
-3. **Paste** with `Ctrl+V` or right-click in your shell
+3. **Paste** with `Ctrl+V` or **right-click → Paste** from the context menu
 
 This works the same as standard terminal text selection.
 
@@ -286,7 +286,7 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Left drag | Select text | App receives event |
 | Shift + Left drag | Select text | Select text |
 | Left click on tab bar | Switch tab | Switch tab |
-| Right click | Context menu | Context menu |
+| Right click | Context menu (Paste, Zoom, Split, etc.) | Context menu |
 | Scroll wheel | Scroll buffer | App receives event |
 
 ## Comparison with tmux
