@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Paste clipboard content directly to the focused pane
   - Supports bracketed paste mode for compatible applications
 
+### Fixed
+
+- **README configuration example** now matches actual config format
+  - Fixed incorrect section names (`[general]`, `[appearance]` → top-level keys)
+  - Fixed key names (`default_shell` → `shell`, `encoding` → `codepage`)
+  - Added missing sections (`[tab_bar]`, `[status_bar]`, `[pane]`, `[scrollback]`)
+
 ## [1.0.0] - 2025-01-18
 
 ### Added

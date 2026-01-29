@@ -207,19 +207,39 @@ For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 wtmux reads configuration from `~/.wtmux/config.toml`.
 
 ```toml
-# General settings
-[general]
-default_shell = "powershell"  # cmd, powershell, pwsh, wsl
-encoding = "utf8"             # utf8, sjis
+# Default shell (optional)
+# Options: "cmd", "powershell", "pwsh", "wsl", or full path
+# shell = "pwsh.exe"
 
-# Appearance
-[appearance]
-color_scheme = "tokyo-night"  # default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
+# Codepage for encoding (optional)
+# codepage = 65001  # UTF-8
+# codepage = 932    # Shift-JIS
+
+# Color scheme
+# Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
+color_scheme = "tokyo-night"
+
+# Tab bar settings
+[tab_bar]
+visible = true
+
+# Status bar settings
+[status_bar]
+visible = true
+show_time = true
+
+# Pane border settings
+[pane]
+border_style = "single"  # single, double, rounded, none
 
 # Cursor settings
 [cursor]
-shape = "block"               # block, underline, bar
+shape = "block"          # block, underline, bar
 blink = true
+
+# Scrollback buffer
+[scrollback]
+lines = 10000
 ```
 
 ### Available Color Schemes

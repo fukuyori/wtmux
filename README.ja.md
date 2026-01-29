@@ -204,19 +204,39 @@ wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴
 wtmuxは `~/.wtmux/config.toml` から設定を読み込みます。
 
 ```toml
-# 一般設定
-[general]
-default_shell = "powershell"  # cmd, powershell, pwsh, wsl
-encoding = "utf8"             # utf8, sjis
+# デフォルトシェル（省略可）
+# オプション: "cmd", "powershell", "pwsh", "wsl", またはフルパス
+# shell = "pwsh.exe"
 
-# 外観
-[appearance]
-color_scheme = "tokyo-night"  # default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
+# エンコーディングのコードページ（省略可）
+# codepage = 65001  # UTF-8
+# codepage = 932    # Shift-JIS
+
+# カラースキーム
+# 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
+color_scheme = "tokyo-night"
+
+# タブバー設定
+[tab_bar]
+visible = true
+
+# ステータスバー設定
+[status_bar]
+visible = true
+show_time = true
+
+# ペイン境界線設定
+[pane]
+border_style = "single"  # single, double, rounded, none
 
 # カーソル設定
 [cursor]
-shape = "block"               # block, underline, bar
+shape = "block"          # block, underline, bar
 blink = true
+
+# スクロールバックバッファ
+[scrollback]
+lines = 10000
 ```
 
 ### 利用可能なカラースキーム
