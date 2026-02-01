@@ -212,6 +212,9 @@ wtmuxは `~/.wtmux/config.toml` から設定を読み込みます。
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS
 
+# プレフィックスキー（デフォルト: "C-b" = Ctrl+B）
+# prefix_key = "C-a"  # Ctrl+Aに変更
+
 # カラースキーム
 # 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"

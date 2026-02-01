@@ -2,7 +2,7 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "wtmux"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "wtmux"
 #define MyAppURL "https://github.com/user/wtmux"
 #define MyAppExeName "wtmux.exe"
@@ -90,5 +90,6 @@ end;
 
 [Run]
 Filename: "{app}\bin\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
 
 

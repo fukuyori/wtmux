@@ -594,12 +594,17 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
     // Get color scheme from config
     let color_scheme = wtmux_config.get_color_scheme();
     
+    // Parse prefix key from config
+    let prefix_key = crate::config::PrefixKey::parse(&wtmux_config.prefix_key)
+        .unwrap_or(crate::config::PrefixKey { char: 'b' });
+    
     // Create window manager
     let mut wm = WindowManager::new(
         cols, 
         rows, 
         config.shell.clone(),
-        config.codepage
+        config.codepage,
+        prefix_key,
     );
     
     // Start initial session
@@ -1187,9 +1192,10 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 // Detach not implemented yet
                                 wm.prefix_mode = false;
                             }
-                            // Send prefix key to application (tmux: Ctrl+B Ctrl+B)
-                            KeyCode::Char('b') => {
-                                let _ = wm.write(&[0x02]); // Ctrl+B
+                            // Send prefix key to application (e.g., Ctrl+B Ctrl+B sends Ctrl+B)
+                            KeyCode::Char(c) if c == wm.prefix_key.char => {
+                                let ctrl_code = (c as u8) - b'a' + 1;
+                                let _ = wm.write(&[ctrl_code]);
                                 wm.prefix_mode = false;
                             }
                             _ => {
@@ -1201,9 +1207,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         continue;
                     }
 
-                    // Check for prefix key (Ctrl+B)
+                    // Check for prefix key (configurable, default: Ctrl+B)
                     if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                        if key_event.code == KeyCode::Char('b') {
+                        if key_event.code == KeyCode::Char(wm.prefix_key.char) {
                             wm.prefix_mode = true;
                             renderer.render(wm)?;
                             continue;

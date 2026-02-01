@@ -15,6 +15,10 @@
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS (Japanese)
 
+# Prefix key (tmux-style notation, default: "C-b" for Ctrl+B)
+# Examples: "C-b" (Ctrl+B), "C-a" (Ctrl+A), "C-s" (Ctrl+S)
+# prefix_key = "C-b"
+
 # ==============================================================================
 # Appearance
 # ==============================================================================

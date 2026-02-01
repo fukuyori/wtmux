@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.0.2-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.0.3-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -214,6 +214,9 @@ wtmux reads configuration from `~/.wtmux/config.toml`.
 # Codepage for encoding (optional)
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS
+
+# Prefix key (default: "C-b" for Ctrl+B)
+# prefix_key = "C-a"  # Change to Ctrl+A
 
 # Color scheme
 # Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night

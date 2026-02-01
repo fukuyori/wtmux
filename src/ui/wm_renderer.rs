@@ -581,8 +581,8 @@ impl WmRenderer {
         )?;
 
         // Top border: ┌─ Theme [Ctrl+B, t] ───...───┐
-        let title = "Theme [Ctrl+B, t]";
-        let title_display_width = title.chars().count();  // Use char count, not byte length
+        let title = format!("Theme [{}, t]", wm.prefix_key.display_name());
+        let title_display_width = title.chars().count();
         execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
         write!(stdout, "┌─ {} ", title)?;
         // "┌─ " = 3 display chars, " " after title = 1 char, "┐" = 1 char
@@ -1063,10 +1063,11 @@ impl WmRenderer {
         )?;
         
         let status = wm.status_info();
+        let prefix_name = wm.prefix_key.display_name();
         let shortcuts = if wm.prefix_mode {
-            r#"c:new x:kill ":split %:vsplit n/p:win o:pane z:zoom t:theme"#
+            r#"c:new x:kill ":split %:vsplit n/p:win o:pane z:zoom t:theme"#.to_string()
         } else {
-            "Ctrl+B: prefix | Ctrl+R: history"
+            format!("{}: prefix | Ctrl+R: history", prefix_name)
         };
         
         let left_len = status.len();

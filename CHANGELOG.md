@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.2] - 2025-01-21
+## [1.0.3] - 2025-01-21
 
 ### Added
 
@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Right-click context menu now includes "Paste" option
   - Paste clipboard content directly to the focused pane
   - Supports bracketed paste mode for compatible applications
+
+- **Configurable prefix key**
+  - Prefix key can be changed via `prefix_key` in config.toml
+  - Uses tmux-style notation: `"C-b"` (Ctrl+B), `"C-a"` (Ctrl+A), etc.
+  - Default: `"C-b"` (Ctrl+B, same as tmux)
+  - Status bar and theme selector display adapt to configured key
 
 ### Fixed
 

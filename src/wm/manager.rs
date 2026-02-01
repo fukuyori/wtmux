@@ -31,6 +31,8 @@ use super::tab::{Tab, TabId};
 use super::pane::PaneId;
 use super::layout::SplitDirection;
 
+use crate::config::PrefixKey;
+
 /// The central manager for all tabs and pane operations.
 ///
 /// `WindowManager` is the top-level component that coordinates:
@@ -75,11 +77,13 @@ pub struct WindowManager {
     pub default_codepage: Option<u32>,
     /// Prefix key mode (like tmux Ctrl+b)
     pub prefix_mode: bool,
+    /// Configured prefix key
+    pub prefix_key: PrefixKey,
 }
 
 impl WindowManager {
     /// Create a new window manager
-    pub fn new(width: u16, height: u16, shell: Option<String>, codepage: Option<u32>) -> Self {
+    pub fn new(width: u16, height: u16, shell: Option<String>, codepage: Option<u32>, prefix_key: PrefixKey) -> Self {
         let tab_bar_height = 1;
         let status_bar_height = 1;
         let content_height = height.saturating_sub(tab_bar_height + status_bar_height);
@@ -104,6 +108,7 @@ impl WindowManager {
             default_shell: shell,
             default_codepage: codepage,
             prefix_mode: false,
+            prefix_key,
         }
     }
 

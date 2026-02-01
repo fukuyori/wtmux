@@ -50,6 +50,8 @@ pub struct Config {
     pub shell: Option<String>,
     /// Default codepage
     pub codepage: Option<u32>,
+    /// Prefix key (tmux-style notation, e.g., "C-b", "C-a")
+    pub prefix_key: String,
     /// Color scheme name
     pub color_scheme: String,
     /// Tab bar settings
@@ -65,11 +67,44 @@ impl Default for Config {
         Self {
             shell: None,
             codepage: None,
+            prefix_key: "C-b".to_string(),
             color_scheme: "default".to_string(),
             tab_bar: TabBarConfig::default(),
             status_bar: StatusBarConfig::default(),
             pane: PaneConfig::default(),
         }
+    }
+}
+
+/// Parsed prefix key representation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefixKey {
+    /// The character for the prefix key (e.g., 'b' for Ctrl+B)
+    pub char: char,
+}
+
+impl PrefixKey {
+    /// Parse a tmux-style prefix key string.
+    ///
+    /// Supported formats:
+    /// - `"C-b"` / `"C-a"` etc. (Ctrl + letter)
+    ///
+    /// Returns `None` if the format is invalid.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        // "C-x" format
+        if s.len() == 3 && s.starts_with("C-") {
+            let ch = s.chars().nth(2)?;
+            if ch.is_ascii_alphabetic() {
+                return Some(Self { char: ch.to_ascii_lowercase() });
+            }
+        }
+        None
+    }
+
+    /// Display name for the prefix key (e.g., "Ctrl+B")
+    pub fn display_name(&self) -> String {
+        format!("Ctrl+{}", self.char.to_ascii_uppercase())
     }
 }
 
