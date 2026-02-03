@@ -1,5 +1,5 @@
 # wtmux configuration file
-# Place this file at ~/.wtmux/config.toml
+# Place this file at %LOCALAPPDATA%\wtmux\config.toml
 
 # ==============================================================================
 # General Settings

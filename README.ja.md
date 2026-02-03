@@ -86,6 +86,11 @@ copy target\release\wtmux.exe C:\your\bin\path\
 # WiX Toolset使用（企業展開向け）
 # ダウンロード: https://wixtoolset.org/releases/
 .\build-installer.ps1
+
+# MSIXパッケージ（Windows 10/11向け）
+# Windows 10 SDKが必要
+.\build-msix.ps1              # 未署名（開発者モードが必要）
+.\build-msix.ps1 -Sign        # 自己署名（テスト用）
 ```
 
 ## 使い方
@@ -201,7 +206,7 @@ wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴
 
 ## 設定
 
-wtmuxは `~/.wtmux/config.toml` から設定を読み込みます。
+wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
 
 ```toml
 # デフォルトシェル（省略可）

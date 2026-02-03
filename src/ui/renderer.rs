@@ -18,26 +18,6 @@ use crossterm::{
 
 use crate::core::term::{AttrFlags, CellAttrs, TerminalState};
 
-/// Debug log file (global for simplicity)
-static DEBUG_LOG: std::sync::OnceLock<std::sync::Mutex<std::fs::File>> = std::sync::OnceLock::new();
-
-fn debug_log(msg: &str) {
-    if let Some(mutex) = DEBUG_LOG.get() {
-        if let Ok(mut file) = mutex.lock() {
-            let _ = writeln!(file, "{}", msg);
-            let _ = file.flush();
-        }
-    }
-}
-
-fn init_debug_log() {
-    let _ = DEBUG_LOG.get_or_init(|| {
-        std::sync::Mutex::new(
-            std::fs::File::create("rustterm_debug.log").expect("Failed to create debug log")
-        )
-    });
-}
-
 /// A cell for the render buffer (for diff rendering, experimental)
 #[allow(dead_code)]
 #[derive(Clone, PartialEq)]
@@ -90,9 +70,6 @@ impl Renderer {
 
     /// Initialize the terminal for rendering
     pub fn init(&mut self) -> io::Result<()> {
-        init_debug_log();
-        debug_log("=== RustTerm init ===");
-        
         // Disable Windows console Quick Edit mode to receive mouse events
         #[cfg(windows)]
         {
@@ -105,12 +82,9 @@ impl Renderer {
             
             unsafe {
                 let handle = GetStdHandle(STD_INPUT_HANDLE).unwrap_or_default();
-                debug_log(&format!("STD_INPUT_HANDLE: {:?}", handle));
                 
                 let mut mode = CONSOLE_MODE(0);
                 if GetConsoleMode(handle, &mut mode).is_ok() {
-                    debug_log(&format!("Original console mode: 0x{:08X}", mode.0));
-                    
                     // Disable Quick Edit mode, enable mouse input
                     let new_mode = CONSOLE_MODE(
                         (mode.0 & !ENABLE_QUICK_EDIT_MODE.0) 
@@ -118,26 +92,17 @@ impl Renderer {
                         | ENABLE_MOUSE_INPUT.0
                         | ENABLE_WINDOW_INPUT.0
                     );
-                    debug_log(&format!("New console mode: 0x{:08X}", new_mode.0));
                     
-                    match SetConsoleMode(handle, new_mode) {
-                        Ok(_) => debug_log("SetConsoleMode succeeded"),
-                        Err(e) => debug_log(&format!("SetConsoleMode failed: {:?}", e)),
-                    }
-                } else {
-                    debug_log("GetConsoleMode failed");
+                    let _ = SetConsoleMode(handle, new_mode);
                 }
             }
         }
         
-        debug_log("Calling enable_raw_mode...");
         terminal::enable_raw_mode()?;
-        debug_log("enable_raw_mode succeeded");
         
         let mut stdout = io::stdout();
         
         // Enable mouse capture
-        debug_log("Enabling mouse capture...");
         execute!(
             stdout,
             EnterAlternateScreen,
@@ -158,29 +123,6 @@ impl Renderer {
         stdout.flush()?;
         self.initialized = true;
         
-        // Verify console mode after crossterm init
-        #[cfg(windows)]
-        {
-            use windows::Win32::System::Console::{
-                GetConsoleMode, GetStdHandle,
-                CONSOLE_MODE, STD_INPUT_HANDLE,
-            };
-            
-            unsafe {
-                let handle = GetStdHandle(STD_INPUT_HANDLE).unwrap_or_default();
-                let mut mode = CONSOLE_MODE(0);
-                if GetConsoleMode(handle, &mut mode).is_ok() {
-                    debug_log(&format!("Console mode after init: 0x{:08X}", mode.0));
-                    debug_log(&format!("  ENABLE_MOUSE_INPUT (0x10): {}", (mode.0 & 0x10) != 0));
-                    debug_log(&format!("  ENABLE_QUICK_EDIT_MODE (0x40): {}", (mode.0 & 0x40) != 0));
-                    debug_log(&format!("  ENABLE_EXTENDED_FLAGS (0x80): {}", (mode.0 & 0x80) != 0));
-                    debug_log(&format!("  ENABLE_WINDOW_INPUT (0x08): {}", (mode.0 & 0x08) != 0));
-                    debug_log(&format!("  ENABLE_VIRTUAL_TERMINAL_INPUT (0x200): {}", (mode.0 & 0x200) != 0));
-                }
-            }
-        }
-        
-        debug_log("init completed successfully");
         Ok(())
     }
 
@@ -225,9 +167,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// Log mouse event
+    /// Log mouse event (no-op unless debug mode)
+    #[allow(unused_variables)]
     pub fn log_mouse_event(&self, msg: &str) {
-        debug_log(msg);
+        // Debug logging disabled by default
     }
 
     /// Ensure buffer is properly sized (for diff rendering)

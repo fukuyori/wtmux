@@ -343,7 +343,7 @@ wtmuxには8種類のカラースキームが組み込まれています。
 
 ### 設定ファイルで指定
 
-`~/.wtmux/config.toml` を作成：
+`%LOCALAPPDATA%\wtmux\config.toml` を作成：
 
 ```toml
 color_scheme = "tokyo-night"
@@ -365,7 +365,7 @@ wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴
 
 ## 設定ファイル
 
-wtmuxは `~/.wtmux/config.toml` から設定を読み込みます。
+wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
 
 ### 設定例
 

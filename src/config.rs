@@ -184,20 +184,36 @@ impl Config {
 
     /// Get config file path
     fn get_config_path() -> Option<PathBuf> {
-        if let Some(home) = home_dir() {
-            let wtmux_dir = home.join(".wtmux");
-            if !wtmux_dir.exists() {
-                let _ = fs::create_dir_all(&wtmux_dir);
-            }
-            return Some(wtmux_dir.join("config.toml"));
+        let wtmux_dir = get_data_dir()?;
+        if !wtmux_dir.exists() {
+            let _ = fs::create_dir_all(&wtmux_dir);
         }
-        None
+        Some(wtmux_dir.join("config.toml"))
     }
 
     /// Get the color scheme
     pub fn get_color_scheme(&self) -> ColorScheme {
         ColorScheme::by_name(&self.color_scheme)
     }
+}
+
+/// Get wtmux data directory
+/// 
+/// On Windows: `%LOCALAPPDATA%\wtmux` (e.g., `C:\Users\username\AppData\Local\wtmux`)
+/// Fallback: `~/.wtmux`
+pub fn get_data_dir() -> Option<PathBuf> {
+    // Try LOCALAPPDATA first (Windows standard)
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let path = PathBuf::from(local_app_data).join("wtmux");
+        return Some(path);
+    }
+    
+    // Fallback to home directory
+    if let Some(home) = home_dir() {
+        return Some(home.join(".wtmux"));
+    }
+    
+    None
 }
 
 /// Color definition (RGB)

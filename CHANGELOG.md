@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.3] - 2025-01-21
+## [1.1.0] - 2025-01-21
 
 ### Added
 
@@ -28,12 +28,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Default: `"C-b"` (Ctrl+B, same as tmux)
   - Status bar and theme selector display adapt to configured key
 
+- **MSIX package support**
+  - Added `build-msix.ps1` script for creating MSIX packages
+  - Supports unsigned packages (Developer Mode) and self-signed packages
+  - Includes app execution alias for command-line access
+  - Windows 10/11 compatible (requires Windows 10 SDK to build)
+
 ### Fixed
 
 - **README configuration example** now matches actual config format
   - Fixed incorrect section names (`[general]`, `[appearance]` → top-level keys)
   - Fixed key names (`default_shell` → `shell`, `encoding` → `codepage`)
   - Added missing sections (`[tab_bar]`, `[status_bar]`, `[pane]`, `[scrollback]`)
+
+### Changed
+
+- **Configuration directory moved to AppData**
+  - Config and history files now stored in `%LOCALAPPDATA%\wtmux\`
+  - Previously: `~/.wtmux/` (home directory)
+  - Better alignment with Windows standards
+
+- **Logging disabled by default**
+  - No log files are created during normal operation
+  - Use `--debug` (`-d`) flag to enable logging for troubleshooting
+  - Log file: `%LOCALAPPDATA%\wtmux\wtmux.log`
 
 ## [1.0.0] - 2025-01-18
 

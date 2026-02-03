@@ -69,6 +69,8 @@ struct Config {
     multipane: bool,
     /// Shell was explicitly set via command line
     shell_from_cli: bool,
+    /// Enable debug logging to file
+    debug: bool,
 }
 
 impl Default for Config {
@@ -79,6 +81,7 @@ impl Default for Config {
             codepage: Some(65001), // UTF-8 by default
             multipane: true, // Multi-pane mode is now default
             shell_from_cli: false,
+            debug: false,  // Logging disabled by default
         }
     }
 }
@@ -113,6 +116,7 @@ fn print_help() {
     eprintln!();
     eprintln!("Other options:");
     eprintln!("  -n, --native          Run in native console window");
+    eprintln!("  -d, --debug           Enable debug logging to file");
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
     eprintln!();
@@ -139,15 +143,13 @@ fn print_help() {
     eprintln!("  Esc                   Close selector");
     eprintln!("  (type to search)      Filter snippets");
     eprintln!();
-    eprintln!("Snippets are stored in: ~/.wtmux/snippets.toml");
-    eprintln!();
     eprintln!("Examples:");
     eprintln!("  wtmux                 Multi-pane mode (default)");
     eprintln!("  wtmux -7 -u           PowerShell 7, UTF-8");
     eprintln!("  wtmux -w              WSL");
     eprintln!("  wtmux -1              Simple single-pane mode");
     eprintln!();
-    eprintln!("Configuration: ~/.wtmux/config.toml");
+    eprintln!("Configuration: %LOCALAPPDATA%\\wtmux\\config.toml");
     eprintln!();
     eprintln!("Color schemes: default, solarized-dark, solarized-light,");
     eprintln!("               monokai, nord, dracula, gruvbox-dark, tokyo-night");
@@ -214,6 +216,9 @@ fn parse_args() -> Result<Config, String> {
             }
             "--no-relaunch" => {
                 config.native_console = true;
+            }
+            "-d" | "--debug" => {
+                config.debug = true;
             }
             arg => {
                 return Err(format!("Unknown argument: {}. Use -h for help.", arg));
@@ -446,37 +451,33 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Initialize logging to file
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(std::path::PathBuf::from);
-    
-    let log_path = home
-        .map(|h| h.join(".wtmux").join("wtmux.log"))
-        .unwrap_or_else(|| std::path::PathBuf::from("wtmux.log"));
-    
-    // Create log directory if needed
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    // Initialize logging only when --debug is specified
+    if config.debug {
+        if let Some(wtmux_dir) = crate::config::get_data_dir() {
+            let log_path = wtmux_dir.join("wtmux.log");
+            
+            // Create log directory if needed
+            if let Some(parent) = log_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            
+            // Open log file (append mode)
+            if let Ok(file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                let subscriber = FmtSubscriber::builder()
+                    .with_max_level(Level::DEBUG)
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_ansi(false)
+                    .finish();
+                let _ = tracing::subscriber::set_global_default(subscriber);
+                info!("wtmux starting (debug mode)...");
+                info!("Log file: {:?}", log_path);
+            }
+        }
     }
-    
-    // Open log file (append mode)
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .ok();
-    
-    if let Some(file) = log_file {
-        let subscriber = FmtSubscriber::builder()
-            .with_max_level(Level::INFO)
-            .with_writer(std::sync::Mutex::new(file))
-            .with_ansi(false)
-            .finish();
-        let _ = tracing::subscriber::set_global_default(subscriber);
-    }
-
-    info!("wtmux starting...");
     
     // Set environment variable so child processes can detect wtmux
     env::set_var("WTMUX", "1");

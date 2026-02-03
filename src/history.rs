@@ -1,7 +1,7 @@
 //! Command history for wtmux.
 //!
 //! Provides persistent command history storage, search, and selection functionality.
-//! History is stored in `~/.wtmux/history` and shared across all panes.
+//! History is stored in `%LOCALAPPDATA%\wtmux\history` and shared across all panes.
 //!
 //! # Features
 //!
@@ -69,14 +69,11 @@ impl CommandHistory {
 
     /// Get history file path
     fn get_history_path() -> Option<PathBuf> {
-        if let Some(home) = home_dir() {
-            let wtmux_dir = home.join(".wtmux");
-            if !wtmux_dir.exists() {
-                let _ = fs::create_dir_all(&wtmux_dir);
-            }
-            return Some(wtmux_dir.join("history"));
+        let wtmux_dir = crate::config::get_data_dir()?;
+        if !wtmux_dir.exists() {
+            let _ = fs::create_dir_all(&wtmux_dir);
         }
-        None
+        Some(wtmux_dir.join("history"))
     }
 
     /// Load history from file
@@ -385,11 +382,4 @@ impl HistorySelector {
     pub fn has_history(&self) -> bool {
         !self.history.entries.is_empty()
     }
-}
-
-// Get home directory
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
 }

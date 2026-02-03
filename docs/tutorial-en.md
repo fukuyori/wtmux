@@ -343,7 +343,7 @@ wtmux includes 8 built-in color schemes.
 
 ### Set in Config File
 
-Create `~/.wtmux/config.toml`:
+Create `%LOCALAPPDATA%\wtmux\config.toml`:
 
 ```toml
 color_scheme = "tokyo-night"
@@ -365,7 +365,7 @@ For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 
 ## Configuration File
 
-wtmux reads settings from `~/.wtmux/config.toml`.
+wtmux reads settings from `%LOCALAPPDATA%\wtmux\config.toml`.
 
 ### Example Configuration
 
