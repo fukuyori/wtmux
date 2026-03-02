@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2025-01-21
+## [1.1.1] - 2025-01-21
 
 ### Added
 
@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fixed incorrect section names (`[general]`, `[appearance]` → top-level keys)
   - Fixed key names (`default_shell` → `shell`, `encoding` → `codepage`)
   - Added missing sections (`[tab_bar]`, `[status_bar]`, `[pane]`, `[scrollback]`)
+
+- **Clipboard paste with LF-only line endings**
+  - Text with Unix-style line endings (LF) now works correctly
+  - Automatically converts LF to CR+LF for Windows shells
 
 ### Changed
 

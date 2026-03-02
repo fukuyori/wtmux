@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 
 # Configuration
 $AppName = "wtmux"
-$Version = "1.1.0.0"
+$Version = "1.1.1.0"
 $Publisher = "CN=wtmux"
 
 # Paths

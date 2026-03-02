@@ -614,7 +614,10 @@ impl WindowManager {
             .map_err(|e| e.to_string())?;
         
         if !text.is_empty() {
-            self.paste(&text)?;
+            // Normalize line endings to CR+LF for Windows shells
+            // First replace CRLF with LF to avoid double conversion, then replace LF with CRLF
+            let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
+            self.paste(&normalized)?;
         }
         Ok(())
     }

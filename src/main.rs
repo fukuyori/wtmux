@@ -1560,11 +1560,14 @@ fn run_main_loop(session: &mut Session, renderer: &mut Renderer) -> anyhow::Resu
                     // Return to live view on paste
                     session.state.active_screen_mut().scroll_to_bottom();
                     
+                    // Normalize line endings to CR+LF for Windows shells
+                    let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
+                    
                     // Handle paste
                     let bytes = if session.state.modes.bracketed_paste {
-                        format!("\x1b[200~{}\x1b[201~", text).into_bytes()
+                        format!("\x1b[200~{}\x1b[201~", normalized).into_bytes()
                     } else {
-                        text.into_bytes()
+                        normalized.into_bytes()
                     };
 
                     if let Err(e) = session.write(&bytes) {
