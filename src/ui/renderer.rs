@@ -6,10 +6,7 @@ use std::io::{self, Write};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute,
-    style::{
-        Attribute, ResetColor, SetAttribute,
-        SetBackgroundColor, SetForegroundColor,
-    },
+    style::{Attribute, ResetColor, SetAttribute},
     terminal::{
         self, Clear, ClearType, DisableLineWrap, EnableLineWrap,
         EnterAlternateScreen, LeaveAlternateScreen,
@@ -532,44 +529,41 @@ impl Renderer {
         Ok(())
     }
 
-    /// Apply cell attributes
+    /// Apply cell attributes (batches all SGR codes into one escape sequence)
     fn apply_attrs<W: Write>(&self, stdout: &mut W, attrs: &CellAttrs, is_selected: bool) -> io::Result<()> {
-        // Reset first
-        execute!(stdout, SetAttribute(Attribute::Reset))?;
+        use crate::core::term::Color as TermColor;
+        let mut sgr = String::with_capacity(48);
+        sgr.push_str("\x1b[0"); // Reset
 
-        // Apply style attributes
-        if attrs.flags.contains(AttrFlags::BOLD) {
-            execute!(stdout, SetAttribute(Attribute::Bold))?;
-        }
-        if attrs.flags.contains(AttrFlags::ITALIC) {
-            execute!(stdout, SetAttribute(Attribute::Italic))?;
-        }
-        if attrs.flags.contains(AttrFlags::UNDERLINE) {
-            execute!(stdout, SetAttribute(Attribute::Underlined))?;
-        }
-        if attrs.flags.contains(AttrFlags::BLINK) {
-            execute!(stdout, SetAttribute(Attribute::SlowBlink))?;
-        }
-        // Apply INVERSE if cell has it OR if selected
-        if attrs.flags.contains(AttrFlags::INVERSE) != is_selected {
-            // XOR: show reverse if either is true but not both
-            execute!(stdout, SetAttribute(Attribute::Reverse))?;
-        }
-        if attrs.flags.contains(AttrFlags::STRIKETHROUGH) {
-            execute!(stdout, SetAttribute(Attribute::CrossedOut))?;
-        }
+        if attrs.flags.contains(AttrFlags::BOLD)          { sgr.push_str(";1"); }
+        if attrs.flags.contains(AttrFlags::ITALIC)        { sgr.push_str(";3"); }
+        if attrs.flags.contains(AttrFlags::UNDERLINE)     { sgr.push_str(";4"); }
+        if attrs.flags.contains(AttrFlags::BLINK)         { sgr.push_str(";5"); }
+        if attrs.flags.contains(AttrFlags::STRIKETHROUGH) { sgr.push_str(";9"); }
+        // XOR: show reverse if either INVERSE flag or selected, but not both
+        if attrs.flags.contains(AttrFlags::INVERSE) != is_selected { sgr.push_str(";7"); }
 
-        // Apply colors
-        let fg_color = attrs.fg.to_crossterm(true);
-        if fg_color != crossterm::style::Color::Reset {
-            execute!(stdout, SetForegroundColor(fg_color))?;
+        match attrs.fg {
+            TermColor::Default => {}
+            TermColor::Indexed(idx) => {
+                if idx < 8       { sgr.push_str(&format!(";{}", 30 + idx)); }
+                else if idx < 16 { sgr.push_str(&format!(";{}", 90 + (idx - 8))); }
+                else             { sgr.push_str(&format!(";38;5;{}", idx)); }
+            }
+            TermColor::Rgb(r, g, b) => { sgr.push_str(&format!(";38;2;{};{};{}", r, g, b)); }
         }
-        let bg_color = attrs.bg.to_crossterm(false);
-        if bg_color != crossterm::style::Color::Reset {
-            execute!(stdout, SetBackgroundColor(bg_color))?;
+        match attrs.bg {
+            TermColor::Default => {}
+            TermColor::Indexed(idx) => {
+                if idx < 8       { sgr.push_str(&format!(";{}", 40 + idx)); }
+                else if idx < 16 { sgr.push_str(&format!(";{}", 100 + (idx - 8))); }
+                else             { sgr.push_str(&format!(";48;5;{}", idx)); }
+            }
+            TermColor::Rgb(r, g, b) => { sgr.push_str(&format!(";48;2;{};{};{}", r, g, b)); }
         }
 
-        Ok(())
+        sgr.push('m');
+        write!(stdout, "{}", sgr)
     }
 
     /// Get terminal size

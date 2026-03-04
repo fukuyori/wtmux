@@ -22,6 +22,10 @@ pub struct TerminalState {
     pub scroll_region: (u16, u16),
     /// Text selection state
     pub selection: Option<Selection>,
+    /// Shell integration state (OSC 133 / OSC 633)
+    pub shell_integration: ShellIntegration,
+    /// Keystroke tracker (fallback when shell integration is inactive)
+    pub keystroke_tracker: KeystrokeTracker,
 }
 
 /// Text selection
@@ -50,6 +54,8 @@ impl TerminalState {
             title: String::from("RustTerm"),
             scroll_region: (0, rows.saturating_sub(1)),
             selection: None,
+            shell_integration: ShellIntegration::default(),
+            keystroke_tracker: KeystrokeTracker::default(),
         }
     }
 
@@ -941,6 +947,7 @@ pub enum Color {
 
 impl Color {
     /// Convert to crossterm color
+    #[allow(dead_code)]
     pub fn to_crossterm(&self, _is_fg: bool) -> crossterm::style::Color {
         match self {
             Color::Default => crossterm::style::Color::Reset,
@@ -1101,5 +1108,145 @@ impl TerminalModes {
     /// Returns true if any mouse tracking mode is enabled
     pub fn mouse_enabled(&self) -> bool {
         self.mouse_tracking || self.mouse_button_tracking || self.mouse_any_event
+    }
+}
+
+// =============================================================================
+// Shell Integration (OSC 133 / OSC 633)
+// =============================================================================
+
+/// Shell integration state, populated by OSC 133 / OSC 633 sequences.
+///
+/// ## How it works
+///
+/// Modern shells (PowerShell, bash, zsh, fish) emit OSC escape sequences that
+/// mark the boundaries of prompts and commands:
+///
+/// ```text
+/// ESC ] 133 ; A ST   ← prompt starts being drawn
+/// ESC ] 133 ; B ST   ← prompt finished; cursor is now at command start
+/// ESC ] 133 ; C ST   ← user pressed Enter; command is now executing
+/// ESC ] 133 ; D ; N ST ← command finished; N = exit code
+/// ```
+///
+/// OSC 633 is VS Code's extension of OSC 133, used by PowerShell's built-in
+/// shell integration (`$env:TERM_PROGRAM = "vscode"`).
+///
+/// ## Fallback
+///
+/// When no OSC markers have been seen (`active == false`), wtmux falls back to
+/// keystroke tracking (`KeystrokeTracker`) which intercepts every key before
+/// it is sent to the PTY.
+#[derive(Clone, Debug, Default)]
+pub struct ShellIntegration {
+    /// True once at least one OSC 133/633 marker has been received.
+    /// Used to decide whether to use OSC data or the keystroke fallback.
+    pub active: bool,
+
+    /// Column at which user input starts (recorded on marker B).
+    pub prompt_end_col: Option<u16>,
+    /// Row at which user input starts (recorded on marker B).
+    pub prompt_end_row: Option<u16>,
+
+    /// The command that was confirmed by marker C (Enter pressed).
+    /// Extracted from the screen buffer between prompt_end and cursor at
+    /// the time the C marker arrives.
+    pub confirmed_command: Option<String>,
+
+    /// Exit code of the most recently completed command (from marker D).
+    pub last_exit_code: Option<i32>,
+}
+
+impl ShellIntegration {
+    /// Called when OSC 133;A or 633;A is received (prompt start).
+    /// Clears the previous confirmed command so a fresh one can be captured.
+    pub fn on_prompt_start(&mut self) {
+        self.confirmed_command = None;
+    }
+
+    /// Called when OSC 133;B or 633;B is received (prompt end = input start).
+    /// Records cursor position so we know where the command text begins.
+    pub fn on_prompt_end(&mut self, col: u16, row: u16) {
+        self.active = true;
+        self.prompt_end_col = Some(col);
+        self.prompt_end_row = Some(row);
+    }
+
+    /// Called when OSC 133;C or 633;C is received (Enter pressed).
+    /// `command` is the text extracted from the screen buffer.
+    pub fn on_command_start(&mut self, command: String) {
+        self.active = true;
+        self.confirmed_command = Some(command);
+    }
+
+    /// Called when OSC 133;D or 633;D is received (command finished).
+    pub fn on_command_done(&mut self, exit_code: Option<i32>) {
+        self.last_exit_code = exit_code;
+    }
+
+    /// Take the confirmed command (consumes it so it is only used once).
+    pub fn take_confirmed_command(&mut self) -> Option<String> {
+        self.confirmed_command.take()
+    }
+}
+
+// =============================================================================
+// Keystroke Tracker (fallback for shells without OSC 133/633)
+// =============================================================================
+
+/// Tracks the current command-line input by intercepting keystrokes.
+///
+/// This is used as a fallback when the shell does not emit OSC 133/633
+/// markers (e.g. cmd.exe).  It maintains a best-effort buffer of the text
+/// the user has typed since the last Enter / Ctrl+C / Ctrl+U.
+///
+/// Limitations:
+/// - Does not handle readline-style cursor movement (←→ for insert)
+/// - Ctrl+W (delete word) is approximated but may be slightly off
+/// - Multi-line commands are not tracked
+///
+/// Despite these limitations it is far more accurate than `strip_prompt`
+/// because it never needs to parse the prompt at all.
+#[derive(Clone, Debug, Default)]
+pub struct KeystrokeTracker {
+    /// The accumulated input since the last reset.
+    pub buf: String,
+}
+
+impl KeystrokeTracker {
+    /// Record a printable character being typed.
+    pub fn push_char(&mut self, ch: char) {
+        self.buf.push(ch);
+    }
+
+    /// Handle Backspace (0x08 / 0x7F).
+    pub fn backspace(&mut self) {
+        self.buf.pop();
+    }
+
+    /// Handle Ctrl+W (delete last word).
+    pub fn delete_word(&mut self) {
+        // Trim trailing spaces then delete back to next space
+        let trimmed = self.buf.trim_end_matches(' ');
+        let new_len = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
+        self.buf.truncate(new_len);
+    }
+
+    /// Handle Ctrl+U (delete to start of line).
+    pub fn clear_line(&mut self) {
+        self.buf.clear();
+    }
+
+    /// Take the current buffer as a command and reset for the next input.
+    #[allow(dead_code)]
+    pub fn take(&mut self) -> String {
+        let cmd = self.buf.trim().to_string();
+        self.buf.clear();
+        cmd
+    }
+
+    /// Peek at the current buffer without consuming.
+    pub fn peek(&self) -> &str {
+        self.buf.trim_end()
     }
 }

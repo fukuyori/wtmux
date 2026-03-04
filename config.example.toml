@@ -68,3 +68,26 @@ blink = true
 [scrollback]
 # Maximum number of lines to keep in scrollback buffer
 lines = 10000
+
+# ==============================================================================
+# Font Settings
+# ==============================================================================
+# Note: wtmux runs inside an existing terminal (e.g. Windows Terminal).
+# These settings are stored in config.toml and respected where possible.
+# To change the font rendered on screen, also update your host terminal's profile.
+
+[font]
+# Font family name
+# Examples: "Cascadia Code", "Cascadia Mono", "Consolas", "JetBrains Mono",
+#           "FiraCode Nerd Font", "Hack", "Source Code Pro"
+# Leave empty ("") to inherit the host terminal's current font.
+# family = "Cascadia Code"
+
+# Font size in points (0 = inherit from host terminal)
+# size = 12
+
+# Force bold rendering for all text
+bold = false
+
+# Enable font ligatures (requires a ligature-capable font such as Cascadia Code)
+ligatures = true

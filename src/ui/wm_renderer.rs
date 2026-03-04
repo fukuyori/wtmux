@@ -788,7 +788,7 @@ impl WmRenderer {
         }
 
         // Bottom border with help (English)
-        let help_text = "Enter:Run S-Enter:&& C-Enter:& Esc:Close";
+        let help_text = "Enter:Run Del:Delete S-Enter:&& Esc:Close";
         let help_width = help_text.len();
         execute!(stdout, MoveTo(start_x as u16, (start_y + box_height - 1) as u16))?;
         write!(stdout, "└ {} ", help_text)?;
@@ -868,7 +868,7 @@ impl WmRenderer {
             None => return Ok(()),
         };
 
-        // Full redraw if generation changed
+        // Full redraw if generation changed (layout change: split, close, resize)
         let needs_full_redraw = tab.layout_generation != self.last_generation;
         if needs_full_redraw {
             execute!(stdout, ResetColor)?;
@@ -882,12 +882,20 @@ impl WmRenderer {
         if tab.is_zoomed() {
             if let Some(zoomed_id) = tab.zoomed_pane_id() {
                 if let Some(pane) = tab.panes.get(&zoomed_id) {
-                    self.render_pane(stdout, pane, wm.tab_bar_height)?;
+                    self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
                 }
             }
         } else {
             for pane in tab.panes.values() {
-                self.render_pane(stdout, pane, wm.tab_bar_height)?;
+                let screen = pane.session.state.active_screen();
+                // Skip panes with no new content unless forced by layout change
+                let pane_needs_render = needs_full_redraw
+                    || screen.full_redraw
+                    || !screen.dirty_lines.is_empty();
+
+                if pane_needs_render {
+                    self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
+                }
             }
         }
 
@@ -895,15 +903,15 @@ impl WmRenderer {
     }
 
     /// Render a single pane
-    fn render_pane<W: Write>(&self, stdout: &mut W, pane: &Pane, y_offset: u16) -> io::Result<()> {
+    fn render_pane<W: Write>(&self, stdout: &mut W, pane: &Pane, y_offset: u16, force_full: bool) -> io::Result<()> {
         let screen = pane.session.state.active_screen();
         let (inner_x, inner_y) = pane.inner_pos();
         let (inner_w, inner_h) = pane.inner_size();
         let has_selection = pane.session.state.selection.is_some();
-        
-        // Always render full inner_w to prevent remnants
-        // If session.cols is smaller, we'll pad with spaces
         let session_cols = pane.session.state.cols as usize;
+
+        // Whether to render all rows or only dirty ones
+        let full_redraw = force_full || screen.full_redraw;
 
         // Draw border if needed
         if pane.border != BorderStyle::None {
@@ -911,20 +919,30 @@ impl WmRenderer {
         }
 
         // Render content
-        let mut current_attrs = CellAttrs::default();
-        let mut current_selected = false;
+        // current_attrs and current_selected are reset per row (not shared across rows),
+        // so they live inside the loop. line_buffer is reused across rows for efficiency.
         let mut line_buffer = String::with_capacity(256);
         
         for row_idx in 0..inner_h as usize {
+            // --- Dirty line skip ---
+            // When doing a partial update, skip rows that the VT parser hasn't touched.
+            // This avoids redrawing htop/vim/etc. lines that haven't changed.
+            if !full_redraw && !screen.dirty_lines.contains(&row_idx) {
+                continue;
+            }
+
             execute!(stdout, MoveTo(inner_x, y_offset + inner_y + row_idx as u16))?;
             line_buffer.clear();
+            // Each row starts with a fresh attribute context
+            let mut current_attrs = CellAttrs::default();
+            let mut current_selected = false;
             
             let mut rendered_width: usize = 0;
             
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
                 None => {
-                    // Clear empty row - fill with spaces
+                    // Clear empty row
                     execute!(stdout, ResetColor)?;
                     write!(stdout, "{:width$}", "", width = inner_w as usize)?;
                     continue;
@@ -1083,51 +1101,47 @@ impl WmRenderer {
     /// Apply cell attributes with selection highlighting
     fn apply_attrs_with_selection<W: Write>(&self, stdout: &mut W, attrs: &CellAttrs, selected: bool) -> io::Result<()> {
         let cs = &self.color_scheme;
-        execute!(stdout, SetAttribute(Attribute::Reset))?;
 
+        // Batch all SGR codes into a single escape sequence for efficiency.
+        // Instead of multiple execute!() calls (each a separate write), we build
+        // one \x1b[...m sequence with semicolon-separated parameters.
+        let mut sgr = String::with_capacity(48);
+        sgr.push_str("\x1b[0"); // Always start with reset
+
+        // Text attributes
+        if attrs.flags.contains(AttrFlags::BOLD)      { sgr.push_str(";1"); }
+        if attrs.flags.contains(AttrFlags::DIM)       { sgr.push_str(";2"); }
+        if attrs.flags.contains(AttrFlags::ITALIC)    { sgr.push_str(";3"); }
+        if attrs.flags.contains(AttrFlags::UNDERLINE) { sgr.push_str(";4"); }
+
+        // Colors
         if selected {
-            // Selection: use color scheme colors
-            execute!(stdout, SetBackgroundColor(cs.selection_bg.to_crossterm()))?;
-            execute!(stdout, SetForegroundColor(cs.selection_fg.to_crossterm()))?;
+            // Selection highlight: use color scheme RGB colors
+            sgr.push_str(&format!(";38;2;{};{};{}", cs.selection_fg.r, cs.selection_fg.g, cs.selection_fg.b));
+            sgr.push_str(&format!(";48;2;{};{};{}", cs.selection_bg.r, cs.selection_bg.g, cs.selection_bg.b));
         } else {
-            // Foreground
             match attrs.fg {
                 Color::Default => {}
                 Color::Indexed(idx) => {
-                    execute!(stdout, SetForegroundColor(CtColor::AnsiValue(idx)))?;
+                    if idx < 8        { sgr.push_str(&format!(";{}", 30 + idx)); }
+                    else if idx < 16  { sgr.push_str(&format!(";{}", 90 + (idx - 8))); }
+                    else              { sgr.push_str(&format!(";38;5;{}", idx)); }
                 }
-                Color::Rgb(r, g, b) => {
-                    execute!(stdout, SetForegroundColor(CtColor::Rgb { r, g, b }))?;
-                }
+                Color::Rgb(r, g, b) => { sgr.push_str(&format!(";38;2;{};{};{}", r, g, b)); }
             }
-
-            // Background
             match attrs.bg {
                 Color::Default => {}
                 Color::Indexed(idx) => {
-                    execute!(stdout, SetBackgroundColor(CtColor::AnsiValue(idx)))?;
+                    if idx < 8        { sgr.push_str(&format!(";{}", 40 + idx)); }
+                    else if idx < 16  { sgr.push_str(&format!(";{}", 100 + (idx - 8))); }
+                    else              { sgr.push_str(&format!(";48;5;{}", idx)); }
                 }
-                Color::Rgb(r, g, b) => {
-                    execute!(stdout, SetBackgroundColor(CtColor::Rgb { r, g, b }))?;
-                }
+                Color::Rgb(r, g, b) => { sgr.push_str(&format!(";48;2;{};{};{}", r, g, b)); }
             }
         }
 
-        // Attributes (apply regardless of selection)
-        if attrs.flags.contains(AttrFlags::BOLD) {
-            execute!(stdout, SetAttribute(Attribute::Bold))?;
-        }
-        if attrs.flags.contains(AttrFlags::DIM) {
-            execute!(stdout, SetAttribute(Attribute::Dim))?;
-        }
-        if attrs.flags.contains(AttrFlags::ITALIC) {
-            execute!(stdout, SetAttribute(Attribute::Italic))?;
-        }
-        if attrs.flags.contains(AttrFlags::UNDERLINE) {
-            execute!(stdout, SetAttribute(Attribute::Underlined))?;
-        }
-
-        Ok(())
+        sgr.push('m');
+        write!(stdout, "{}", sgr)
     }
 
     /// Apply cell attributes

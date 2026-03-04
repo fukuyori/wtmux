@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] - 2026-03-04
+
+### Fixed
+
+- **履歴ウィンドウを Esc で閉じても残像が残る問題を修正**:
+  v1.2.0 のダーティライン最適化により、PTY 出力がない状態でセレクターを
+  閉じると、ペイン内容が再描画されずオーバーレイの残像が残っていた。
+  セレクター / コンテキストメニューを閉じる際に `force_full_redraw()` を
+  呼ぶことで、次の render で全ペインを強制再描画するよう修正。
+  Del で履歴削除後の Esc、マウスクリックによる閉じる操作も同様に修正。
+
+## [1.2.3] - 2026-03-04
+
+### Added
+
+- **履歴ウィンドウで Del キーによる削除**: コマンド履歴セレクター（Ctrl+R）で
+  選択中のエントリを Del キーで削除できるようになった。削除後はリストが即座に
+  更新され、カーソル位置は維持される（最終行を削除した場合は一つ上に移動）。
+  削除はファイルにも即座に反映される。
+- ヒントバー表示を更新: `Enter:Run Del:Delete S-Enter:&& Esc:Close`
+
+## [1.2.2] - 2026-03-04
+
+### Added
+
+- **Shell integration (OSC 133 / OSC 633)** for accurate command history:
+  - VT parser now recognises OSC 133 and OSC 633 (VS Code extension) markers
+    emitted by PowerShell, bash, zsh, fish, oh-my-posh, and Starship.
+  - Marker B records the exact cursor column where user input begins, making
+    history capture independent of prompt appearance (no more `strip_prompt`
+    regex for modern shells).
+  - Marker C captures the confirmed command text at the moment Enter is pressed.
+  - Marker D records the exit code of the last command.
+  - `ShellIntegration` struct added to `TerminalState`.
+
+- **Keystroke tracker** (`KeystrokeTracker`) as a fallback for `cmd.exe`:
+  - Intercepts every printable key before forwarding to the PTY.
+  - Handles Backspace, Ctrl+W (delete word), Ctrl+U / Ctrl+C (clear line).
+  - Active only when no OSC markers have been seen for the current pane.
+
+- **Tiered `get_current_line()`** in `WindowManager`:
+  - Priority 1: OSC confirmed command (marker C).
+  - Priority 2: OSC prompt-end position (marker B) + screen buffer slice.
+  - Priority 3: Keystroke tracker buffer.
+  - Priority 4: Legacy `strip_prompt` heuristic (last resort).
+
+- **README**: new *Shell Integration* section with setup instructions for
+  PowerShell, bash/zsh (WSL), oh-my-posh, and cmd.exe fallback.
+
+### Fixed
+
+- Command history no longer breaks when prompts contain `─`, `❯`, multi-line
+  decorations, git branch names, conda/venv prefixes, or other characters that
+  confused the previous `rfind('>')` heuristic.
+
+## [1.2.1] - 2026-03-04
+
+### Added
+
+- **Font configuration** (`[font]` section in `config.toml`):
+  - `family` — font family name (e.g. `"Cascadia Code"`, `"JetBrains Mono"`).
+    Leave empty to inherit the host terminal's current font.
+  - `size` — font size in points (`0` = inherit from host terminal).
+  - `bold` — force bold rendering for all text (default: `false`).
+  - `ligatures` — enable ligatures for supported fonts (default: `true`).
+  - Settings are applied at startup via OSC 50 escape sequences where the
+    host terminal supports them (silently ignored otherwise).
+  - `config.example.toml` updated with the new `[font]` section and examples.
+
+## [1.2.0] - 2026-03-04
+
+### Performance
+
+- **Dirty-line rendering**: `WmRenderer` now skips rows that have not changed
+  since the last frame. Only rows marked dirty by the VT parser are redrawn,
+  cutting render work to near-zero for idle panes (e.g. a vim split next to a
+  running build log).
+- **Per-pane output tracking**: panes that produced no new output since the
+  last render pass are skipped entirely, not just their unchanged rows.
+- **Batched SGR escape sequences**: `apply_attrs` and `apply_attrs_with_selection`
+  now emit a single `\x1b[...m` sequence per attribute group instead of one
+  `execute!()` call per attribute. Reduces write call overhead by 5–10x per
+  styled cell group.
+- **Resize debounce (30 ms)**: rapid terminal-resize events (fired every pixel
+  during drag on Windows) are coalesced into a single resize + redraw after
+  the window settles, eliminating flicker and redundant PTY resizes.
+- **`clear_all_dirty()` after render**: dirty-line sets are now cleared after
+  every render pass so subsequent frames start with a clean slate.
+
 ## [1.1.1] - 2025-01-21
 
 ### Added

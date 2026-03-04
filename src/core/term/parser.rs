@@ -681,9 +681,113 @@ impl VtParser {
                     // Set title
                     state.title = text.to_string();
                 }
+                // ── Shell Integration ─────────────────────────────────────
+                // OSC 133 : FinalTerm / standard shell integration
+                // OSC 633 : VS Code extension (superset of OSC 133)
+                //
+                // Both use the same A/B/C/D marker scheme.
+                // OSC 633 additionally has E (set custom property) which we ignore.
+                "133" | "633" => {
+                    self.handle_shell_integration(text, state);
+                }
                 _ => {}
             }
+        } else {
+            // OSC with no semicolon (e.g. OSC 133 ; A with empty text part)
+            // Shouldn't normally occur but guard against it.
         }
+    }
+
+    /// Handle OSC 133 / 633 shell-integration markers.
+    ///
+    /// Marker grammar:
+    ///   A          – prompt start
+    ///   B          – prompt end  (cursor is now at input start)
+    ///   C          – command executing (Enter was pressed)
+    ///   D[;code]   – command finished (optional exit code)
+    ///   E;prop;val – VS Code property (ignored)
+    fn handle_shell_integration(&self, text: &str, state: &mut TerminalState) {
+        // text is everything after the first ';', e.g. "A", "B", "C", "D;0"
+        // Split on ';' to get marker and optional arguments
+        let (marker, args) = if let Some(p) = text.find(';') {
+            (&text[..p], Some(&text[p + 1..]))
+        } else {
+            (text, None)
+        };
+
+        match marker {
+            "A" => {
+                // Prompt start: clear previous confirmed command
+                state.shell_integration.on_prompt_start();
+            }
+            "B" => {
+                // Prompt end: record where the user's input begins
+                let col = state.active_cursor().col;
+                let row = state.active_cursor().row;
+                state.shell_integration.on_prompt_end(col, row);
+            }
+            "C" => {
+                // Command executing: extract command text from screen buffer.
+                // The cursor has already moved past the command (or is at the
+                // end of the input line).  We use the prompt_end position
+                // recorded on marker B to know where the command starts.
+                let command = Self::extract_command_from_screen(state);
+                state.shell_integration.on_command_start(command);
+            }
+            "D" => {
+                // Command finished: parse optional exit code
+                let exit_code = args
+                    .and_then(|s| s.parse::<i32>().ok());
+                state.shell_integration.on_command_done(exit_code);
+            }
+            // "E" (VS Code property) and anything else – ignore
+            _ => {}
+        }
+    }
+
+    /// Extract the command text from the screen buffer.
+    ///
+    /// Uses `shell_integration.prompt_end_col/row` as the start of user input
+    /// and reads up to (but not including) the cursor position.
+    /// Falls back to the entire cursor row if no prompt_end is recorded.
+    fn extract_command_from_screen(state: &TerminalState) -> String {
+        let cursor = state.active_cursor();
+        let screen = state.active_screen();
+
+        // Determine the row and starting column of the command
+        let (cmd_row, start_col) = if let (Some(row), Some(col)) = (
+            state.shell_integration.prompt_end_row,
+            state.shell_integration.prompt_end_col,
+        ) {
+            (row as usize, col as usize)
+        } else {
+            // No prompt_end recorded – use beginning of cursor row
+            (cursor.row as usize, 0)
+        };
+
+        let Some(row_data) = screen.get_row_at(cmd_row) else {
+            return String::new();
+        };
+
+        // Collect cells from start_col onward, stop at cursor column
+        // (or end of row if cursor has moved to next line)
+        let end_col = if cursor.row as usize == cmd_row {
+            cursor.col as usize
+        } else {
+            row_data.cells.len()
+        };
+
+        let mut cmd = String::new();
+        for cell in row_data.cells.iter().skip(start_col).take(end_col.saturating_sub(start_col)) {
+            if !cell.is_continuation() {
+                if cell.grapheme.is_empty() {
+                    cmd.push(' ');
+                } else {
+                    cmd.push_str(&cell.grapheme);
+                }
+            }
+        }
+        cmd.trim_end().to_string()
     }
 }
 

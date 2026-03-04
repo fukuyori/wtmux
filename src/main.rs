@@ -296,6 +296,37 @@ fn get_shell_name(shell_cmd: &str) -> &str {
     }
 }
 
+/// Apply font configuration via terminal escape sequences.
+///
+/// wtmux runs inside a host terminal (e.g. Windows Terminal) and cannot
+/// directly control the font renderer. We emit best-effort OSC sequences:
+///
+/// - OSC 50: xterm-style font change (supported by some terminals)
+/// - Windows Terminal respects font changes via its own profile settings.
+///
+/// If the host terminal does not support these sequences they are silently
+/// ignored, so calling this function is always safe.
+fn apply_font_config(font: &crate::config::FontConfig) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+
+    // OSC 50 ; <font-spec> BEL  — xterm font change
+    // Format: "font-name:size=N"  (size omitted when 0 / not configured)
+    if font.has_family() {
+        let mut spec = font.family.clone();
+        if font.has_size() {
+            spec.push_str(&format!(":size={}", font.size));
+        }
+        // OSC 50 ; <spec> BEL
+        let _ = write!(stdout, "]50;{}", spec);
+    } else if font.has_size() {
+        // Family not set but size is — use OSC 50 with size only
+        let _ = write!(stdout, "]50;:size={}", font.size);
+    }
+
+    let _ = stdout.flush();
+}
+
 /// Reset cursor shape to default block cursor
 fn reset_cursor_shape() {
     let mut stdout = std::io::stdout();
@@ -621,6 +652,9 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
     let mut renderer = WmRenderer::with_color_scheme(color_scheme);
     renderer.init()?;
     
+    // Apply font settings from config (best-effort via OSC sequences)
+    apply_font_config(&wtmux_config.font);
+
     // Set window title
     let title = format!("wtmux [Multi] - {} | {} | {}", shell_name, encoding_name, terminal_env);
     print!("\x1b]0;{}\x07", title);
@@ -667,6 +701,13 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
     // Context menu state
     let mut context_menu = ContextMenu::new();
 
+    // Resize debounce: buffer rapid resize events and apply after 30ms of calm.
+    // Windows fires one resize event per pixel during drag; without debouncing,
+    // each event triggers a full redraw and PTY resize which causes flicker.
+    let mut pending_resize: Option<(u16, u16)> = None;
+    let mut last_resize_time = std::time::Instant::now();
+    let resize_debounce = Duration::from_millis(30);
+
     loop {
         // Check if any session is still running
         if !wm.is_running() {
@@ -674,6 +715,16 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
             break;
         }
         
+        // Flush debounced resize after the quiet period has elapsed
+        if let Some((cols, rows)) = pending_resize {
+            if last_resize_time.elapsed() >= resize_debounce {
+                wm.resize(cols, rows);
+                renderer.render_with_selector(wm, Some(&selector))?;
+                wm.clear_all_dirty();
+                pending_resize = None;
+            }
+        }
+
         // Check pane numbers timeout
         if pane_numbers_visible && pane_numbers_timer.elapsed() >= pane_numbers_duration {
             pane_numbers_visible = false;
@@ -700,6 +751,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
             } else {
                 renderer.render_with_selector(wm, Some(&selector))?;
             }
+            // Clear dirty state after rendering so the next frame only redraws
+            // rows that have genuinely changed.
+            wm.clear_all_dirty();
         }
 
         // Poll for events
@@ -715,6 +769,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         match key_event.code {
                             KeyCode::Esc => {
                                 context_menu.hide();
+                                wm.force_full_redraw();
                                 renderer.render(wm)?;
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
@@ -729,6 +784,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 let action = context_menu.selected_action();
                                 execute_context_menu_action(wm, action);
                                 context_menu.hide();
+                                wm.force_full_redraw();
                                 renderer.render(wm)?;
                             }
                             _ => {}
@@ -953,6 +1009,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         match key_event.code {
                             KeyCode::Esc => {
                                 selector.hide();
+                                wm.force_full_redraw();
                             }
                             KeyCode::Enter => {
                                 if let Some(command) = selector.confirm() {
@@ -979,6 +1036,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             }
                             KeyCode::Backspace => {
                                 selector.backspace();
+                            }
+                            KeyCode::Delete => {
+                                selector.delete_selected();
                             }
                             KeyCode::Char(c) => {
                                 // Number selection only when query is empty
@@ -1227,14 +1287,52 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         continue;
                     }
 
-                    // Save command to history on Enter (when not in alternate screen)
+                    // ── Keystroke tracker (cmd.exe fallback for history) ──────────
+                    // Update the tracker BEFORE sending the key to the PTY so that
+                    // get_current_line() can read the buffer on Enter.
+                    if !wm.is_in_alternate_screen() {
+                        match key_event.code {
+                            KeyCode::Char(ch) => {
+                                // Skip control-key combos (Ctrl+C etc.)
+                                let is_ctrl = key_event.modifiers
+                                    .contains(crossterm::event::KeyModifiers::CONTROL);
+                                if !is_ctrl {
+                                    wm.keystroke_push_char(ch);
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                wm.keystroke_backspace();
+                            }
+                            _ => {}
+                        }
+                        // Ctrl+W – delete word
+                        if key_event.code == KeyCode::Char('w')
+                            && key_event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                        {
+                            wm.keystroke_delete_word();
+                        }
+                        // Ctrl+U or Ctrl+C – clear line
+                        if (key_event.code == KeyCode::Char('u')
+                            || key_event.code == KeyCode::Char('c'))
+                            && key_event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                        {
+                            wm.keystroke_clear();
+                        }
+                    }
+
+                    // ── History recording on Enter ─────────────────────────────────
+                    // get_current_line() uses the priority chain:
+                    //   OSC 133/633 confirmed → OSC prompt-end → keystroke buffer → strip_prompt
                     if key_event.code == KeyCode::Enter && !wm.is_in_alternate_screen() {
                         if let Some(command) = wm.get_current_line() {
-                            let stripped = crate::history::strip_prompt(&command);
-                            if !stripped.is_empty() {
-                                selector.add_to_history(stripped);
+                            if !command.is_empty() {
+                                selector.add_to_history(command);
                             }
                         }
+                        // Reset keystroke buffer for next command
+                        wm.keystroke_clear();
+                        // Consume confirmed command so it is not re-used
+                        wm.take_confirmed_command();
                     }
 
                     // Reset scroll to bottom on any key input (return to live view)
@@ -1253,6 +1351,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                     // Close snippet selector on mouse click outside
                     if selector.visible {
                         selector.hide();
+                        wm.force_full_redraw();
                         renderer.render_with_selector(wm, Some(&selector))?;
                     }
                     
@@ -1373,8 +1472,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                 }
 
                 Event::Resize(cols, rows) => {
-                    wm.resize(cols, rows);
-                    renderer.render_with_selector(wm, Some(&selector))?;
+                    // Buffer resize events; the actual resize happens after debounce.
+                    pending_resize = Some((cols, rows));
+                    last_resize_time = std::time::Instant::now();
                 }
 
                 _ => {}

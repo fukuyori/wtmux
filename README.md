@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.1.1-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.2.4-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -206,6 +206,54 @@ wtmux includes its own command history feature, separate from your shell's built
 | `Ctrl+Enter` | Append with `&` (background/parallel) |
 
 For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
+
+## Shell Integration (Recommended)
+
+wtmux can detect commands precisely — regardless of prompt appearance — when
+the shell emits **OSC 133 / OSC 633** markers.  This removes the need for
+prompt-pattern heuristics and makes command history accurate even with fancy
+prompts (oh-my-posh, Starship, multi-line prompts, etc.).
+
+### PowerShell (automatic)
+
+Add one line to your PowerShell profile (`$PROFILE`):
+
+```powershell
+$env:TERM_PROGRAM = "vscode"
+```
+
+PowerShell 7 and Windows PowerShell 5 automatically emit OSC 633 markers
+when `TERM_PROGRAM` is set to `"vscode"`.
+
+### bash / zsh (WSL)
+
+Add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# OSC 133 shell integration for wtmux
+__wtmux_precmd() { printf '\e]133;A\e\'; }
+__wtmux_preexec() { printf '\e]133;C\e\'; }
+PS1='\[\e]133;B\e\\]'"$PS1"
+# bash: use PROMPT_COMMAND
+PROMPT_COMMAND="__wtmux_precmd;${PROMPT_COMMAND}"
+# zsh: use precmd/preexec hooks instead
+```
+
+### oh-my-posh
+
+Enable the built-in shell integration in your oh-my-posh config:
+
+```json
+{ "osc99": true, "osc7": true, "osc133": true }
+```
+
+### Fallback (cmd.exe)
+
+`cmd.exe` does not support OSC sequences.  wtmux automatically falls back to
+**keystroke tracking** — intercepting every character before it reaches the
+shell — which gives accurate results without any shell configuration.
+
+---
 
 ## Configuration
 

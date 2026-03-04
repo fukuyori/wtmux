@@ -60,6 +60,8 @@ pub struct Config {
     pub status_bar: StatusBarConfig,
     /// Pane border settings
     pub pane: PaneConfig,
+    /// Font settings
+    pub font: FontConfig,
 }
 
 impl Default for Config {
@@ -72,6 +74,7 @@ impl Default for Config {
             tab_bar: TabBarConfig::default(),
             status_bar: StatusBarConfig::default(),
             pane: PaneConfig::default(),
+            font: FontConfig::default(),
         }
     }
 }
@@ -150,6 +153,48 @@ impl Default for PaneConfig {
         Self {
             border_style: "single".to_string(),
         }
+    }
+}
+
+/// Font configuration
+///
+/// Note: wtmux runs inside an existing terminal emulator (e.g. Windows Terminal).
+/// These settings are stored for reference and can be applied to the host terminal
+/// at startup via OSC sequences or Windows Terminal profile settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FontConfig {
+    /// Font family name (e.g. "Cascadia Code", "Consolas", "JetBrains Mono")
+    /// Empty string means "use the host terminal's current font"
+    pub family: String,
+    /// Font size in points (0 = use host terminal default)
+    pub size: u16,
+    /// Enable bold rendering
+    pub bold: bool,
+    /// Enable font ligatures (requires a ligature-capable font)
+    pub ligatures: bool,
+}
+
+impl Default for FontConfig {
+    fn default() -> Self {
+        Self {
+            family: String::new(), // inherit from host terminal
+            size: 0,               // inherit from host terminal
+            bold: false,
+            ligatures: true,
+        }
+    }
+}
+
+impl FontConfig {
+    /// Returns true if a custom font family is configured
+    pub fn has_family(&self) -> bool {
+        !self.family.is_empty()
+    }
+
+    /// Returns true if a custom font size is configured
+    pub fn has_size(&self) -> bool {
+        self.size > 0
     }
 }
 

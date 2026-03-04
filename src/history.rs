@@ -96,6 +96,18 @@ impl CommandHistory {
         }
     }
 
+    /// Delete all entries matching the given command string.
+    /// Returns true if any entry was removed.
+    pub fn delete(&mut self, command: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.command != command);
+        let removed = self.entries.len() < before;
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
     /// Save history to file
     fn save(&self) {
         if let Some(ref path) = self.file_path {
@@ -344,6 +356,17 @@ impl HistorySelector {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + self.max_visible {
             self.scroll_offset = self.selected - self.max_visible + 1;
+        }
+    }
+
+    /// Delete the currently selected entry from history.
+    /// After deletion the list is refreshed and the cursor stays in place
+    /// (or moves up if it was at the last item).
+    pub fn delete_selected(&mut self) {
+        if let Some(command) = self.results.get(self.selected).cloned() {
+            self.history.delete(&command);
+            // Refresh results; selected index is clamped automatically
+            self.update_results();
         }
     }
 

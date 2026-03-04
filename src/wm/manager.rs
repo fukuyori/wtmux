@@ -383,6 +383,30 @@ impl WindowManager {
         !self.tabs.is_empty() && self.tabs.values().any(|t| t.is_running())
     }
 
+    /// Clear dirty-line tracking on all panes after a render pass.
+    ///
+    /// Call this after every render so the next frame only redraws rows that
+    /// have actually changed since the last paint, not the entire screen.
+    pub fn clear_all_dirty(&mut self) {
+        for tab in self.tabs.values_mut() {
+            for pane in tab.panes.values_mut() {
+                pane.session.state.active_screen_mut().clear_dirty();
+            }
+        }
+    }
+
+    /// Force a full redraw of all panes on the next render.
+    ///
+    /// Used when an overlay (history selector, context menu, etc.) is closed
+    /// and the underlying pane content must be repainted to clear the overlay.
+    pub fn force_full_redraw(&mut self) {
+        for tab in self.tabs.values_mut() {
+            for pane in tab.panes.values_mut() {
+                pane.session.state.active_screen_mut().full_redraw = true;
+            }
+        }
+    }
+
     /// Get tab info for rendering tab bar
     pub fn tab_info(&self) -> Vec<(TabId, String, bool)> {
         self.tab_order.iter().map(|&id| {
@@ -650,17 +674,82 @@ impl WindowManager {
         }
     }
 
-    /// Get the current line at cursor position (for history recording)
+    /// Get the current command text for history recording.
+    ///
+    /// Priority order:
+    ///
+    /// 1. **OSC 133/633 confirmed command** – the shell sent a marker C just
+    ///    before Enter, so the command text was extracted at that exact moment.
+    ///    This works regardless of prompt appearance (oh-my-posh, Starship, …).
+    ///
+    /// 2. **OSC 133/633 prompt-end position** – we know where the prompt ended
+    ///    (marker B), so we can read the text to the right of that column even
+    ///    if marker C was not received.
+    ///
+    /// 3. **Keystroke tracker** – for shells without OSC support (cmd.exe).
+    ///    We intercepted every key before forwarding it to the PTY, so the
+    ///    buffer contains exactly what the user typed.
+    ///
+    /// 4. **strip_prompt fallback** – the original heuristic, kept as a last
+    ///    resort for unusual configurations.
     pub fn get_current_line(&self) -> Option<String> {
         let tab = self.active_tab()?;
         let pane = tab.focused_pane()?;
+        let si = &pane.session.state.shell_integration;
+
+        // ── Priority 1: OSC marker C confirmed command ────────────────────
+        if let Some(cmd) = &si.confirmed_command {
+            let trimmed = cmd.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+
+        // ── Priority 2: OSC marker B prompt-end position ──────────────────
+        if si.active {
+            if let (Some(prompt_col), Some(prompt_row)) =
+                (si.prompt_end_col, si.prompt_end_row)
+            {
+                let screen = pane.session.state.active_screen();
+                let cursor = pane.session.state.active_cursor();
+                if let Some(row_data) = screen.get_row_at(prompt_row as usize) {
+                    let end_col = if cursor.row == prompt_row {
+                        cursor.col as usize
+                    } else {
+                        row_data.cells.len()
+                    };
+                    let mut cmd = String::new();
+                    for cell in row_data.cells
+                        .iter()
+                        .skip(prompt_col as usize)
+                        .take(end_col.saturating_sub(prompt_col as usize))
+                    {
+                        if !cell.is_continuation() {
+                            if cell.grapheme.is_empty() {
+                                cmd.push(' ');
+                            } else {
+                                cmd.push_str(&cell.grapheme);
+                            }
+                        }
+                    }
+                    let trimmed = cmd.trim().to_string();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed);
+                    }
+                }
+            }
+        }
+
+        // ── Priority 3: keystroke tracker (cmd.exe fallback) ──────────────
+        let kt_cmd = pane.session.state.keystroke_tracker.peek().trim().to_string();
+        if !kt_cmd.is_empty() {
+            return Some(kt_cmd);
+        }
+
+        // ── Priority 4: strip_prompt heuristic (last resort) ──────────────
         let cursor = pane.session.state.active_cursor();
         let screen = pane.session.state.active_screen();
-        
-        // Get the row at cursor position
         let row = screen.get_row_at(cursor.row as usize)?;
-        
-        // Build the line text
         let mut line = String::new();
         for cell in &row.cells {
             if !cell.is_continuation() {
@@ -671,9 +760,68 @@ impl WindowManager {
                 }
             }
         }
-        
-        // Trim trailing spaces
-        Some(line.trim_end().to_string())
+        Some(crate::history::strip_prompt(line.trim_end()))
+    }
+
+    /// Consume the shell-integration confirmed command (called after
+    /// recording it to history so it is not recorded twice).
+    pub fn take_confirmed_command(&mut self) -> Option<String> {
+        let tab = self.tabs.get_mut(&self.active_tab)?;
+        let pane = tab.focused_pane_mut()?;
+        pane.session.state.shell_integration.take_confirmed_command()
+    }
+
+    /// Feed a printable character to the keystroke tracker of the active pane.
+    pub fn keystroke_push_char(&mut self, ch: char) {
+        if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+            if let Some(pane) = tab.focused_pane_mut() {
+                if !pane.session.state.shell_integration.active {
+                    pane.session.state.keystroke_tracker.push_char(ch);
+                }
+            }
+        }
+    }
+
+    /// Handle Backspace in the keystroke tracker.
+    pub fn keystroke_backspace(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+            if let Some(pane) = tab.focused_pane_mut() {
+                if !pane.session.state.shell_integration.active {
+                    pane.session.state.keystroke_tracker.backspace();
+                }
+            }
+        }
+    }
+
+    /// Handle Ctrl+W in the keystroke tracker.
+    pub fn keystroke_delete_word(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+            if let Some(pane) = tab.focused_pane_mut() {
+                if !pane.session.state.shell_integration.active {
+                    pane.session.state.keystroke_tracker.delete_word();
+                }
+            }
+        }
+    }
+
+    /// Handle Ctrl+U / Ctrl+C in the keystroke tracker (clear buffer).
+    pub fn keystroke_clear(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+            if let Some(pane) = tab.focused_pane_mut() {
+                pane.session.state.keystroke_tracker.clear_line();
+            }
+        }
+    }
+
+    /// Consume the keystroke buffer as a completed command.
+    #[allow(dead_code)]
+    pub fn keystroke_take(&mut self) -> String {
+        if let Some(tab) = self.tabs.get_mut(&self.active_tab) {
+            if let Some(pane) = tab.focused_pane_mut() {
+                return pane.session.state.keystroke_tracker.take();
+            }
+        }
+        String::new()
     }
     
     // =========================================================================
