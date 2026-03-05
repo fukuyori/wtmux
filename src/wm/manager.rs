@@ -627,28 +627,30 @@ impl WindowManager {
             .and_then(|tab| tab.focused_pane())
             .map(|pane| pane.session.state.modes.bracketed_paste)
             .unwrap_or(false);
-        
+
+        // Normalise all line endings to CR only.
+        // Terminals interpret CR as Enter (one keypress).
+        // CRLF would be two characters and some shells (PowerShell) treat
+        // them as two separate newlines, causing double-submit.
+        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+
         let bytes = if use_bracketed {
-            format!("\x1b[200~{}\x1b[201~", text).into_bytes()
+            format!("\x1b[200~{}\x1b[201~", normalized).into_bytes()
         } else {
-            text.as_bytes().to_vec()
+            normalized.into_bytes()
         };
-        
+
         self.write(&bytes)
     }
-    
+
     /// Paste from system clipboard to the focused pane
     pub fn paste_from_clipboard(&mut self) -> Result<(), String> {
-        // Try to get text from clipboard
         let text = arboard::Clipboard::new()
             .and_then(|mut clipboard| clipboard.get_text())
             .map_err(|e| e.to_string())?;
-        
+
         if !text.is_empty() {
-            // Normalize line endings to CR+LF for Windows shells
-            // First replace CRLF with LF to avoid double conversion, then replace LF with CRLF
-            let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
-            self.paste(&normalized)?;
+            self.paste(&text)?;
         }
         Ok(())
     }

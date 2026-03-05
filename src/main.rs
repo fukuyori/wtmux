@@ -1685,19 +1685,15 @@ fn run_main_loop(session: &mut Session, renderer: &mut Renderer) -> anyhow::Resu
                 }
 
                 Event::Paste(text) => {
-                    // Return to live view on paste
                     session.state.active_screen_mut().scroll_to_bottom();
-                    
-                    // Normalize line endings to CR+LF for Windows shells
-                    let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
-                    
-                    // Handle paste
+
+                    // Normalise all line endings to CR only (one Enter per newline).
+                    let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
                     let bytes = if session.state.modes.bracketed_paste {
                         format!("\x1b[200~{}\x1b[201~", normalized).into_bytes()
                     } else {
                         normalized.into_bytes()
                     };
-
                     if let Err(e) = session.write(&bytes) {
                         error!("Failed to paste: {}", e);
                     }

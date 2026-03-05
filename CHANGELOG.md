@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] - 2026-03-06
+
+### Fixed
+
+- **Multi-line paste now works correctly**:
+  All line endings in pasted text are normalised to `` (CR only) before
+  being sent to the PTY.  Terminals interpret CR as a single Enter keypress;
+  sending `
+` (CRLF) caused PowerShell and other shells to see two
+  newlines, which double-submitted lines or produced parse errors.
+  The fix applies to both bracketed-paste mode and plain paste.
+
 ## [1.2.5] - 2026-03-05
 
 ### Added
