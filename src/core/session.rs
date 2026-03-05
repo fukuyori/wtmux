@@ -2,6 +2,7 @@
 //!
 //! Manages shell sessions, handling I/O between PTY and terminal state.
 
+use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -33,6 +34,8 @@ pub struct Session {
     pub state: TerminalState,
     /// VT parser
     parser: VtParser,
+    /// Optional VT byte trace writer (enabled with --vt-trace)
+    vt_trace: Option<BufWriter<std::fs::File>>,
     /// PTY handle (Windows only)
     #[cfg(windows)]
     pty: Option<Arc<ConPty>>,
@@ -57,6 +60,7 @@ impl Session {
             id,
             state: TerminalState::new(cols, rows),
             parser: VtParser::new(),
+            vt_trace: None,
             #[cfg(windows)]
             pty: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -65,6 +69,18 @@ impl Session {
             #[cfg(windows)]
             output_rx: None,
         }
+    }
+
+    /// Enable VT byte tracing to a file.
+    /// Writes every raw byte from the PTY in an annotated hex+ASCII format.
+    pub fn enable_vt_trace(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)?;
+        self.vt_trace = Some(BufWriter::new(file));
+        Ok(())
     }
 
     /// Start the session with a shell command
@@ -199,24 +215,70 @@ impl Session {
         Ok(false)
     }
 
-    /// Feed raw bytes into the terminal
+    /// Feed raw bytes into the terminal.
+    ///
+    /// ConPTY always outputs well-formed UTF-8.  We decode multi-byte sequences
+    /// here and route every resulting `char` through the VT parser so that the
+    /// parser state machine stays in sync.  Previously, multi-byte UTF-8 chars
+    /// bypassed the parser and went straight to `put_char`, which meant they
+    /// were written as visible characters even when the parser was inside a
+    /// string-body state (DCS, APC, …) that should consume them silently.
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
-        // ConPTY always outputs UTF-8
-        // Process byte by byte, handling UTF-8 sequences
+        // VT trace: write raw bytes in hex + printable-ASCII annotation
+        if let Some(ref mut w) = self.vt_trace {
+            // Header: byte offset + hex dump
+            let _ = write!(w, "─── {} bytes ───
+", bytes.len());
+            for (i, chunk) in bytes.chunks(16).enumerate() {
+                let _ = write!(w, "{:06X}  ", i * 16);
+                for b in chunk {
+                    let _ = write!(w, "{:02X} ", b);
+                }
+                // pad
+                for _ in chunk.len()..16 {
+                    let _ = write!(w, "   ");
+                }
+                let _ = write!(w, " |");
+                for b in chunk {
+                    // Show printable ASCII; replace ESC with ↯ for readability
+                    if *b == 0x1B {
+                        let _ = write!(w, "↯");
+                    } else if *b >= 0x20 && *b < 0x7F {
+                        let _ = write!(w, "{}", *b as char);
+                    } else {
+                        let _ = write!(w, "·");
+                    }
+                }
+                let _ = writeln!(w, "|");
+            }
+            // Also write UTF-8 decoded version showing actual chars
+            let _ = write!(w, "  utf8: [");
+            let text = String::from_utf8_lossy(bytes);
+            for ch in text.chars() {
+                if ch == '' {
+                    let _ = write!(w, "‹ESC›");
+                } else if (ch as u32) < 0x20 {
+                    let _ = write!(w, "‹{:02X}›", ch as u32);
+                } else {
+                    // Show codepoint for non-ASCII
+                    if (ch as u32) > 0x7E {
+                        let _ = write!(w, "{ch}(U+{:04X})", ch as u32);
+                    } else {
+                        let _ = write!(w, "{ch}");
+                    }
+                }
+            }
+            let _ = writeln!(w, "]");
+            let _ = w.flush();
+        }
+
         let mut i = 0;
         while i < bytes.len() {
             let b = bytes[i];
-            
-            // Control characters and escape sequences
-            if b < 0x20 || b == 0x7f {
-                if let Some(response) = self.parser.feed(b, &mut self.state) {
-                    self.send_response(response);
-                }
-                i += 1;
-                continue;
-            }
-            
-            // ASCII printable
+
+            // ── Single-byte path ─────────────────────────────────────────
+            // C0 controls (0x00–0x1F), DEL (0x7F), and ASCII printable
+            // (0x20–0x7E) are fed to the parser one byte at a time.
             if b < 0x80 {
                 if let Some(response) = self.parser.feed(b, &mut self.state) {
                     self.send_response(response);
@@ -224,25 +286,42 @@ impl Session {
                 i += 1;
                 continue;
             }
-            
-            // UTF-8 multi-byte sequence
-            let seq_len = if b & 0xE0 == 0xC0 { 2 }
+
+            // ── UTF-8 multi-byte path ────────────────────────────────────
+            // Determine sequence length from the leading byte.
+            let seq_len: usize = if b & 0xE0 == 0xC0 { 2 }
                 else if b & 0xF0 == 0xE0 { 3 }
                 else if b & 0xF8 == 0xF0 { 4 }
-                else { 1 }; // Invalid, skip
-            
-            if i + seq_len <= bytes.len() {
-                if let Ok(s) = std::str::from_utf8(&bytes[i..i+seq_len]) {
+                else {
+                    // Lone continuation byte or invalid — skip.
+                    i += 1;
+                    continue;
+                };
+
+            if i + seq_len > bytes.len() {
+                // Truncated sequence at end of buffer — skip leading byte.
+                i += 1;
+                continue;
+            }
+
+            match std::str::from_utf8(&bytes[i..i + seq_len]) {
+                Ok(s) => {
+                    // Route each decoded character through the parser.
+                    // This is critical: if the parser is currently inside a
+                    // DCS / APC / SOS / PM string body, the character must be
+                    // consumed (ignored) rather than written to the screen.
                     for ch in s.chars() {
-                        self.state.put_char(ch);
+                        if let Some(response) = self.parser.feed_char(ch, &mut self.state) {
+                            self.send_response(response);
+                        }
                     }
                     i += seq_len;
-                    continue;
+                }
+                Err(_) => {
+                    // Invalid UTF-8 — skip the leading byte and retry.
+                    i += 1;
                 }
             }
-            
-            // Invalid or incomplete sequence, skip byte
-            i += 1;
         }
     }
 

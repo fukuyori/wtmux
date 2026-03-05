@@ -15,8 +15,7 @@ use crossterm::{
 
 use crate::core::term::{AttrFlags, CellAttrs, TerminalState};
 
-/// A cell for the render buffer (for diff rendering, experimental)
-#[allow(dead_code)]
+/// A cell for the render buffer used for diff rendering.
 #[derive(Clone, PartialEq)]
 struct RenderCell {
     ch: String,
@@ -24,7 +23,6 @@ struct RenderCell {
     selected: bool,
 }
 
-#[allow(dead_code)]
 impl Default for RenderCell {
     fn default() -> Self {
         Self {
@@ -41,11 +39,9 @@ pub struct Renderer {
     last_cursor: (u16, u16),
     /// Whether the terminal has been initialized
     initialized: bool,
-    /// Previous frame buffer for diff rendering (experimental)
-    #[allow(dead_code)]
+    /// Previous frame buffer for diff rendering
     prev_buffer: Vec<Vec<RenderCell>>,
     /// Current terminal size
-    #[allow(dead_code)]
     size: (u16, u16),
 }
 
@@ -170,7 +166,7 @@ impl Renderer {
         // Debug logging disabled by default
     }
 
-    /// Ensure buffer is properly sized (for diff rendering)
+    /// Ensure buffer is properly sized.  Called before diff rendering.
     #[allow(dead_code)]
     fn ensure_buffer_size(&mut self, cols: u16, rows: u16) {
         if self.size != (cols, rows) {
@@ -231,7 +227,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Diff-based rendering - only update changed cells (experimental)
+    /// Diff-based rendering — only re-draw cells that changed since the last frame.
     #[allow(dead_code)]
     fn render_diff<W: Write>(&mut self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();

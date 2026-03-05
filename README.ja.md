@@ -247,6 +247,21 @@ blink = true
 lines = 10000
 ```
 
+### フォント設定
+
+```toml
+[font]
+# フォントファミリー（空欄でホスト端末から継承）
+# family = "CaskaydiaCove Nerd Font"
+
+# フォントサイズ（ポイント。0でホスト端末から継承）
+# size = 12
+
+# SGR 1 (Bold) を抑制 — Powerline/Nerd Font グリフがずれる場合は true に設定
+# 詳細は「トラブルシューティング」セクションを参照
+# suppress_bold = false
+```
+
 ### 利用可能なカラースキーム
 
 - `default` - デフォルトのターミナル色
@@ -371,6 +386,46 @@ wtmux/
         ├── pane.rs        # ペイン管理
         └── layout.rs      # レイアウト計算
 ```
+
+## トラブルシューティング
+
+### Powerline / Nerd Font グリフが崩れて表示される
+
+oh-my-posh、Starship 等の Powerline ベースのプロンプトが正しく表示されない場合、
+以下の手順で対処してください。
+
+**手順1 — Nerd Font のフルファミリをインストール**
+
+[nerdfonts.com](https://www.nerdfonts.com/) から Regular・Bold・Italic・BoldItalic の
+4 ファイルをダウンロードしてインストールします。Bold が欠けていると Windows の
+フォントフォールバックが PUA グリフを持たない別フォントで描画し、矢印が崩れます。
+
+**手順2 — Windows Terminal でフォントを設定**
+
+```json
+"fontFace": "CaskaydiaCove Nerd Font"
+```
+
+**手順3 — それでも崩れる場合は `suppress_bold` を有効化**
+
+```toml
+# %LOCALAPPDATA%\wtmux\config.toml
+[font]
+suppress_bold = true
+```
+
+SGR 1 (Bold) をホスト端末に送出しなくなり、全テキストが Regular フェイスに統一されます。
+
+### VT トレースでバグ報告用ログを収集する
+
+描画の問題を報告する際は `--vt-trace` フラグで PTY の生バイトを記録できます：
+
+```powershell
+wtmux --vt-trace
+```
+
+`%LOCALAPPDATA%\wtmux\vt_trace.log` に Hex + UTF-8 形式で出力されます。
+バグ報告にこのファイルを添付してください。
 
 ## 既知の制限
 

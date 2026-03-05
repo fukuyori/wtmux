@@ -1,6 +1,21 @@
 //! VT sequence parser
 //!
-//! Parses ANSI/VT escape sequences and updates terminal state.
+//! Parses ANSI/VT100/VT220 escape sequences and updates [`TerminalState`].
+//!
+//! ## Supported sequences
+//!
+//! - CSI sequences (cursor movement, SGR attributes, erase, scroll, …)
+//! - OSC sequences (window title, shell integration OSC 133/633, …)
+//! - DCS / APC / SOS / PM strings (consumed silently)
+//! - SGR attributes including SGR 7 (Reverse Video / INVERSE)
+//! - Private modes (mouse tracking, alternate screen, bracketed paste, …)
+//!
+//! ## Multi-byte character handling
+//!
+//! Single-byte input is processed via [`VtParser::feed`].
+//! Decoded Unicode characters from multi-byte UTF-8 sequences must be routed
+//! through [`VtParser::feed_char`] so the state machine can consume them
+//! silently when inside a DCS/APC/SOS/PM string body.
 
 use super::state::{AttrFlags, Color, TerminalState};
 
@@ -53,6 +68,18 @@ enum ParserState {
     CsiIntermediate,
     OscString,
     EscapeInOsc,  // ESC received within OSC, waiting for backslash
+    /// DCS  (ESC P … ST) — Device Control String; ignored but consumed
+    DcsString,
+    EscapeInDcs,
+    /// APC  (ESC _ … ST) — Application Program Command; ignored but consumed
+    ApcString,
+    EscapeInApc,
+    /// SOS  (ESC X … ST) — Start Of String; ignored but consumed
+    SosString,
+    EscapeInSos,
+    /// PM   (ESC ^ … ST) — Privacy Message; ignored but consumed
+    PmString,
+    EscapeInPm,
 }
 
 impl Default for VtParser {
@@ -72,10 +99,62 @@ impl VtParser {
         }
     }
 
+    /// Feed a decoded Unicode character to the parser.
+    ///
+    /// Used by `session::feed_bytes` for multi-byte UTF-8 sequences.  Routes
+    /// the character through the state machine so that string-body states
+    /// (DCS, APC, SOS, PM) can consume it silently rather than printing it.
+    ///
+    /// For non-BMP / multi-byte characters the parser must be in Ground (or a
+    /// string-body) state because escape sequences are always pure ASCII.
+    pub fn feed_char(&mut self, ch: char, state: &mut TerminalState) -> Option<Response> {
+        // If we are inside a string-body state, consume the character silently.
+        match self.state {
+            ParserState::DcsString
+            | ParserState::ApcString
+            | ParserState::SosString
+            | ParserState::PmString
+            | ParserState::OscString => {
+                // Append to OSC string so that titles/paths with non-ASCII
+                // characters (e.g. Japanese directory names) are captured correctly.
+                if matches!(self.state, ParserState::OscString) {
+                    self.osc_string.push(ch);
+                }
+                return None;
+            }
+            // EscapeIn* states are entered on ESC within a string; since ESC
+            // is single-byte, we should never get a multi-byte char here, but
+            // handle gracefully by staying in current state.
+            ParserState::EscapeInDcs
+            | ParserState::EscapeInApc
+            | ParserState::EscapeInSos
+            | ParserState::EscapeInPm
+            | ParserState::EscapeInOsc => return None,
+            // Any other state: must be Ground (multi-byte chars can't appear
+            // inside CSI/Escape sequences).  Write directly to the screen.
+            _ => {}
+        }
+
+        // Ground state — write the character to the screen buffer.
+        state.put_char(ch);
+        None
+    }
+
     /// Feed a single byte to the parser
     pub fn feed(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
         // Handle C0 controls anywhere (except in OSC-related states)
-        if byte < 0x20 && self.state != ParserState::OscString && self.state != ParserState::EscapeInOsc {
+        if byte < 0x20
+            && self.state != ParserState::OscString
+            && self.state != ParserState::EscapeInOsc
+            && self.state != ParserState::DcsString
+            && self.state != ParserState::EscapeInDcs
+            && self.state != ParserState::ApcString
+            && self.state != ParserState::EscapeInApc
+            && self.state != ParserState::SosString
+            && self.state != ParserState::EscapeInSos
+            && self.state != ParserState::PmString
+            && self.state != ParserState::EscapeInPm
+        {
             match byte {
                 0x1B => {
                     self.enter_escape();
@@ -111,13 +190,22 @@ impl VtParser {
             ParserState::CsiIntermediate => self.csi_intermediate(byte, state),
             ParserState::OscString => self.osc_string_state(byte, state),
             ParserState::EscapeInOsc => self.escape_in_osc(byte, state),
+            // Ignored string sequences — consume until ST
+            ParserState::DcsString  => { self.ignore_string_byte(byte, ParserState::DcsString,  ParserState::EscapeInDcs);  None }
+            ParserState::EscapeInDcs => { self.escape_in_ignored(byte, ParserState::DcsString);  None }
+            ParserState::ApcString  => { self.ignore_string_byte(byte, ParserState::ApcString,  ParserState::EscapeInApc);  None }
+            ParserState::EscapeInApc => { self.escape_in_ignored(byte, ParserState::ApcString);  None }
+            ParserState::SosString  => { self.ignore_string_byte(byte, ParserState::SosString,  ParserState::EscapeInSos);  None }
+            ParserState::EscapeInSos => { self.escape_in_ignored(byte, ParserState::SosString);  None }
+            ParserState::PmString   => { self.ignore_string_byte(byte, ParserState::PmString,   ParserState::EscapeInPm);   None }
+            ParserState::EscapeInPm  => { self.escape_in_ignored(byte, ParserState::PmString);   None }
         }
     }
 
     /// Handle ESC received within OSC sequence
     fn escape_in_osc(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
-        if byte == b'\\' {
-            // ST (ESC \) - String Terminator
+        if byte == 0x5C {
+            // ST (ESC \ = 0x5C) - String Terminator
             self.execute_osc(state);
             self.state = ParserState::Ground;
         } else {
@@ -190,6 +278,23 @@ impl VtParser {
                 // RIS - Full reset
                 *state = TerminalState::new(state.cols, state.rows);
                 self.state = ParserState::Ground;
+            }
+            // String-body sequences — enter ignore state, consume until ST
+            b'P' => {
+                // DCS — Device Control String (e.g. tmux passthrough, Sixel, iTerm2)
+                self.state = ParserState::DcsString;
+            }
+            b'_' => {
+                // APC — Application Program Command (e.g. Kitty, oh-my-posh window title)
+                self.state = ParserState::ApcString;
+            }
+            b'X' => {
+                // SOS — Start Of String
+                self.state = ParserState::SosString;
+            }
+            b'^' => {
+                // PM — Privacy Message
+                self.state = ParserState::PmString;
             }
             0x20..=0x2F => {
                 // Intermediate bytes
@@ -667,6 +772,28 @@ impl VtParser {
 
                 _ => {}
             }
+        }
+    }
+
+    /// Consume a byte inside an ignored string (DCS / APC / SOS / PM).
+    /// Transitions to `esc_state` on ESC, returns to Ground on BEL / ST (0x9C).
+    fn ignore_string_byte(&mut self, byte: u8, _str_state: ParserState, esc_state: ParserState) {
+        match byte {
+            0x07 => { self.state = ParserState::Ground; } // BEL = ST for OSC compat
+            0x1B => { self.state = esc_state; }
+            0x9C => { self.state = ParserState::Ground; } // 8-bit ST
+            _ => {} // consume
+        }
+    }
+
+    /// Called after ESC inside an ignored string; back-slash (0x5C) = ST → Ground.
+    fn escape_in_ignored(&mut self, byte: u8, str_state: ParserState) {
+        if byte == 0x5C {
+            // ESC \ = String Terminator
+            self.state = ParserState::Ground;
+        } else {
+            // Not ST — stay in the string and process this byte normally
+            self.state = str_state;
         }
     }
 

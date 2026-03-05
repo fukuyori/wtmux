@@ -173,6 +173,17 @@ pub struct FontConfig {
     pub bold: bool,
     /// Enable font ligatures (requires a ligature-capable font)
     pub ligatures: bool,
+    /// Suppress SGR 1 (Bold) attribute from being sent to the host terminal.
+    ///
+    /// Set to `true` when the Nerd Font / Powerline glyphs in your font lack a
+    /// Bold face.  In that case the OS font-fallback mechanism substitutes a
+    /// different (non-Nerd-Font) Bold face for PUA code points, causing
+    /// Powerline separators and icons to render incorrectly or with wrong cell
+    /// widths.  Setting this to `true` tells wtmux to ignore the Bold flag when
+    /// rendering, so all glyphs stay in the same Regular face.
+    ///
+    /// Default: false (bold is rendered normally)
+    pub suppress_bold: bool,
 }
 
 impl Default for FontConfig {
@@ -182,19 +193,8 @@ impl Default for FontConfig {
             size: 0,               // inherit from host terminal
             bold: false,
             ligatures: true,
+            suppress_bold: false,
         }
-    }
-}
-
-impl FontConfig {
-    /// Returns true if a custom font family is configured
-    pub fn has_family(&self) -> bool {
-        !self.family.is_empty()
-    }
-
-    /// Returns true if a custom font size is configured
-    pub fn has_size(&self) -> bool {
-        self.size > 0
     }
 }
 

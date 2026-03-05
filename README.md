@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.2.4-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.2.5-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -25,6 +25,8 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 - **Encoding support** - UTF-8 and Shift-JIS (CP932)
 - **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
 - **Mouse passthrough** - TUI apps receive mouse events (hold Shift for wtmux selection)
+- **Nerd Font / Powerline support** - oh-my-posh, Starship, and Powerline prompts render correctly
+- **Shell integration** - OSC 133/633 for accurate command history with modern prompts
 
 ## Screenshots
 
@@ -298,6 +300,22 @@ blink = true
 lines = 10000
 ```
 
+### Font Settings
+
+```toml
+[font]
+# Font family (leave empty to inherit from host terminal)
+# family = "CaskaydiaCove Nerd Font"
+
+# Font size in points (0 = inherit)
+# size = 12
+
+# Suppress SGR 1 (Bold) — set to true if Powerline/Nerd Font glyphs
+# look misaligned or replaced by boxes.
+# See "Troubleshooting" section below.
+# suppress_bold = false
+```
+
 ### Available Color Schemes
 
 - `default` - Default terminal colors
@@ -422,6 +440,48 @@ wtmux/
         ├── pane.rs        # Pane management
         └── layout.rs      # Layout calculation
 ```
+
+## Troubleshooting
+
+### Powerline / Nerd Font glyphs look wrong or misaligned
+
+wtmux correctly renders prompts from oh-my-posh, Starship, and other Powerline-based
+themes. If glyphs still appear broken, follow these steps:
+
+**Step 1 — Install the full Nerd Font family**
+
+Download Regular, Bold, Italic, and BoldItalic variants from [nerdfonts.com](https://www.nerdfonts.com/)
+and install all four. Windows Terminal's font fallback will use a non-Nerd-Font bold face
+if the Bold variant is missing, breaking PUA glyphs.
+
+**Step 2 — Set the font in Windows Terminal**
+
+```json
+"fontFace": "CaskaydiaCove Nerd Font"
+```
+
+**Step 3 — If the problem persists, enable `suppress_bold`**
+
+```toml
+# %LOCALAPPDATA%\wtmux\config.toml
+[font]
+suppress_bold = true
+```
+
+This tells wtmux never to send SGR 1 (Bold) to the host terminal, keeping all text in
+the Regular face that contains the PUA glyphs.
+
+### Collecting a VT trace for bug reports
+
+If a rendering problem is hard to reproduce, run wtmux with `--vt-trace` to record
+every raw byte from the PTY:
+
+```powershell
+wtmux --vt-trace
+```
+
+The trace is written to `%LOCALAPPDATA%\wtmux\vt_trace.log` in hex + UTF-8 format.
+Attach this file when filing a bug report.
 
 ## Known Limitations
 

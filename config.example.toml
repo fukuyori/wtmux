@@ -77,17 +77,46 @@ lines = 10000
 # To change the font rendered on screen, also update your host terminal's profile.
 
 [font]
-# Font family name
-# Examples: "Cascadia Code", "Cascadia Mono", "Consolas", "JetBrains Mono",
-#           "FiraCode Nerd Font", "Hack", "Source Code Pro"
-# Leave empty ("") to inherit the host terminal's current font.
-# family = "Cascadia Code"
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  IMPORTANT: Configure the font in Windows Terminal, not here.           ║
+# ║                                                                          ║
+# ║  wtmux does NOT change the host terminal font at runtime.                ║
+# ║  Sending OSC 50 (xterm font change) causes Windows Terminal to switch   ║
+# ║  to the named font — if that font lacks Nerd Font / Powerline glyphs    ║
+# ║  (Private Use Area U+E000–F8FF), Powerline arrows and icons break.      ║
+# ║                                                                          ║
+# ║  Set the font in Windows Terminal's settings.json instead:               ║
+# ║    "profiles": { "defaults": { "font": { "face": "CaskaydiaCove Nerd Font" } } }
+# ║                                                                          ║
+# ║  Recommended Nerd Fonts (include PUA glyphs):                           ║
+# ║    CaskaydiaCove Nerd Font  (patched Cascadia Code)                     ║
+# ║    FiraCode Nerd Font                                                    ║
+# ║    JetBrainsMono Nerd Font                                               ║
+# ║    Hack Nerd Font                                                        ║
+# ║  Download: https://www.nerdfonts.com/                                   ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
 
-# Font size in points (0 = inherit from host terminal)
+# The family/size fields below are kept for documentation and future use.
+# They do NOT affect the host terminal font at runtime.
+
+# family = "CaskaydiaCove Nerd Font"
 # size = 12
 
-# Force bold rendering for all text
+# Force bold rendering for all text (currently unused at runtime)
 bold = false
 
-# Enable font ligatures (requires a ligature-capable font such as Cascadia Code)
+# Enable font ligatures (currently informational; set in WT settings)
 ligatures = true
+
+# Suppress SGR 1 (Bold) attribute.
+#
+# Set to true when your Nerd Font lacks a Bold face and the OS substitutes
+# a non-Nerd-Font bold, causing Powerline glyphs to render incorrectly.
+#
+# Steps before enabling:
+#   1. Install the full Nerd Font family (Regular + Bold + Italic + BoldItalic)
+#      from https://www.nerdfonts.com/
+#   2. Set the font in Windows Terminal settings for all weights.
+#   3. If Powerline glyphs are still broken, set suppress_bold = true.
+#
+# suppress_bold = false

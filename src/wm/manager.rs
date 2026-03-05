@@ -183,6 +183,13 @@ impl WindowManager {
     }
 
     /// Get the active tab
+    /// Get mutable access to the active (focused) pane's session
+    pub fn get_active_session_mut(&mut self) -> Option<&mut crate::core::session::Session> {
+        let tab = self.active_tab_mut()?;
+        let pane = tab.focused_pane_mut()?;
+        Some(&mut pane.session)
+    }
+
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(&self.active_tab)
     }

@@ -36,6 +36,20 @@ use crossterm::{
 };
 use unicode_width::UnicodeWidthChar;
 
+/// Display width for a character, with Nerd Font / Powerline PUA fix.
+/// Mirrors the same function in `core::term::state`.
+#[inline]
+fn char_width(ch: char) -> usize {
+    let cp = ch as u32;
+    if (0xE000..=0xF8FF).contains(&cp)
+        || (0xF0000..=0xFFFFF).contains(&cp)
+        || (0x100000..=0x10FFFF).contains(&cp)
+    {
+        return 1;
+    }
+    ch.width().unwrap_or(1)
+}
+
 use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
 use crate::config::ColorScheme;
@@ -123,6 +137,31 @@ pub struct WmRenderer {
     pub color_scheme: ColorScheme,
     /// Last rendered layout generation (for detecting changes)
     last_generation: u64,
+    /// When true, SGR 1 (Bold) is suppressed.
+    /// Use this when the Nerd Font installed lacks a Bold face and the OS
+    /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
+    /// with wrong cell widths.
+    pub suppress_bold: bool,
+}
+
+/// Returns true when a grapheme contains at least one character that
+/// might cause cursor drift on the host terminal (Nerd Font PUA range,
+/// emoji, or other ambiguous-width code points).
+///
+/// For these characters wtmux issues a MoveTo before AND after the glyph so
+/// that accumulated cursor drift from font-rendering differences is reset at
+/// every glyph boundary.
+#[inline]
+fn grapheme_may_drift(grapheme: &str) -> bool {
+    grapheme.chars().any(|c| {
+        let cp = c as u32;
+        // Private Use Area — Nerd Font / Powerline glyphs live here
+        (0xE000..=0xF8FF).contains(&cp)
+        || (0xF0000..=0x10FFFF).contains(&cp)
+        // Emoji / Misc Symbols can be double-width in some fonts
+        || (0x1F000..=0x1FFFF).contains(&cp)
+        || (0x2600..=0x27FF).contains(&cp)
+    })
 }
 
 impl WmRenderer {
@@ -132,6 +171,7 @@ impl WmRenderer {
             initialized: false,
             color_scheme: ColorScheme::default(),
             last_generation: 0,
+            suppress_bold: false,
         }
     }
 
@@ -140,6 +180,7 @@ impl WmRenderer {
             initialized: false,
             color_scheme,
             last_generation: 0,
+            suppress_bold: false,
         }
     }
 
@@ -697,7 +738,7 @@ impl WmRenderer {
         let mut query_width = 0;
         let query_display: String = selector.query.chars()
             .take_while(|c| {
-                let w = c.width().unwrap_or(1);
+                let w = char_width(*c);
                 if query_width + w <= max_query_width {
                     query_width += w;
                     true
@@ -753,7 +794,7 @@ impl WmRenderer {
             let mut cmd_width = 0;
             let cmd: String = command.chars()
                 .take_while(|c| {
-                    let w = c.width().unwrap_or(1);
+                    let w = char_width(*c);
                     if cmd_width + w <= max_cmd_width {
                         cmd_width += w;
                         true
@@ -918,80 +959,113 @@ impl WmRenderer {
             self.render_border(stdout, pane, y_offset)?;
         }
 
-        // Render content
-        // current_attrs and current_selected are reset per row (not shared across rows),
-        // so they live inside the loop. line_buffer is reused across rows for efficiency.
+        // Render content — per-cell absolute positioning
+        //
+        // Each cell is rendered with an explicit MoveTo(inner_x + col_idx, row_y).
+        // This guarantees that regardless of how the HOST terminal renders a given
+        // glyph (e.g. Windows Terminal may render a Nerd Font / Powerline PUA
+        // character at 2 columns even though ConPTY tracks it as 1 column), the
+        // NEXT cell always starts at the correct column.  Without this, cursor
+        // drift accumulates across a row and Powerline segment separators appear
+        // shifted.
+        //
+        // Performance: MoveTo is ~7-10 bytes.  For a 80-column pane with 24 rows
+        // and dirty-line rendering, typical redraws touch only a handful of rows,
+        // so the overhead is negligible in practice.
+        //
+        // Optimisation: consecutive cells with IDENTICAL attributes are flushed as
+        // a single write (batched run), but only when they contain no PUA/wide
+        // characters that could drift the cursor.  Any cell containing a PUA
+        // codepoint (Nerd Font / Powerline range) is always flushed individually
+        // so that the NEXT cell always gets a fresh MoveTo anchor.
         let mut line_buffer = String::with_capacity(256);
         
         for row_idx in 0..inner_h as usize {
             // --- Dirty line skip ---
-            // When doing a partial update, skip rows that the VT parser hasn't touched.
-            // This avoids redrawing htop/vim/etc. lines that haven't changed.
             if !full_redraw && !screen.dirty_lines.contains(&row_idx) {
                 continue;
             }
 
-            execute!(stdout, MoveTo(inner_x, y_offset + inner_y + row_idx as u16))?;
+            let row_y = y_offset + inner_y + row_idx as u16;
             line_buffer.clear();
-            // Each row starts with a fresh attribute context
+
             let mut current_attrs = CellAttrs::default();
             let mut current_selected = false;
-            
-            let mut rendered_width: usize = 0;
-            
+            let mut run_start_col: usize = 0;
+            let mut last_written_col: usize = 0;
+
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
                 None => {
-                    // Clear empty row
-                    execute!(stdout, ResetColor)?;
+                    execute!(stdout, MoveTo(inner_x, row_y), ResetColor)?;
                     write!(stdout, "{:width$}", "", width = inner_w as usize)?;
                     continue;
                 }
             };
 
-            // Output cells sequentially, letting the terminal handle positioning
             for (col_idx, cell) in row.cells.iter().enumerate() {
-                if col_idx >= session_cols || rendered_width >= inner_w as usize {
+                if col_idx >= session_cols || col_idx >= inner_w as usize {
                     break;
                 }
-
                 if cell.is_continuation() {
                     continue;
                 }
 
-                // Check if this cell is selected
-                let is_selected = has_selection && pane.session.state.is_selected(col_idx as u16, row_idx as u16);
-
-                // Check if we need to flush and change attributes
+                let is_selected = has_selection
+                    && pane.session.state.is_selected(col_idx as u16, row_idx as u16);
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
-                
-                if attrs_changed && !line_buffer.is_empty() {
+                let ch = cell.display_char();
+                let may_drift = grapheme_may_drift(ch);
+
+                // Flush the current run if:
+                //   (a) attributes changed, OR
+                //   (b) this cell's glyph may drift the cursor (flush before + after)
+                let flush_needed = (attrs_changed || may_drift) && !line_buffer.is_empty();
+
+                if flush_needed {
+                    execute!(stdout, MoveTo(inner_x + run_start_col as u16, row_y))?;
                     self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
                     write!(stdout, "{}", line_buffer)?;
+                    last_written_col = run_start_col + line_buffer.chars().count();
                     line_buffer.clear();
                 }
-                
-                if attrs_changed {
+
+                if attrs_changed || line_buffer.is_empty() {
                     current_attrs = cell.attrs.clone();
                     current_selected = is_selected;
+                    run_start_col = col_idx;
                 }
 
-                let ch = cell.display_char();
-                line_buffer.push_str(ch);
-                rendered_width += unicode_width::UnicodeWidthStr::width(ch);
+                if may_drift {
+                    // Write this single drifty cell with its own MoveTo anchor
+                    execute!(stdout, MoveTo(inner_x + col_idx as u16, row_y))?;
+                    self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
+                    write!(stdout, "{}", ch)?;
+                    last_written_col = col_idx + 1;
+                    // Next cell starts a fresh run
+                    run_start_col = col_idx + 1;
+                    line_buffer.clear();
+                } else {
+                    line_buffer.push_str(ch);
+                }
             }
 
-            // Flush remaining text
+            // Flush remaining run
             if !line_buffer.is_empty() {
+                execute!(stdout, MoveTo(inner_x + run_start_col as u16, row_y))?;
                 self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
                 write!(stdout, "{}", line_buffer)?;
+                last_written_col = run_start_col + line_buffer.chars().count();
                 line_buffer.clear();
             }
 
-            // Pad the rest of the line with spaces to prevent remnants
-            if rendered_width < inner_w as usize {
-                execute!(stdout, ResetColor)?;
-                write!(stdout, "{:width$}", "", width = inner_w as usize - rendered_width)?;
+            // Pad remaining columns to clear remnants
+            if last_written_col < inner_w as usize {
+                execute!(stdout,
+                    MoveTo(inner_x + last_written_col as u16, row_y),
+                    ResetColor
+                )?;
+                write!(stdout, "{:width$}", "", width = inner_w as usize - last_written_col)?;
             }
         }
 
@@ -1109,14 +1183,32 @@ impl WmRenderer {
         sgr.push_str("\x1b[0"); // Always start with reset
 
         // Text attributes
-        if attrs.flags.contains(AttrFlags::BOLD)      { sgr.push_str(";1"); }
+        if attrs.flags.contains(AttrFlags::BOLD) && !self.suppress_bold { sgr.push_str(";1"); }
         if attrs.flags.contains(AttrFlags::DIM)       { sgr.push_str(";2"); }
         if attrs.flags.contains(AttrFlags::ITALIC)    { sgr.push_str(";3"); }
         if attrs.flags.contains(AttrFlags::UNDERLINE) { sgr.push_str(";4"); }
+        if attrs.flags.contains(AttrFlags::BLINK)     { sgr.push_str(";5"); }
+        if attrs.flags.contains(AttrFlags::HIDDEN)    { sgr.push_str(";8"); }
+        if attrs.flags.contains(AttrFlags::STRIKETHROUGH) { sgr.push_str(";9"); }
 
         // Colors
+        //
+        // INVERSE (SGR 7) strategy: pass SGR 7 through to the host terminal
+        // and emit the ORIGINAL (non-swapped) FG/BG colors from the cell.
+        // The host terminal then performs the swap with full knowledge of its
+        // own default background color.
+        //
+        // Why NOT swap ourselves: when attrs.bg=Default and INVERSE=on, the
+        // "swapped fg" should be the HOST terminal's background color (e.g.
+        // #1e1e1e in a dark theme).  We don't know that color — emitting
+        // Color::Default as FG causes the host terminal to use its DEFAULT
+        // FOREGROUND (white), not its background, producing wrong colors.
+        //
+        // Passing SGR 7 + original FG/BG lets the host terminal do:
+        //   "swap FG=blue with BG=terminal-default-bg" → correct dark arrow.
+        if attrs.flags.contains(AttrFlags::INVERSE) { sgr.push_str(";7"); }
+
         if selected {
-            // Selection highlight: use color scheme RGB colors
             sgr.push_str(&format!(";38;2;{};{};{}", cs.selection_fg.r, cs.selection_fg.g, cs.selection_fg.b));
             sgr.push_str(&format!(";48;2;{};{};{}", cs.selection_bg.r, cs.selection_bg.g, cs.selection_bg.b));
         } else {

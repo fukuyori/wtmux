@@ -1,7 +1,8 @@
-//! wtmux - A tmux-like terminal multiplexer for Windows
+//! wtmux — A tmux-like terminal multiplexer for Windows
 //!
 //! wtmux provides tmux-style window/pane management using ConPTY on Windows.
-//! Features include multiple tabs, split panes, and familiar keybindings.
+//! Features include multiple tabs, split panes, familiar keybindings, and
+//! accurate rendering of Nerd Font / Powerline prompts (oh-my-posh, Starship).
 //!
 //! # Features
 //!
@@ -12,6 +13,8 @@
 //! - **Copy Mode**: vim-style navigation and text selection
 //! - **Color Schemes**: 8 built-in themes with runtime switching
 //! - **Command History**: Ctrl+R to search and reuse commands
+//! - **Nerd Font / Powerline**: oh-my-posh and Starship prompts render correctly
+//! - **Shell Integration**: OSC 133/633 for accurate history with modern prompts
 //!
 //! # Quick Start
 //!
@@ -71,6 +74,8 @@ struct Config {
     shell_from_cli: bool,
     /// Enable debug logging to file
     debug: bool,
+    /// Enable VT byte trace to file (--vt-trace)
+    vt_trace: bool,
 }
 
 impl Default for Config {
@@ -82,6 +87,7 @@ impl Default for Config {
             multipane: true, // Multi-pane mode is now default
             shell_from_cli: false,
             debug: false,  // Logging disabled by default
+            vt_trace: false,
         }
     }
 }
@@ -117,6 +123,7 @@ fn print_help() {
     eprintln!("Other options:");
     eprintln!("  -n, --native          Run in native console window");
     eprintln!("  -d, --debug           Enable debug logging to file");
+    eprintln!("  --vt-trace            Trace raw PTY bytes to %LOCALAPPDATA%\\wtmux\\vt_trace.log");
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
     eprintln!();
@@ -220,6 +227,9 @@ fn parse_args() -> Result<Config, String> {
             "-d" | "--debug" => {
                 config.debug = true;
             }
+            "--vt-trace" => {
+                config.vt_trace = true;
+            }
             arg => {
                 return Err(format!("Unknown argument: {}. Use -h for help.", arg));
             }
@@ -296,35 +306,34 @@ fn get_shell_name(shell_cmd: &str) -> &str {
     }
 }
 
-/// Apply font configuration via terminal escape sequences.
+/// Apply font configuration.
 ///
-/// wtmux runs inside a host terminal (e.g. Windows Terminal) and cannot
-/// directly control the font renderer. We emit best-effort OSC sequences:
+/// wtmux runs inside a host terminal (Windows Terminal) and cannot change
+/// the font renderer directly at runtime.
 ///
-/// - OSC 50: xterm-style font change (supported by some terminals)
-/// - Windows Terminal respects font changes via its own profile settings.
+/// **Why we do NOT send OSC 50:**
+/// Windows Terminal implements OSC 50 and will switch to the named font.
+/// If the specified font is a standard (non-Nerd-Font) variant that lacks
+/// Private Use Area glyphs (U+E000–F8FF), Powerline separators and icons
+/// fall back to a glyph-less system font and display as boxes or wrong
+/// characters.  Sending OSC 50 therefore causes the very problem the user
+/// is trying to fix.
 ///
-/// If the host terminal does not support these sequences they are silently
-/// ignored, so calling this function is always safe.
-fn apply_font_config(font: &crate::config::FontConfig) {
-    use std::io::Write;
-    let mut stdout = std::io::stdout();
-
-    // OSC 50 ; <font-spec> BEL  — xterm font change
-    // Format: "font-name:size=N"  (size omitted when 0 / not configured)
-    if font.has_family() {
-        let mut spec = font.family.clone();
-        if font.has_size() {
-            spec.push_str(&format!(":size={}", font.size));
-        }
-        // OSC 50 ; <spec> BEL
-        let _ = write!(stdout, "]50;{}", spec);
-    } else if font.has_size() {
-        // Family not set but size is — use OSC 50 with size only
-        let _ = write!(stdout, "]50;:size={}", font.size);
-    }
-
-    let _ = stdout.flush();
+/// **How to configure the font instead:**
+/// Set the font in Windows Terminal's profile settings
+/// (`settings.json` → `profiles.defaults.font.face`).  Use a Nerd Font
+/// variant (e.g. "CaskaydiaCove Nerd Font", "FiraCode Nerd Font") so that
+/// all PUA glyphs are available from the same font face.
+///
+/// The `[font]` section in wtmux's config.toml is kept for two purposes:
+///   1. `suppress_bold` — prevents the OS from substituting a non-Nerd-Font
+///      Bold face when the Nerd Font family lacks a bold variant.
+///   2. Documentation / future use.
+fn apply_font_config(_font: &crate::config::FontConfig) {
+    // Intentionally empty — see doc-comment above.
+    // OSC 50 is NOT sent because Windows Terminal will switch to the named
+    // font, which breaks Nerd Font / Powerline rendering when the specified
+    // font lacks PUA glyphs.
 }
 
 /// Reset cursor shape to default block cursor
@@ -648,8 +657,27 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
     // Force resize to ensure PTY has correct size
     wm.resize(cols, rows);
 
+    // Enable VT byte trace if requested (--vt-trace)
+    if config.vt_trace {
+        if let Some(dir) = crate::config::get_data_dir() {
+            let trace_path = dir.join("vt_trace.log");
+            if let Some(session) = wm.get_active_session_mut() {
+                match session.enable_vt_trace(&trace_path) {
+                    Ok(_) => {
+                        eprintln!("[wtmux] VT trace enabled → {:?}", trace_path);
+                    }
+                    Err(e) => {
+                        eprintln!("[wtmux] VT trace failed to open {:?}: {}", trace_path, e);
+                    }
+                }
+            }
+        }
+    }
+
     // Initialize renderer with color scheme
     let mut renderer = WmRenderer::with_color_scheme(color_scheme);
+    // Propagate font config into renderer
+    renderer.suppress_bold = wtmux_config.font.suppress_bold;
     renderer.init()?;
     
     // Apply font settings from config (best-effort via OSC sequences)
