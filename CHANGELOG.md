@@ -1,16 +1,42 @@
-# Changelog
+## [1.2.7] - 2026-03-06
 
-All notable changes to this project will be documented in this file.
+### Changed
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- **Expanded prompt detection for command history (strip_prompt fallback)**:
+  Added prompt-ending patterns for all major modern shells and themes.
+  Patterns are ordered longest-first (multi-char before sub-sequences) and
+  ASCII patterns are placed last to minimise false positives.
+  - New: `╰─❯` (╰─❯, Powerlevel10k/oh-my-posh rounded multiline)
+  - New: `❯` (❯), `➜` (➜), `\u{E285}` (), `\u{F061}` ()
+  - New: `⚡` (⚡), `🚀` (🚀), `λ` (λ lambda)
+  - New: `→` (→), `›` (›), `>> ` (cmd.exe continuation), `% ` (zsh/fish/tcsh)
+
+## [1.2.7] - 2026-03-06
+
+### Changed
+
+- **Expanded prompt detection for command history (strip_prompt fallback)**:
+  Added prompt-ending patterns for all major modern shells and themes.
+  Patterns are ordered longest-first to avoid sub-sequence false positives,
+  and ASCII patterns (>, $, #) are placed last to minimise false positives
+  when those characters appear inside commands.
+  - New: `╰─❯` (╰─❯, Powerlevel10k/oh-my-posh rounded multiline)
+  - New: `❯` (❯), `➜` (➜), `` (Nerd Font ), `` (Nerd Font )
+  - New: `⚡` (⚡ lightning), `🚀` (🚀 rocket), `λ` (λ lambda)
+  - New: `→` (→), `›` (›)
+  - New: `>>` (cmd.exe continuation), `% ` (zsh/fish/tcsh)
+  - Existing: `>`, `$ `, `# `, `>>> ` (Python), etc.
+  Note: strip_prompt is Priority-4 last-resort fallback; shells that emit
+  OSC 133/633 markers (PowerShell 7, oh-my-posh, Starship, zsh) are handled
+  by Priority 1/2 and are unaffected by this change.
 
 ## [1.2.6] - 2026-03-06
 
 ### Fixed
 
 - **Multi-line paste now works correctly**:
-  All line endings in pasted text are normalised to `` (CR only) before
+  All line endings in pasted text are normalised to `
+` (CR only) before
   being sent to the PTY.  Terminals interpret CR as a single Enter keypress;
   sending `
 ` (CRLF) caused PowerShell and other shells to see two

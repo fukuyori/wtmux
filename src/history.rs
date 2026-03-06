@@ -201,14 +201,49 @@ pub fn strip_prompt(line: &str) -> String {
     // bash/zsh: "user@host:path$ " or "$ " or "# "
     // Python: ">>> " or "... "
     
-    // Try to find prompt ending patterns
-    let prompt_endings = [
-        ">",    // cmd.exe, PowerShell
-        "$ ",   // bash/zsh user
-        "# ",   // bash/zsh root
-        ">>> ", // Python REPL
-        "... ", // Python continuation
-        "]: ",  // some custom prompts
+    // Try to find prompt ending patterns.
+    //
+    // strip_prompt is Priority-4 (last resort). Shells that emit OSC 133/633
+    // (PowerShell 7, oh-my-posh, Starship, zsh with shell integration) are
+    // resolved earlier and never reach here.
+    //
+    // Ordering rules:
+    //   1. Multi-char sequences before sub-sequences (longest match first).
+    //   2. Variants with trailing space before those without.
+    //   3. Broad ASCII patterns (>, $, #) last to minimise false positives.
+    let prompt_endings: &[&str] = &[
+        // ── Multi-character Unicode sequences ─────────────────────────────
+        "╰─❯ ",          // U+2570 U+2500 U+276F  oh-my-posh / Powerlevel10k rounded
+        "╰─❯",           // same, no trailing space
+        // ── Single Unicode prompt glyphs ─────────────────────────────
+        "❯ ",            // U+276F  oh-my-posh, Starship, oh-my-zsh agnoster
+        "❯",             // U+276F  no trailing space
+        "➜ ",            // U+279C  oh-my-zsh robbyrussell
+        "➜",             // U+279C
+        "\u{E285} ",         // U+E285  Nerd Font prompt glyph
+        "\u{E285}",          // U+E285
+        "\u{F061} ",         // U+F061  Nerd Font arrow glyph
+        "\u{F061}",          // U+F061
+        "⚡ ",           // U+26A1  lightning (Powerlevel10k, Starship)
+        "⚡",            // U+26A1
+        "🚀 ",           // U+1F680 rocket (Starship fun themes)
+        "🚀",            // U+1F680
+        "λ ",            // U+03BB  lambda prompt
+        "λ",             // U+03BB
+        "→ ",            // U+2192  arrow
+        "→",             // U+2192
+        "› ",            // U+203A  chevron
+        "›",             // U+203A
+        // ── ASCII / traditional ─────────────────────────────────────────
+        ">>> ",          // Python REPL
+        "... ",          // Python continuation
+        "]: ",           // some custom prompts
+        "% ",            // zsh default, fish, tcsh
+        "$ ",            // bash/zsh user
+        "# ",            // bash/zsh root
+        ">> ",           // cmd.exe continuation prompt
+        "> ",            // cmd.exe / PowerShell (space first)
+        ">",             // cmd.exe / PowerShell (broadest — last)
     ];
     
     for ending in prompt_endings {
