@@ -4,6 +4,7 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+[![Version](https://img.shields.io/badge/version-1.2.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
