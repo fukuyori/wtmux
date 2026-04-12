@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.2.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/github/v/release/fukuyori/wtmux?label=version&color=green)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
