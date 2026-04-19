@@ -105,6 +105,7 @@ copy target\release\wtmux.exe C:\your\bin\path\
 .\build-msix.ps1 -Sign        # Self-signed (for testing)
 
 # Regenerate icon assets after editing assets/wtmux-icon.svg
+# The generated .ico is embedded into wtmux.exe and reused by the installers.
 .\generate-icons.ps1
 ```
 

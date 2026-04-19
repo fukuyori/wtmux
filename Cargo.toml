@@ -53,6 +53,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
 ] }
 
+[build-dependencies]
+winres = "0.1"
+
 [[bin]]
 name = "wtmux"
 path = "src/main.rs"

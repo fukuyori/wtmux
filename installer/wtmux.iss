@@ -97,6 +97,3 @@ Filename: "{app}\bin\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringC
 
 
 
-
-
-

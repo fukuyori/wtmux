@@ -183,6 +183,9 @@ if ($wixVersion -ge 4) {
                 </Directory>
             </Directory>
         </StandardDirectory>
+        <StandardDirectory Id="ProgramMenuFolder">
+            <Directory Id="ProgramMenuDir" Name="wtmux" />
+        </StandardDirectory>
         
         <Component Id="PathEnvComponent" Directory="INSTALLFOLDER" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
             <Environment Id="PathEnv" 
@@ -193,10 +196,26 @@ if ($wixVersion -ge 4) {
                          Action="set" 
                          System="yes" />
         </Component>
+
+        <Component Id="StartMenuShortcutComponent" Directory="ProgramMenuDir" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
+            <Shortcut Id="ApplicationStartMenuShortcut"
+                      Name="wtmux"
+                      Description="Launch wtmux"
+                      Target="[#WtmuxExeFile]"
+                      WorkingDirectory="BinFolder" />
+            <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
+            <RegistryValue Root="HKLM"
+                           Key="Software\wtmux"
+                           Name="StartMenuShortcut"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+        </Component>
         
         <Feature Id="ProductFeature" Title="wtmux">
             <ComponentRef Id="WtmuxExe" />
             <ComponentRef Id="PathEnvComponent" />
+            <ComponentRef Id="StartMenuShortcutComponent" />
         </Feature>
         
         <ui:WixUI Id="WixUI_Minimal" />

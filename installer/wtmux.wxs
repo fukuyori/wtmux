@@ -22,6 +22,7 @@
         <Feature Id="ProductFeature" Title="wtmux" Level="1">
             <ComponentGroupRef Id="ProductComponents" />
             <ComponentRef Id="PathEnvComponent" />
+            <ComponentRef Id="StartMenuShortcutComponent" />
         </Feature>
         
         <!-- Directory Structure -->
@@ -30,6 +31,9 @@
                 <Directory Id="INSTALLFOLDER" Name="wtmux">
                     <Directory Id="BinFolder" Name="bin" />
                 </Directory>
+            </Directory>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ProgramMenuDir" Name="wtmux" />
             </Directory>
         </Directory>
         
@@ -52,6 +56,23 @@
                              Part="last" 
                              Action="set" 
                              System="yes" />
+            </Component>
+        </DirectoryRef>
+
+        <DirectoryRef Id="ProgramMenuDir">
+            <Component Id="StartMenuShortcutComponent" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
+                <Shortcut Id="ApplicationStartMenuShortcut"
+                          Name="wtmux"
+                          Description="Launch wtmux"
+                          Target="[#WtmuxExeFile]"
+                          WorkingDirectory="BinFolder" />
+                <RemoveFolder Id="ProgramMenuDirRemove" On="uninstall" />
+                <RegistryValue Root="HKLM"
+                               Key="Software\wtmux"
+                               Name="StartMenuShortcut"
+                               Type="integer"
+                               Value="1"
+                               KeyPath="yes" />
             </Component>
         </DirectoryRef>
         

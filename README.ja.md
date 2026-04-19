@@ -101,6 +101,7 @@ copy target\release\wtmux.exe C:\your\bin\path\
 .\build-msix.ps1 -Sign        # 自己署名（テスト用）
 
 # assets/wtmux-icon.svg を編集した後にアイコン資産を再生成
+# 生成された .ico は wtmux.exe に埋め込まれ、各インストーラーでも再利用されます。
 .\generate-icons.ps1
 ```
 
