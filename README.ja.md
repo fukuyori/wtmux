@@ -92,6 +92,7 @@ copy target\release\wtmux.exe C:\your\bin\path\
 
 # WiX Toolset使用（企業展開向け）
 # ダウンロード: https://wixtoolset.org/releases/
+# WiX Toolset v7 では、スクリプトが OSMF EULA を自動受諾してからビルドします。
 .\build-installer.ps1
 
 # MSIXパッケージ（Windows 10/11向け）

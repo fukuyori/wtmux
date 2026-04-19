@@ -27,8 +27,10 @@ if (-not $Version) {
     }
 }
 
-# Find WiX tools - check for v6.x first (wix.exe), then v3.x (candle.exe/light.exe)
+# Find WiX tools - check for v7/v6/v5 (wix.exe), then v3.x (candle.exe/light.exe)
 $wixPaths = @(
+    "${env:ProgramFiles}\WiX Toolset v7.0\bin",
+    "${env:ProgramFiles(x86)}\WiX Toolset v7.0\bin",
     "${env:ProgramFiles}\WiX Toolset v6.0\bin",
     "${env:ProgramFiles(x86)}\WiX Toolset v6.0\bin",
     "${env:ProgramFiles}\WiX Toolset v5.0\bin",
@@ -42,11 +44,19 @@ $wixPaths = @(
 $wixBin = $null
 $wixVersion = 0
 
-# Check for wix.exe (v4+/v5+/v6+)
+# Check for wix.exe (v4+/v5+/v6+/v7+)
 foreach ($path in $wixPaths) {
     if ($path -and (Test-Path "$path\wix.exe")) {
         $wixBin = $path
-        $wixVersion = 6
+        if ($path -match 'WiX Toolset v7\.0') {
+            $wixVersion = 7
+        } elseif ($path -match 'WiX Toolset v6\.0') {
+            $wixVersion = 6
+        } elseif ($path -match 'WiX Toolset v5\.0') {
+            $wixVersion = 5
+        } else {
+            $wixVersion = 4
+        }
         break
     }
 }
@@ -67,7 +77,15 @@ if (-not $wixBin) {
     $wixExe = Get-Command "wix.exe" -ErrorAction SilentlyContinue
     if ($wixExe) {
         $wixBin = Split-Path $wixExe.Source
-        $wixVersion = 6
+        if ($wixBin -match 'WiX Toolset v7\.0') {
+            $wixVersion = 7
+        } elseif ($wixBin -match 'WiX Toolset v6\.0') {
+            $wixVersion = 6
+        } elseif ($wixBin -match 'WiX Toolset v5\.0') {
+            $wixVersion = 5
+        } else {
+            $wixVersion = 4
+        }
     } else {
         $candle = Get-Command "candle.exe" -ErrorAction SilentlyContinue
         if ($candle) {
@@ -174,7 +192,22 @@ if ($wixVersion -ge 4) {
     
     Push-Location $stagingDir
     try {
-        & "$wixBin\wix.exe" build -arch x64 -o "..\output\wtmux-$Version-x64.msi" "wtmux-v4.wxs" -ext WixToolset.UI.wixext
+        if ($wixVersion -ge 7) {
+            Write-Host "Accepting WiX v7 OSMF EULA for this environment..." -ForegroundColor DarkYellow
+            & "$wixBin\wix.exe" eula accept wix7
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Error: wix eula accept failed" -ForegroundColor Red
+                exit 1
+            }
+        }
+        $wixArgs = @(
+            "build",
+            "-arch", "x64",
+            "-o", "..\output\wtmux-$Version-x64.msi",
+            "wtmux-v4.wxs",
+            "-ext", "WixToolset.UI.wixext"
+        )
+        & "$wixBin\wix.exe" @wixArgs
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Error: wix build failed" -ForegroundColor Red
             exit 1

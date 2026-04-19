@@ -96,6 +96,7 @@ copy target\release\wtmux.exe C:\your\bin\path\
 
 # Using WiX Toolset (for enterprise deployment)
 # Download from: https://wixtoolset.org/releases/
+# On WiX Toolset v7, the script accepts the OSMF EULA automatically before building.
 .\build-installer.ps1
 
 # MSIX package (for Windows 10/11)
