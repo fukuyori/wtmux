@@ -178,33 +178,31 @@ impl Session {
                 self.running.store(false, Ordering::SeqCst);
             }
         }
-        
-        // First, collect all available data from the channel
-        let mut all_data: Vec<Vec<u8>> = Vec::new();
-        
-        if let Some(rx) = &self.output_rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(data) => {
-                        all_data.push(data);
-                    }
-                    Err(TryRecvError::Empty) => {
-                        break;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        self.running.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                }
-            }
-        } else {
+
+        if self.output_rx.is_none() {
             return Ok(false);
         }
 
-        // Now process all collected data
-        let processed = !all_data.is_empty();
-        for data in all_data {
-            self.feed_bytes(&data);
+        let mut processed = false;
+        loop {
+            let recv_result = match self.output_rx.as_ref() {
+                Some(rx) => rx.try_recv(),
+                None => return Ok(processed),
+            };
+
+            match recv_result {
+                Ok(data) => {
+                    processed = true;
+                    self.feed_bytes(&data);
+                }
+                Err(TryRecvError::Empty) => {
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.running.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
         }
 
         Ok(processed)

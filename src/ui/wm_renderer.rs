@@ -932,7 +932,7 @@ impl WmRenderer {
                 // Skip panes with no new content unless forced by layout change
                 let pane_needs_render = needs_full_redraw
                     || screen.full_redraw
-                    || !screen.dirty_lines.is_empty();
+                    || screen.has_dirty_lines();
 
                 if pane_needs_render {
                     self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
@@ -982,7 +982,7 @@ impl WmRenderer {
         
         for row_idx in 0..inner_h as usize {
             // --- Dirty line skip ---
-            if !full_redraw && !screen.dirty_lines.contains(&row_idx) {
+            if !full_redraw && !screen.is_line_dirty(row_idx) {
                 continue;
             }
 

@@ -60,6 +60,57 @@ use crate::history::HistorySelector;
 use crate::config::{Config as WtmuxConfig, ColorScheme};
 use crate::copymode::CopyMode;
 
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AppAction {
+    Noop,
+    NewTab,
+    ClosePane,
+    CloseTab,
+    SplitHorizontal,
+    SplitVertical,
+    NextTab,
+    PrevTab,
+    LastTab,
+    FocusDirection {
+        direction: SplitDirection,
+        forward: bool,
+    },
+    ResizePaneDirection {
+        direction: SplitDirection,
+        arrow_up_or_left: bool,
+    },
+    GotoTab(usize),
+    FocusNextPane,
+    FocusPrevPane,
+    ResetCursorShape,
+    ToggleZoom,
+    NextLayout,
+    ResizePane {
+        grow: bool,
+    },
+    SwapPaneNext,
+    SwapPanePrev,
+    PasteFromClipboard,
+    SendPrefixToPane {
+        byte: u8,
+    },
+}
+
+#[cfg(windows)]
+impl From<ContextMenuAction> for AppAction {
+    fn from(action: ContextMenuAction) -> Self {
+        match action {
+            ContextMenuAction::Paste => AppAction::PasteFromClipboard,
+            ContextMenuAction::KillPane => AppAction::ClosePane,
+            ContextMenuAction::SplitHorizontal => AppAction::SplitHorizontal,
+            ContextMenuAction::SplitVertical => AppAction::SplitVertical,
+            ContextMenuAction::ToggleZoom => AppAction::ToggleZoom,
+            ContextMenuAction::Cancel => AppAction::Noop,
+        }
+    }
+}
+
 /// Application configuration
 struct Config {
     /// Default shell command
@@ -340,6 +391,16 @@ fn apply_font_config(_font: &crate::config::FontConfig) {
 fn reset_cursor_shape() {
     let mut stdout = std::io::stdout();
     let _ = execute!(stdout, SetCursorStyle::SteadyBlock);
+}
+
+#[cfg(windows)]
+fn selector_is_visible(selector: &Option<HistorySelector>) -> bool {
+    selector.as_ref().map(|s| s.visible).unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn get_or_create_selector(selector: &mut Option<HistorySelector>) -> &mut HistorySelector {
+    selector.get_or_insert_with(HistorySelector::new)
 }
 
 /// Get encoding name
@@ -707,7 +768,7 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
 #[cfg(windows)]
 fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer) -> anyhow::Result<()> {
     let poll_timeout = Duration::from_millis(10);
-    let mut selector = HistorySelector::new();
+    let mut selector: Option<HistorySelector> = None;
     
     // Theme selector state
     let mut theme_selector_visible = false;
@@ -747,7 +808,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
         if let Some((cols, rows)) = pending_resize {
             if last_resize_time.elapsed() >= resize_debounce {
                 wm.resize(cols, rows);
-                renderer.render_with_selector(wm, Some(&selector))?;
+                renderer.render_with_selector(wm, selector.as_ref())?;
                 wm.clear_all_dirty();
                 pending_resize = None;
             }
@@ -777,7 +838,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
             } else if pane_numbers_visible {
                 renderer.render_with_pane_numbers(wm)?;
             } else {
-                renderer.render_with_selector(wm, Some(&selector))?;
+                renderer.render_with_selector(wm, selector.as_ref())?;
             }
             // Clear dirty state after rendering so the next frame only redraws
             // rows that have genuinely changed.
@@ -809,8 +870,8 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 renderer.render_with_context_menu(wm, &context_menu)?;
                             }
                             KeyCode::Enter | KeyCode::Char(' ') => {
-                                let action = context_menu.selected_action();
-                                execute_context_menu_action(wm, action);
+                                let action: AppAction = context_menu.selected_action().into();
+                                apply_app_action(wm, action);
                                 context_menu.hide();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
@@ -1033,7 +1094,8 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                     }
 
                     // Handle selector mode
-                    if selector.visible {
+                    if selector_is_visible(&selector) {
+                        let selector = get_or_create_selector(&mut selector);
                         match key_event.code {
                             KeyCode::Esc => {
                                 selector.hide();
@@ -1078,7 +1140,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                                 wm.clear_current_input();
                                                 let _ = wm.write(command.as_bytes());
                                             }
-                                            renderer.render_with_selector(wm, Some(&selector))?;
+                                            renderer.render_with_selector(wm, Some(&*selector))?;
                                             continue;
                                         }
                                     }
@@ -1088,132 +1150,102 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             }
                             _ => {}
                         }
-                        renderer.render_with_selector(wm, Some(&selector))?;
+                        renderer.render_with_selector(wm, Some(&*selector))?;
                         continue;
                     }
 
                     // Handle prefix mode
                     if wm.prefix_mode {
-                        match key_event.code {
+                        let action = match key_event.code {
                             // Cancel prefix mode (Esc only)
-                            KeyCode::Esc => {
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Esc => Some(AppAction::Noop),
                             // New window (tab)
-                            KeyCode::Char('c') => {
-                                wm.new_tab();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('c') => Some(AppAction::NewTab),
                             // Kill pane (tmux: x)
-                            KeyCode::Char('x') => {
-                                wm.close_pane();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('x') => Some(AppAction::ClosePane),
                             // Kill window/tab (tmux: &)
-                            KeyCode::Char('&') => {
-                                wm.close_tab();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('&') => Some(AppAction::CloseTab),
                             // Split horizontal (tmux: " splits top/bottom)
-                            KeyCode::Char('"') => {
-                                wm.split_vertical();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('"') => Some(AppAction::SplitVertical),
                             // Split vertical (tmux: % splits left/right)
-                            KeyCode::Char('%') => {
-                                wm.split_horizontal();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('%') => Some(AppAction::SplitHorizontal),
                             // Next window (tmux: n)
-                            KeyCode::Char('n') => {
-                                wm.next_tab();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('n') => Some(AppAction::NextTab),
                             // Previous window (tmux: p)
-                            KeyCode::Char('p') => {
-                                wm.prev_tab();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('p') => Some(AppAction::PrevTab),
                             // Last window (tmux: l) - toggle between last two tabs
-                            KeyCode::Char('l') => {
-                                wm.last_tab();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('l') => Some(AppAction::LastTab),
                             // Move focus between panes (tmux: arrow keys without Ctrl)
                             // Resize panes (tmux: Ctrl+arrow keys)
                             KeyCode::Left => {
                                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    // Left arrow: arrow_up_or_left = true
-                                    wm.resize_pane_direction(SplitDirection::Horizontal, true);
+                                    Some(AppAction::ResizePaneDirection {
+                                        direction: SplitDirection::Horizontal,
+                                        arrow_up_or_left: true,
+                                    })
                                 } else {
-                                    wm.focus_direction(SplitDirection::Horizontal, false);
-                                    reset_cursor_shape();
+                                    Some(AppAction::FocusDirection {
+                                        direction: SplitDirection::Horizontal,
+                                        forward: false,
+                                    })
                                 }
-                                wm.prefix_mode = false;
                             }
                             KeyCode::Right => {
                                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    // Right arrow: arrow_up_or_left = false
-                                    wm.resize_pane_direction(SplitDirection::Horizontal, false);
+                                    Some(AppAction::ResizePaneDirection {
+                                        direction: SplitDirection::Horizontal,
+                                        arrow_up_or_left: false,
+                                    })
                                 } else {
-                                    wm.focus_direction(SplitDirection::Horizontal, true);
-                                    reset_cursor_shape();
+                                    Some(AppAction::FocusDirection {
+                                        direction: SplitDirection::Horizontal,
+                                        forward: true,
+                                    })
                                 }
-                                wm.prefix_mode = false;
                             }
                             KeyCode::Up => {
                                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    // Up arrow: arrow_up_or_left = true
-                                    wm.resize_pane_direction(SplitDirection::Vertical, true);
+                                    Some(AppAction::ResizePaneDirection {
+                                        direction: SplitDirection::Vertical,
+                                        arrow_up_or_left: true,
+                                    })
                                 } else {
-                                    wm.focus_direction(SplitDirection::Vertical, false);
-                                    reset_cursor_shape();
+                                    Some(AppAction::FocusDirection {
+                                        direction: SplitDirection::Vertical,
+                                        forward: false,
+                                    })
                                 }
-                                wm.prefix_mode = false;
                             }
                             KeyCode::Down => {
                                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    // Down arrow: arrow_up_or_left = false
-                                    wm.resize_pane_direction(SplitDirection::Vertical, false);
+                                    Some(AppAction::ResizePaneDirection {
+                                        direction: SplitDirection::Vertical,
+                                        arrow_up_or_left: false,
+                                    })
                                 } else {
-                                    wm.focus_direction(SplitDirection::Vertical, true);
-                                    reset_cursor_shape();
+                                    Some(AppAction::FocusDirection {
+                                        direction: SplitDirection::Vertical,
+                                        forward: true,
+                                    })
                                 }
-                                wm.prefix_mode = false;
                             }
                             // Select window by number (tmux: 0-9) - only when not showing pane numbers
                             KeyCode::Char(c) if c.is_ascii_digit() && !pane_numbers_visible => {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
-                                wm.goto_tab(num);
-                                wm.prefix_mode = false;
+                                Some(AppAction::GotoTab(num))
                             }
                             // Next pane (tmux: o)
-                            KeyCode::Char('o') => {
-                                wm.focus_next_pane();
-                                reset_cursor_shape();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('o') => Some(AppAction::FocusNextPane),
                             // Previous pane (tmux: ;)
-                            KeyCode::Char(';') => {
-                                wm.focus_prev_pane();
-                                reset_cursor_shape();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char(';') => Some(AppAction::FocusPrevPane),
                             // Reset cursor shape (tmux: r)
-                            KeyCode::Char('r') => {
-                                reset_cursor_shape();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('r') => Some(AppAction::ResetCursorShape),
                             // Zoom pane toggle (tmux: z)
-                            KeyCode::Char('z') => {
-                                wm.toggle_zoom();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('z') => Some(AppAction::ToggleZoom),
                             // Rename window (tmux: ,)
                             KeyCode::Char(',') => {
                                 rename_mode = true;
                                 rename_buffer.clear();
-                                // Pre-fill with current name
                                 if let Some(tab) = wm.active_tab() {
                                     rename_buffer = tab.name.clone();
                                 }
@@ -1222,10 +1254,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 continue;
                             }
                             // Next layout (tmux: Space)
-                            KeyCode::Char(' ') => {
-                                wm.next_layout();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char(' ') => Some(AppAction::NextLayout),
                             // Copy mode (tmux: [)
                             KeyCode::Char('[') => {
                                 copy_mode.enter(wm);
@@ -1249,25 +1278,15 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
                                 continue;
                             }
-                            // Resize pane (tmux: Ctrl+arrow)
+                            // Resize pane (tmux: + / -)
                             KeyCode::Char('+') | KeyCode::Char('=') => {
-                                wm.resize_pane(true);
-                                wm.prefix_mode = false;
+                                Some(AppAction::ResizePane { grow: true })
                             }
-                            KeyCode::Char('-') => {
-                                wm.resize_pane(false);
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('-') => Some(AppAction::ResizePane { grow: false }),
                             // Swap pane with next (tmux: })
-                            KeyCode::Char('}') => {
-                                wm.swap_pane_next();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('}') => Some(AppAction::SwapPaneNext),
                             // Swap pane with previous (tmux: {)
-                            KeyCode::Char('{') => {
-                                wm.swap_pane_prev();
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('{') => Some(AppAction::SwapPanePrev),
                             // Display pane numbers (tmux: q)
                             KeyCode::Char('q') => {
                                 pane_numbers_visible = true;
@@ -1277,20 +1296,18 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                 continue;
                             }
                             // Detach (tmux: d) - for now just show message
-                            KeyCode::Char('d') => {
-                                // Detach not implemented yet
-                                wm.prefix_mode = false;
-                            }
+                            KeyCode::Char('d') => Some(AppAction::Noop),
                             // Send prefix key to application (e.g., Ctrl+B Ctrl+B sends Ctrl+B)
                             KeyCode::Char(c) if c == wm.prefix_key.char => {
                                 let ctrl_code = (c as u8) - b'a' + 1;
-                                let _ = wm.write(&[ctrl_code]);
-                                wm.prefix_mode = false;
+                                Some(AppAction::SendPrefixToPane { byte: ctrl_code })
                             }
-                            _ => {
-                                // Unknown command, exit prefix mode
-                                wm.prefix_mode = false;
-                            }
+                            _ => Some(AppAction::Noop),
+                        };
+
+                        wm.prefix_mode = false;
+                        if let Some(action) = action {
+                            apply_app_action(wm, action);
                         }
                         renderer.render(wm)?;
                         continue;
@@ -1310,8 +1327,9 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         && key_event.code == KeyCode::Char('r') 
                         && !wm.is_in_alternate_screen() 
                     {
+                        let selector = get_or_create_selector(&mut selector);
                         selector.show();
-                        renderer.render_with_selector(wm, Some(&selector))?;
+                        renderer.render_with_selector(wm, Some(&*selector))?;
                         continue;
                     }
 
@@ -1354,7 +1372,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                     if key_event.code == KeyCode::Enter && !wm.is_in_alternate_screen() {
                         if let Some(command) = wm.get_current_line() {
                             if !command.is_empty() {
-                                selector.add_to_history(command);
+                                get_or_create_selector(&mut selector).add_to_history(command);
                             }
                         }
                         // Reset keystroke buffer for next command
@@ -1377,10 +1395,12 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                     use crossterm::event::{MouseEventKind, MouseButton};
                     
                     // Close snippet selector on mouse click outside
-                    if selector.visible {
-                        selector.hide();
+                    if selector_is_visible(&selector) {
+                        if let Some(selector) = selector.as_mut() {
+                            selector.hide();
+                        }
                         wm.force_full_redraw();
-                        renderer.render_with_selector(wm, Some(&selector))?;
+                        renderer.render_with_selector(wm, selector.as_ref())?;
                     }
                     
                     // Handle context menu interactions
@@ -1388,8 +1408,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         match mouse_event.kind {
                             MouseEventKind::Down(MouseButton::Left) => {
                                 if let Some(action) = context_menu.handle_click(mouse_event.column, mouse_event.row) {
-                                    // Execute the action
-                                    execute_context_menu_action(wm, action);
+                                    apply_app_action(wm, action.into());
                                     context_menu.hide();
                                     renderer.render(wm)?;
                                 } else {
@@ -1462,11 +1481,11 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                             if focus_changed {
                                 reset_cursor_shape();
                             }
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            renderer.render_with_selector(wm, selector.as_ref())?;
                         }
                         MouseEventKind::Drag(MouseButton::Left) => {
                             wm.handle_mouse_drag(mouse_event.column, mouse_event.row);
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            renderer.render_with_selector(wm, selector.as_ref())?;
                         }
                         MouseEventKind::Up(MouseButton::Left) => {
                             if let Some(text) = wm.handle_mouse_up() {
@@ -1478,7 +1497,7 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                                     }
                                 }
                             }
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            renderer.render_with_selector(wm, selector.as_ref())?;
                         }
                         MouseEventKind::Down(MouseButton::Right) => {
                             // Show context menu
@@ -1489,11 +1508,11 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         }
                         MouseEventKind::ScrollUp => {
                             wm.handle_scroll(3);
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            renderer.render_with_selector(wm, selector.as_ref())?;
                         }
                         MouseEventKind::ScrollDown => {
                             wm.handle_scroll(-3);
-                            renderer.render_with_selector(wm, Some(&selector))?;
+                            renderer.render_with_selector(wm, selector.as_ref())?;
                         }
                         _ => {}
                     }
@@ -1513,26 +1532,78 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
     Ok(())
 }
 
-/// Execute a context menu action
-fn execute_context_menu_action(wm: &mut WindowManager, action: ContextMenuAction) {
+#[cfg(windows)]
+fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
     match action {
-        ContextMenuAction::Paste => {
-            let _ = wm.paste_from_clipboard();
+        AppAction::Noop => {}
+        AppAction::NewTab => {
+            wm.new_tab();
         }
-        ContextMenuAction::KillPane => {
+        AppAction::ClosePane => {
             wm.close_pane();
         }
-        ContextMenuAction::SplitHorizontal => {
+        AppAction::CloseTab => {
+            wm.close_tab();
+        }
+        AppAction::SplitHorizontal => {
             wm.split_horizontal();
         }
-        ContextMenuAction::SplitVertical => {
+        AppAction::SplitVertical => {
             wm.split_vertical();
         }
-        ContextMenuAction::ToggleZoom => {
+        AppAction::NextTab => {
+            wm.next_tab();
+        }
+        AppAction::PrevTab => {
+            wm.prev_tab();
+        }
+        AppAction::LastTab => {
+            wm.last_tab();
+        }
+        AppAction::FocusDirection { direction, forward } => {
+            wm.focus_direction(direction, forward);
+            reset_cursor_shape();
+        }
+        AppAction::ResizePaneDirection {
+            direction,
+            arrow_up_or_left,
+        } => {
+            wm.resize_pane_direction(direction, arrow_up_or_left);
+        }
+        AppAction::GotoTab(num) => {
+            wm.goto_tab(num);
+        }
+        AppAction::FocusNextPane => {
+            wm.focus_next_pane();
+            reset_cursor_shape();
+        }
+        AppAction::FocusPrevPane => {
+            wm.focus_prev_pane();
+            reset_cursor_shape();
+        }
+        AppAction::ResetCursorShape => {
+            reset_cursor_shape();
+        }
+        AppAction::ToggleZoom => {
             wm.toggle_zoom();
         }
-        ContextMenuAction::Cancel => {
-            // Do nothing
+        AppAction::NextLayout => {
+            wm.next_layout();
+        }
+        AppAction::ResizePane { grow } => {
+            wm.resize_pane(grow);
+        }
+        AppAction::SwapPaneNext => {
+            wm.swap_pane_next();
+        }
+        AppAction::SwapPanePrev => {
+            wm.swap_pane_prev();
+        }
+        AppAction::PasteFromClipboard => {
+            let _ = wm.paste_from_clipboard();
+        }
+        AppAction::SendPrefixToPane { byte } => {
+            let _ = wm.write(&[byte]);
         }
     }
 }

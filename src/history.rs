@@ -70,9 +70,6 @@ impl CommandHistory {
     /// Get history file path
     fn get_history_path() -> Option<PathBuf> {
         let wtmux_dir = crate::config::get_data_dir()?;
-        if !wtmux_dir.exists() {
-            let _ = fs::create_dir_all(&wtmux_dir);
-        }
         Some(wtmux_dir.join("history"))
     }
 
@@ -111,6 +108,9 @@ impl CommandHistory {
     /// Save history to file
     fn save(&self) {
         if let Some(ref path) = self.file_path {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
             let content: String = self.entries
                 .iter()
                 .map(|e| format!("{};{}", e.timestamp, e.command))

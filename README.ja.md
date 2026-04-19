@@ -4,8 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+[![Version](https://img.shields.io/badge/version-1.2.8-green.svg)](https://github.com/user/wtmux/releases)
 
 [English README](README.md)
+
+## 1.2.8 の主な変更
+
+- 起動高速化: コマンド履歴セレクタは起動時ではなく、`Ctrl+R` を初めて使った時に読み込まれるようになりました。
+- 起動時 I/O の削減: 設定/履歴ディレクトリは、実際に書き込みが発生する時だけ作成されます。
+- 常時オーバーヘッドの削減: scrollback の整理、PTY 出力処理、dirty line 管理を軽量化しました。
 
 ## 特徴
 

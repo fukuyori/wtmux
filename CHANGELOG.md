@@ -1,19 +1,19 @@
-## [1.2.7] - 2026-03-06
+## [1.2.8] - 2026-04-20
 
 ### Changed
 
-- **Expanded prompt detection for command history (strip_prompt fallback)**:
-  Added prompt-ending patterns for all major modern shells and themes.
-  Patterns are ordered longest-first (multi-char before sub-sequences) and
-  ASCII patterns are placed last to minimise false positives.
-  - New: `╰─❯` (╰─❯, Powerlevel10k/oh-my-posh rounded multiline)
-  - New: `❯` (❯), `➜` (➜), `\u{E285}` (), `\u{F061}` ()
-  - New: `⚡` (⚡), `🚀` (🚀), `λ` (λ lambda)
-  - New: `→` (→), `›` (›), `>> ` (cmd.exe continuation), `% ` (zsh/fish/tcsh)
+- **Faster startup path**:
+  The command history selector is now initialized lazily on first use
+  (`Ctrl+R`) instead of being loaded during startup.
 
-## [1.2.7] - 2026-03-06
+- **Startup no longer creates config/history directories eagerly**:
+  `%LOCALAPPDATA%\wtmux\` is now created only when config or history data is
+  actually written, reducing unnecessary filesystem work during startup.
 
-### Changed
+- **Reduced steady-state overhead**:
+  - scrollback storage now trims from the front without shifting the whole buffer
+  - `Session::process_output()` no longer collects an intermediate `Vec<Vec<u8>>`
+  - dirty-line tracking uses a lighter row-indexed structure
 
 - **Expanded prompt detection for command history (strip_prompt fallback)**:
   Added prompt-ending patterns for all major modern shells and themes.

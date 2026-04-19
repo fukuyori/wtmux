@@ -3,7 +3,7 @@
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
 use bitflags::bitflags;
-use std::collections::HashSet;
+use std::collections::VecDeque;
 use unicode_width::UnicodeWidthChar;
 
 /// Terminal state holding all screen data
@@ -716,12 +716,12 @@ pub struct ScreenBuffer {
     /// Visible rows
     pub rows: Vec<Row>,
     /// Scrollback history
-    pub scrollback: Vec<Row>,
+    pub scrollback: VecDeque<Row>,
     /// Maximum scrollback lines
     pub scrollback_limit: usize,
     /// Current scroll offset (0 = at bottom, >0 = scrolled up)
     pub scroll_offset: usize,
-    pub dirty_lines: HashSet<usize>,
+    dirty_lines: Vec<bool>,
     pub full_redraw: bool,
 }
 
@@ -729,10 +729,10 @@ impl ScreenBuffer {
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             rows: (0..rows).map(|_| Row::new(cols)).collect(),
-            scrollback: Vec::new(),
+            scrollback: VecDeque::new(),
             scrollback_limit: 10000,
             scroll_offset: 0,
-            dirty_lines: HashSet::new(),
+            dirty_lines: vec![false; rows as usize],
             full_redraw: true,
         }
     }
@@ -752,15 +752,16 @@ impl ScreenBuffer {
             row.resize(new_cols);
         }
 
+        self.dirty_lines.resize(new_rows as usize, false);
         self.mark_all_dirty();
     }
 
     /// Add a row to scrollback when scrolling up
     pub fn push_to_scrollback(&mut self, row: Row) {
-        self.scrollback.push(row);
+        self.scrollback.push_back(row);
         // Trim if exceeding limit
         if self.scrollback.len() > self.scrollback_limit {
-            self.scrollback.remove(0);
+            self.scrollback.pop_front();
         }
     }
 
@@ -854,15 +855,35 @@ impl ScreenBuffer {
     }
 
     pub fn mark_dirty(&mut self, line: usize) {
-        self.dirty_lines.insert(line);
+        if line < self.dirty_lines.len() {
+            self.dirty_lines[line] = true;
+        }
     }
 
     pub fn mark_all_dirty(&mut self) {
         self.full_redraw = true;
     }
 
+    pub fn has_dirty_lines(&self) -> bool {
+        self.dirty_lines.iter().any(|dirty| *dirty)
+    }
+
+    pub fn is_line_dirty(&self, line: usize) -> bool {
+        self.dirty_lines.get(line).copied().unwrap_or(false)
+    }
+
+    pub fn dirty_line_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.dirty_lines.iter().enumerate().filter_map(|(idx, dirty)| {
+            if *dirty {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn clear_dirty(&mut self) {
-        self.dirty_lines.clear();
+        self.dirty_lines.fill(false);
         self.full_redraw = false;
     }
 }

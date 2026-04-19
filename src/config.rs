@@ -219,6 +219,10 @@ impl Config {
         if let Some(path) = Self::get_config_path() {
             let content = toml::to_string_pretty(self)
                 .map_err(|e| format!("Failed to serialize config: {}", e))?;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create config directory: {}", e))?;
+            }
             fs::write(&path, content)
                 .map_err(|e| format!("Failed to write config: {}", e))?;
             Ok(())
@@ -230,9 +234,6 @@ impl Config {
     /// Get config file path
     fn get_config_path() -> Option<PathBuf> {
         let wtmux_dir = get_data_dir()?;
-        if !wtmux_dir.exists() {
-            let _ = fs::create_dir_all(&wtmux_dir);
-        }
         Some(wtmux_dir.join("config.toml"))
     }
 

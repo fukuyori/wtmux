@@ -205,7 +205,7 @@ impl Renderer {
         // Use line-based rendering (more reliable for wide characters)
         if screen.full_redraw {
             self.render_full(&mut stdout, state)?;
-        } else if !screen.dirty_lines.is_empty() {
+        } else if screen.has_dirty_lines() {
             self.render_dirty(&mut stdout, state)?;
         }
 
@@ -466,11 +466,7 @@ impl Renderer {
         let mut current_selected;
         let mut line_buffer = String::with_capacity(256);
 
-        // Sort dirty lines for sequential access
-        let mut dirty: Vec<_> = screen.dirty_lines.iter().copied().collect();
-        dirty.sort_unstable();
-
-        for row_idx in dirty {
+        for row_idx in screen.dirty_line_indices() {
             // Get row accounting for scroll offset
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
