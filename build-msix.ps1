@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 
 # Configuration
 $AppName = "wtmux"
-$Version = "1.1.1.0"
+$Version = ""
 $Publisher = "CN=wtmux"
 
 # Paths
@@ -32,6 +32,16 @@ $MsixDir = Join-Path $InstallerDir "msix"
 $OutputDir = Join-Path $ProjectRoot "target\release"
 $PackageDir = Join-Path $ProjectRoot "target\msix-package"
 $AssetsDir = Join-Path $PackageDir "Assets"
+
+# Get version from Cargo.toml
+$cargoToml = Get-Content (Join-Path $ProjectRoot "Cargo.toml") -Raw
+if ($cargoToml -match 'version\s*=\s*"([0-9.]+)"') {
+    $Version = "$($matches[1]).0"
+} else {
+    Write-Error "Could not determine version from Cargo.toml"
+    exit 1
+}
+
 $MsixOutput = Join-Path $ProjectRoot "target\$AppName-$Version.msix"
 
 # Find Windows SDK
@@ -82,99 +92,39 @@ Write-Host "`n[3/5] Copying files..." -ForegroundColor Green
 Copy-Item (Join-Path $OutputDir "wtmux.exe") $PackageDir
 
 # Copy manifest
-Copy-Item (Join-Path $MsixDir "AppxManifest.xml") $PackageDir
+$manifestPath = Join-Path $PackageDir "AppxManifest.xml"
+$manifestXml = [xml](Get-Content (Join-Path $MsixDir "AppxManifest.xml") -Raw)
+$manifestXml.Package.Identity.Version = $Version
+$xmlSettings = New-Object System.Xml.XmlWriterSettings
+$xmlSettings.Encoding = New-Object System.Text.UTF8Encoding($false)
+$xmlSettings.Indent = $true
+$xmlSettings.NewLineChars = "`r`n"
+$xmlSettings.NewLineHandling = [System.Xml.NewLineHandling]::Replace
+$xmlWriter = [System.Xml.XmlWriter]::Create($manifestPath, $xmlSettings)
+try {
+    $manifestXml.Save($xmlWriter)
+} finally {
+    $xmlWriter.Dispose()
+}
 
-# Copy or generate assets
-$SourceAssets = Join-Path $MsixDir "Assets"
-if (Test-Path $SourceAssets) {
-    Copy-Item "$SourceAssets\*" $AssetsDir -Recurse
-} else {
-    Write-Host "  Generating placeholder icons..." -ForegroundColor Yellow
-    
-    # Try to use System.Drawing, fall back to creating simple PNG files
+# Generate and copy assets
+$iconScript = Join-Path $ProjectRoot "generate-icons.ps1"
+if (Test-Path $iconScript) {
+    Write-Host "  Generating icon assets..." -ForegroundColor Green
     try {
-        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-        
-        $sizes = @{
-            "StoreLogo.png" = @(50, 50)
-            "Square44x44Logo.png" = @(44, 44)
-            "Square150x150Logo.png" = @(150, 150)
-            "Wide310x150Logo.png" = @(310, 150)
-        }
-        
-        foreach ($file in $sizes.Keys) {
-            $dims = $sizes[$file]
-            $width = $dims[0]
-            $height = $dims[1]
-            
-            $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-            
-            # Dark background (Tokyo Night theme color)
-            $bgColor = [System.Drawing.Color]::FromArgb(255, 26, 27, 38)
-            $graphics.Clear($bgColor)
-            
-            # Draw "W" text
-            $fontSize = [float][Math]::Max(8, [Math]::Min($width, $height) * 0.4)
-            $font = New-Object System.Drawing.Font("Consolas", $fontSize, [System.Drawing.FontStyle]::Bold)
-            $fgColor = [System.Drawing.Color]::FromArgb(255, 122, 162, 247)
-            $brush = New-Object System.Drawing.SolidBrush($fgColor)
-            
-            $format = New-Object System.Drawing.StringFormat
-            $format.Alignment = [System.Drawing.StringAlignment]::Center
-            $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-            
-            $rect = New-Object System.Drawing.RectangleF(0, 0, $width, $height)
-            $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
-            $graphics.DrawString("W", $font, $brush, $rect, $format)
-            
-            $outputPath = Join-Path $AssetsDir $file
-            $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
-            
-            $font.Dispose()
-            $brush.Dispose()
-            $format.Dispose()
-            $graphics.Dispose()
-            $bitmap.Dispose()
-            
-            Write-Host "    Created $file ($width x $height)"
-        }
+        & $iconScript
     } catch {
-        Write-Host "  System.Drawing not available, creating minimal PNG files..." -ForegroundColor Yellow
-        
-        # Create minimal valid PNG files (1x1 dark pixel, will be scaled by Windows)
-        # PNG header + IHDR + IDAT + IEND for a 1x1 dark blue pixel
-        $pngData = @(
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  # PNG signature
-            0x00, 0x00, 0x00, 0x0D,                          # IHDR length
-            0x49, 0x48, 0x44, 0x52,                          # "IHDR"
-            0x00, 0x00, 0x00, 0x01,                          # Width: 1
-            0x00, 0x00, 0x00, 0x01,                          # Height: 1
-            0x08, 0x02,                                      # Bit depth: 8, Color type: RGB
-            0x00, 0x00, 0x00,                                # Compression, Filter, Interlace
-            0x90, 0x77, 0x53, 0xDE,                          # IHDR CRC
-            0x00, 0x00, 0x00, 0x0C,                          # IDAT length
-            0x49, 0x44, 0x41, 0x54,                          # "IDAT"
-            0x08, 0xD7, 0x63, 0x18, 0x19, 0x1B, 0x00, 0x00,  # Compressed data (dark pixel)
-            0x00, 0x07, 0x00, 0x01,
-            0x7D, 0x7F, 0xA6, 0x5D,                          # IDAT CRC (approximate)
-            0x00, 0x00, 0x00, 0x00,                          # IEND length
-            0x49, 0x45, 0x4E, 0x44,                          # "IEND"
-            0xAE, 0x42, 0x60, 0x82                           # IEND CRC
-        )
-        
-        $files = @("StoreLogo.png", "Square44x44Logo.png", "Square150x150Logo.png", "Wide310x150Logo.png")
-        foreach ($file in $files) {
-            $outputPath = Join-Path $AssetsDir $file
-            [System.IO.File]::WriteAllBytes($outputPath, [byte[]]$pngData)
-            Write-Host "    Created $file (placeholder)"
-        }
-        
-        Write-Host ""
-        Write-Host "  NOTE: Placeholder icons created. For production, replace with proper icons:" -ForegroundColor Yellow
-        Write-Host "        $AssetsDir" -ForegroundColor Gray
+        Write-Error "Icon generation failed"
+        exit 1
     }
 }
+
+$SourceAssets = Join-Path $MsixDir "Assets"
+if (-not (Test-Path $SourceAssets)) {
+    Write-Error "MSIX icon assets not found at $SourceAssets"
+    exit 1
+}
+Copy-Item "$SourceAssets\*" $AssetsDir -Recurse -Force
 
 # Step 4: Create MSIX package
 Write-Host "`n[4/5] Creating MSIX package..." -ForegroundColor Green

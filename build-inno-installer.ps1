@@ -67,6 +67,18 @@ if (-not (Test-Path $exePath)) {
     }
 }
 
+# Generate icon assets
+$iconScript = Join-Path $PSScriptRoot "generate-icons.ps1"
+if (Test-Path $iconScript) {
+    Write-Host "Generating icon assets..." -ForegroundColor Green
+    try {
+        & $iconScript
+    } catch {
+        Write-Host "Error: Icon generation failed" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Create output directory
 $outputDir = ".\installer\output"
 if (-not (Test-Path $outputDir)) {

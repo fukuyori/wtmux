@@ -99,6 +99,9 @@ copy target\release\wtmux.exe C:\your\bin\path\
 # Windows 10 SDKが必要
 .\build-msix.ps1              # 未署名（開発者モードが必要）
 .\build-msix.ps1 -Sign        # 自己署名（テスト用）
+
+# assets/wtmux-icon.svg を編集した後にアイコン資産を再生成
+.\generate-icons.ps1
 ```
 
 ## 使い方
@@ -366,12 +369,17 @@ wtmux/
 ├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
+├── generate-icons.ps1
+├── assets/
+│   ├── wtmux-icon.svg       # アイコン原本
+│   └── generated/           # 生成済み .ico / プレビュー PNG
 ├── build-portable.ps1
 ├── build-installer.ps1
 ├── build-inno-installer.ps1
 ├── installer/
 │   ├── wtmux.iss          # Inno Setupスクリプト
 │   ├── wtmux.wxs          # WiXスクリプト
+│   ├── msix/Assets/       # MSIX用アイコン資産
 │   └── license.rtf
 └── src/
     ├── main.rs            # エントリーポイント

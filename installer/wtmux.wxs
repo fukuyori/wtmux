@@ -15,6 +15,8 @@
         
         <MajorUpgrade DowngradeErrorMessage="A newer version of wtmux is already installed." />
         <MediaTemplate EmbedCab="yes" />
+        <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\wtmux.ico" />
+        <Property Id="ARPPRODUCTICON" Value="AppIcon" />
         
         <!-- Features -->
         <Feature Id="ProductFeature" Title="wtmux" Level="1">

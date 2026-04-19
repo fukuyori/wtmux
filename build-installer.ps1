@@ -121,6 +121,18 @@ if (-not (Test-Path $exePath)) {
     }
 }
 
+# Generate icon assets
+$iconScript = Join-Path $PSScriptRoot "generate-icons.ps1"
+if (Test-Path $iconScript) {
+    Write-Host "Generating icon assets..." -ForegroundColor Green
+    try {
+        & $iconScript
+    } catch {
+        Write-Host "Error: Icon generation failed" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Create output directory
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir | Out-Null
@@ -137,6 +149,7 @@ New-Item -ItemType Directory -Path $stagingDir | Out-Null
 Write-Host "Copying files to staging..." -ForegroundColor Green
 Copy-Item $exePath "$stagingDir\wtmux.exe"
 Copy-Item ".\installer\license.rtf" "$stagingDir\license.rtf"
+Copy-Item ".\assets\generated\wtmux.ico" "$stagingDir\wtmux.ico"
 
 $msiPath = "$OutputDir\wtmux-$Version-x64.msi"
 
@@ -158,6 +171,8 @@ if ($wixVersion -ge 4) {
         
         <MajorUpgrade DowngradeErrorMessage="A newer version of wtmux is already installed." />
         <MediaTemplate EmbedCab="yes" />
+        <Icon Id="AppIcon" SourceFile="wtmux.ico" />
+        <Property Id="ARPPRODUCTICON" Value="AppIcon" />
         
         <StandardDirectory Id="ProgramFiles64Folder">
             <Directory Id="INSTALLFOLDER" Name="wtmux">

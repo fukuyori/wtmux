@@ -103,6 +103,9 @@ copy target\release\wtmux.exe C:\your\bin\path\
 # Requires Windows 10 SDK
 .\build-msix.ps1              # Unsigned (requires Developer Mode)
 .\build-msix.ps1 -Sign        # Self-signed (for testing)
+
+# Regenerate icon assets after editing assets/wtmux-icon.svg
+.\generate-icons.ps1
 ```
 
 ## Usage
@@ -419,12 +422,17 @@ wtmux/
 ├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
+├── generate-icons.ps1
+├── assets/
+│   ├── wtmux-icon.svg       # Icon source artwork
+│   └── generated/           # Generated .ico / preview PNG
 ├── build-portable.ps1
 ├── build-installer.ps1
 ├── build-inno-installer.ps1
 ├── installer/
 │   ├── wtmux.iss          # Inno Setup script
 │   ├── wtmux.wxs          # WiX script
+│   ├── msix/Assets/       # MSIX icon assets
 │   └── license.rtf
 └── src/
     ├── main.rs            # Entry point
