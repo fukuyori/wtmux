@@ -4,11 +4,11 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.2.8-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-green.svg)](https://github.com/user/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.2.8 Highlights
+## 1.3.0 Highlights
 
 - Faster startup: the command history selector is now loaded on first use (`Ctrl+R`) instead of during startup.
 - Less startup I/O: config/history directories are created only when something is actually written.

@@ -50,6 +50,25 @@ fn char_width(ch: char) -> usize {
     ch.width().unwrap_or(1)
 }
 
+#[inline]
+fn str_display_width(s: &str) -> usize {
+    s.chars().map(char_width).sum()
+}
+
+fn truncate_to_display_width(s: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in s.chars() {
+        let ch_width = char_width(ch);
+        if width + ch_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out
+}
+
 use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
 use crate::config::ColorScheme;
@@ -142,26 +161,6 @@ pub struct WmRenderer {
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
     /// with wrong cell widths.
     pub suppress_bold: bool,
-}
-
-/// Returns true when a grapheme contains at least one character that
-/// might cause cursor drift on the host terminal (Nerd Font PUA range,
-/// emoji, or other ambiguous-width code points).
-///
-/// For these characters wtmux issues a MoveTo before AND after the glyph so
-/// that accumulated cursor drift from font-rendering differences is reset at
-/// every glyph boundary.
-#[inline]
-fn grapheme_may_drift(grapheme: &str) -> bool {
-    grapheme.chars().any(|c| {
-        let cp = c as u32;
-        // Private Use Area — Nerd Font / Powerline glyphs live here
-        (0xE000..=0xF8FF).contains(&cp)
-        || (0xF0000..=0x10FFFF).contains(&cp)
-        // Emoji / Misc Symbols can be double-width in some fonts
-        || (0x1F000..=0x1FFFF).contains(&cp)
-        || (0x2600..=0x27FF).contains(&cp)
-    })
 }
 
 impl WmRenderer {
@@ -959,25 +958,10 @@ impl WmRenderer {
             self.render_border(stdout, pane, y_offset)?;
         }
 
-        // Render content — per-cell absolute positioning
-        //
-        // Each cell is rendered with an explicit MoveTo(inner_x + col_idx, row_y).
-        // This guarantees that regardless of how the HOST terminal renders a given
-        // glyph (e.g. Windows Terminal may render a Nerd Font / Powerline PUA
-        // character at 2 columns even though ConPTY tracks it as 1 column), the
-        // NEXT cell always starts at the correct column.  Without this, cursor
-        // drift accumulates across a row and Powerline segment separators appear
-        // shifted.
-        //
-        // Performance: MoveTo is ~7-10 bytes.  For a 80-column pane with 24 rows
-        // and dirty-line rendering, typical redraws touch only a handful of rows,
-        // so the overhead is negligible in practice.
-        //
-        // Optimisation: consecutive cells with IDENTICAL attributes are flushed as
-        // a single write (batched run), but only when they contain no PUA/wide
-        // characters that could drift the cursor.  Any cell containing a PUA
-        // codepoint (Nerd Font / Powerline range) is always flushed individually
-        // so that the NEXT cell always gets a fresh MoveTo anchor.
+        // Render content as a regular left-to-right line stream and let the host
+        // terminal handle glyph shaping / width. This avoids bespoke per-cell
+        // cursor anchoring, which tended to cause visible flicker and dropped
+        // characters during redraws.
         let mut line_buffer = String::with_capacity(256);
         
         for row_idx in 0..inner_h as usize {
@@ -988,16 +972,16 @@ impl WmRenderer {
 
             let row_y = y_offset + inner_y + row_idx as u16;
             line_buffer.clear();
+            execute!(stdout, MoveTo(inner_x, row_y))?;
 
             let mut current_attrs = CellAttrs::default();
             let mut current_selected = false;
-            let mut run_start_col: usize = 0;
             let mut last_written_col: usize = 0;
 
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
                 None => {
-                    execute!(stdout, MoveTo(inner_x, row_y), ResetColor)?;
+                    execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
                     write!(stdout, "{:width$}", "", width = inner_w as usize)?;
                     continue;
                 }
@@ -1014,57 +998,33 @@ impl WmRenderer {
                 let is_selected = has_selection
                     && pane.session.state.is_selected(col_idx as u16, row_idx as u16);
                 let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
-                let ch = cell.display_char();
-                let may_drift = grapheme_may_drift(ch);
 
-                // Flush the current run if:
-                //   (a) attributes changed, OR
-                //   (b) this cell's glyph may drift the cursor (flush before + after)
-                let flush_needed = (attrs_changed || may_drift) && !line_buffer.is_empty();
-
-                if flush_needed {
-                    execute!(stdout, MoveTo(inner_x + run_start_col as u16, row_y))?;
+                if attrs_changed && !line_buffer.is_empty() {
                     self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
                     write!(stdout, "{}", line_buffer)?;
-                    last_written_col = run_start_col + line_buffer.chars().count();
+                    last_written_col += str_display_width(&line_buffer);
                     line_buffer.clear();
                 }
 
-                if attrs_changed || line_buffer.is_empty() {
+                if attrs_changed {
                     current_attrs = cell.attrs.clone();
                     current_selected = is_selected;
-                    run_start_col = col_idx;
                 }
 
-                if may_drift {
-                    // Write this single drifty cell with its own MoveTo anchor
-                    execute!(stdout, MoveTo(inner_x + col_idx as u16, row_y))?;
-                    self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
-                    write!(stdout, "{}", ch)?;
-                    last_written_col = col_idx + 1;
-                    // Next cell starts a fresh run
-                    run_start_col = col_idx + 1;
-                    line_buffer.clear();
-                } else {
-                    line_buffer.push_str(ch);
-                }
+                line_buffer.push_str(cell.display_char());
             }
 
             // Flush remaining run
             if !line_buffer.is_empty() {
-                execute!(stdout, MoveTo(inner_x + run_start_col as u16, row_y))?;
                 self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
                 write!(stdout, "{}", line_buffer)?;
-                last_written_col = run_start_col + line_buffer.chars().count();
+                last_written_col += str_display_width(&line_buffer);
                 line_buffer.clear();
             }
 
             // Pad remaining columns to clear remnants
             if last_written_col < inner_w as usize {
-                execute!(stdout,
-                    MoveTo(inner_x + last_written_col as u16, row_y),
-                    ResetColor
-                )?;
+                execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
                 write!(stdout, "{:width$}", "", width = inner_w as usize - last_written_col)?;
             }
         }
@@ -1092,13 +1052,9 @@ impl WmRenderer {
         // Title in top border
         let title = pane.display_title();
         let title_space = (pane.width as usize).saturating_sub(4);
-        let display_title: String = if title.len() > title_space {
-            title.chars().take(title_space).collect()
-        } else {
-            title
-        };
+        let display_title = truncate_to_display_width(&title, title_space);
         
-        let remaining = pane.width.saturating_sub(2 + display_title.len() as u16);
+        let remaining = pane.width.saturating_sub(2 + str_display_width(&display_title) as u16);
         let left_pad = remaining / 2;
         let right_pad = remaining - left_pad;
         
@@ -1343,4 +1299,24 @@ impl Drop for WmRenderer {
     fn drop(&mut self) {
         let _ = self.cleanup();
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{char_width, str_display_width, truncate_to_display_width};
+
+    #[test]
+    fn display_width_counts_cjk_as_two_cells() {
+        assert_eq!(char_width('a'), 1);
+        assert_eq!(char_width('日'), 2);
+        assert_eq!(str_display_width("abc日本語"), 9);
+    }
+
+    #[test]
+    fn truncate_to_display_width_respects_wide_chars() {
+        assert_eq!(truncate_to_display_width("abc日本語", 5), "abc日");
+        assert_eq!(truncate_to_display_width("日本語abc", 4), "日本");
+        assert_eq!(truncate_to_display_width("abc", 2), "ab");
+    }
+
 }

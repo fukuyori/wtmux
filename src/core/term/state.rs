@@ -2,6 +2,7 @@
 //!
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
+use super::resize::{reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
 use bitflags::bitflags;
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthChar;
@@ -116,9 +117,62 @@ impl TerminalState {
 
     /// Resize the terminal
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.resize_with_policy(cols, rows, ResizePolicy::LocalReflow);
+    }
+
+    pub fn resize_with_policy(&mut self, cols: u16, rows: u16, policy: ResizePolicy) -> ResizeOutcome {
         self.cols = cols;
         self.rows = rows;
-        self.primary_screen.resize(cols, rows);
+        let mut outcome = ResizeOutcome::default();
+
+        match policy {
+            ResizePolicy::LocalReflow => {
+                let mut primary_anchors = vec![ReflowAnchor {
+                    abs_row: self.primary_screen.scrollback.len() + self.primary_cursor.row as usize,
+                    col: self.primary_cursor.col,
+                }];
+                let prompt_anchor_idx = if let (Some(prompt_row), Some(prompt_col)) = (
+                    self.shell_integration.prompt_end_row,
+                    self.shell_integration.prompt_end_col,
+                ) {
+                    primary_anchors.push(ReflowAnchor {
+                        abs_row: self.primary_screen.scrollback.len() + prompt_row as usize,
+                        col: prompt_col,
+                    });
+                    Some(primary_anchors.len() - 1)
+                } else {
+                    None
+                };
+
+                let primary_plan = reflow_screen(&self.primary_screen, cols, rows, &primary_anchors);
+                let primary_positions = primary_plan.anchor_positions.clone();
+                self.primary_screen.apply_resize_plan(primary_plan, cols, rows);
+
+                if let Some(Some((row, col))) = primary_positions.first() {
+                    self.primary_cursor.row = *row;
+                    self.primary_cursor.col = *col;
+                    outcome.primary_cursor = Some((*row, *col));
+                }
+
+                if let Some(idx) = prompt_anchor_idx {
+                    match primary_positions.get(idx).copied().flatten() {
+                        Some((row, col)) => {
+                            self.shell_integration.prompt_end_row = Some(row);
+                            self.shell_integration.prompt_end_col = Some(col);
+                            outcome.prompt_anchor = Some((row, col));
+                        }
+                        None => {
+                            self.shell_integration.prompt_end_row = None;
+                            self.shell_integration.prompt_end_col = None;
+                        }
+                    }
+                }
+            }
+            ResizePolicy::HostDriven | ResizePolicy::NoReflow => {
+                self.primary_screen.resize(cols, rows);
+            }
+        }
+
         self.alternate_screen.resize(cols, rows);
         self.scroll_region = (0, rows.saturating_sub(1));
 
@@ -130,6 +184,8 @@ impl TerminalState {
         self.primary_cursor.row = self.primary_cursor.row.min(max_row);
         self.alternate_cursor.col = self.alternate_cursor.col.min(max_col);
         self.alternate_cursor.row = self.alternate_cursor.row.min(max_row);
+
+        outcome
     }
 
     /// Put a character at the current cursor position
@@ -756,6 +812,28 @@ impl ScreenBuffer {
         self.mark_all_dirty();
     }
 
+    pub(crate) fn apply_resize_plan(
+        &mut self,
+        mut plan: ScreenResizePlan,
+        new_cols: u16,
+        new_rows: u16,
+    ) {
+        if plan.scrollback.len() > self.scrollback_limit {
+            let overflow = plan.scrollback.len() - self.scrollback_limit;
+            plan.scrollback.drain(..overflow);
+        }
+
+        self.rows = plan.rows;
+        self.scrollback = plan.scrollback;
+        self.scroll_offset = plan.scroll_offset.min(self.scrollback.len());
+        while self.rows.len() < new_rows as usize {
+            self.rows.push(Row::new(new_cols));
+        }
+        self.rows.truncate(new_rows as usize);
+        self.dirty_lines.resize(new_rows as usize, false);
+        self.mark_all_dirty();
+    }
+
     /// Add a row to scrollback when scrolling up
     pub fn push_to_scrollback(&mut self, row: Row) {
         self.scrollback.push_back(row);
@@ -981,7 +1059,7 @@ impl CellAttrs {
 }
 
 /// Color definition
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Color {
     #[default]
     Default,
@@ -1292,5 +1370,135 @@ impl KeystrokeTracker {
     /// Peek at the current buffer without consuming.
     pub fn peek(&self) -> &str {
         self.buf.trim_end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalState;
+
+    fn row_text(state: &TerminalState, row_idx: usize) -> String {
+        let Some(row) = state.active_screen().rows.get(row_idx) else {
+            return String::new();
+        };
+
+        let mut text = String::new();
+        for cell in &row.cells {
+            if cell.is_continuation() {
+                continue;
+            }
+            text.push_str(cell.display_char());
+        }
+        text.trim_end().to_string()
+    }
+
+    fn logical_lines(state: &TerminalState) -> Vec<String> {
+        let screen = state.active_screen();
+        let mut lines = Vec::new();
+        let mut current = String::new();
+
+        for abs_row in 0..screen.total_lines() {
+            let row = screen.get_row_absolute(abs_row).unwrap();
+            for cell in &row.cells {
+                if cell.is_continuation() {
+                    continue;
+                }
+                current.push_str(cell.display_char());
+            }
+
+            if !row.wrapped {
+                lines.push(current.trim_end().to_string());
+                current.clear();
+            }
+        }
+
+        if !current.is_empty() {
+            lines.push(current.trim_end().to_string());
+        }
+
+        lines
+    }
+
+    #[test]
+    fn resize_reflows_back_when_growing() {
+        let mut state = TerminalState::new(10, 4);
+        for ch in "abcdefghijKLM".chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(6, 4);
+        assert_eq!(row_text(&state, 0), "abcdef");
+        assert_eq!(row_text(&state, 1), "ghijKL");
+        assert_eq!(row_text(&state, 2), "M");
+
+        state.resize(10, 4);
+        assert_eq!(row_text(&state, 0), "abcdefghij");
+        assert_eq!(row_text(&state, 1), "KLM");
+    }
+
+    #[test]
+    fn resize_preserves_hard_line_breaks() {
+        let mut state = TerminalState::new(10, 4);
+        for ch in "hello".chars() {
+            state.put_char(ch);
+        }
+        state.carriage_return();
+        state.linefeed();
+        for ch in "world".chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(3, 4);
+        state.resize(10, 4);
+
+        assert_eq!(row_text(&state, 0), "hello");
+        assert_eq!(row_text(&state, 1), "world");
+    }
+
+    #[test]
+    fn resize_preserves_cjk_without_inserting_spaces() {
+        let mut state = TerminalState::new(20, 6);
+        let text = "日本語の幅テストです";
+        for ch in text.chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(9, 6);
+        state.resize(20, 6);
+
+        assert_eq!(row_text(&state, 0), text);
+    }
+
+    #[test]
+    fn resize_preserves_mixed_ascii_and_cjk_line() {
+        let mut state = TerminalState::new(96, 8);
+        let text = "-rw-r--r-- 1 n_fuk users 11021 Apr 21 07:02 キューバのロシア産原油受け入れの背後にあるもの.md";
+        for ch in text.chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(54, 8);
+        state.resize(96, 8);
+
+        assert_eq!(row_text(&state, 0), text);
+    }
+
+    #[test]
+    fn resize_preserves_scrollback_mixed_ascii_and_cjk_line() {
+        let mut state = TerminalState::new(96, 4);
+        let target = "-rw-r--r-- 1 n_fuk users 11021 Apr 21 07:02 キューバのロシア産原油受け入れの背後にあるもの.md";
+
+        for line in ["line1", "line2", target, "line4", "line5", "line6"] {
+            for ch in line.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+
+        state.resize(54, 4);
+        state.resize(96, 4);
+
+        assert!(logical_lines(&state).iter().any(|line| line == target));
     }
 }

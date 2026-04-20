@@ -1,3 +1,17 @@
+## [1.3.0] - 2026-04-21
+
+### Changed
+
+- **Phase 1 resize / reflow refactor started**:
+  resize policy and local reflow logic are now separated so follow-up `1.3.x`
+  work can decouple rendering, logical lines, and host-driven resize handling
+  without re-entangling `TerminalState::resize()`.
+
+- **Planning document added for the `1.3.x` refactor series**:
+  documented the staged resize / rendering refactor plan, with Phase 1
+  implemented in `1.3.0` and later phases intended to proceed based on
+  progress through the `1.3.x` series.
+
 ## [1.2.8] - 2026-04-20
 
 ### Changed

@@ -1,0 +1,247 @@
+use std::collections::VecDeque;
+
+use super::state::{Cell, Row, ScreenBuffer};
+
+// Additional policies are introduced in Phase 1 so later releases can switch
+// resize behavior without re-entangling the implementation.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizePolicy {
+    HostDriven,
+    LocalReflow,
+    NoReflow,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResizeOutcome {
+    pub primary_cursor: Option<(u16, u16)>,
+    pub prompt_anchor: Option<(u16, u16)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReflowAnchor {
+    pub abs_row: usize,
+    pub col: u16,
+}
+
+pub(crate) struct ScreenResizePlan {
+    pub rows: Vec<Row>,
+    pub scrollback: VecDeque<Row>,
+    pub scroll_offset: usize,
+    pub anchor_positions: Vec<Option<(u16, u16)>>,
+}
+
+pub(crate) fn reflow_screen(
+    screen: &ScreenBuffer,
+    new_cols: u16,
+    new_rows: u16,
+    anchors: &[ReflowAnchor],
+) -> ScreenResizePlan {
+    let new_cols = new_cols.max(1);
+    let old_scroll_offset = screen.scroll_offset;
+    let mut anchor_meta: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
+    let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
+    let mut current_line: Vec<Cell> = Vec::new();
+    let mut current_width = 0usize;
+    let max_visible_anchor_row = anchors
+        .iter()
+        .filter_map(|anchor| anchor.abs_row.checked_sub(screen.scrollback.len()))
+        .max();
+    let last_content_row = screen.rows.iter().rposition(row_has_content);
+    let visible_rows_len = last_content_row
+        .into_iter()
+        .chain(max_visible_anchor_row)
+        .max()
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+
+    for (abs_row, row) in screen
+        .scrollback
+        .iter()
+        .chain(screen.rows.iter().take(visible_rows_len))
+        .enumerate()
+    {
+        let mut preserve_until_col = None;
+        for (idx, anchor) in anchors.iter().enumerate() {
+            if anchor.abs_row == abs_row {
+                let offset = current_width + display_offset_before_col(row, anchor.col);
+                anchor_meta[idx] = Some((logical_lines.len(), offset));
+                preserve_until_col =
+                    Some(preserve_until_col.map_or(anchor.col, |col: u16| col.max(anchor.col)));
+            }
+        }
+
+        let extracted = extract_reflow_cells(row, preserve_until_col);
+        current_width += extracted
+            .iter()
+            .map(|cell| cell.width.max(1) as usize)
+            .sum::<usize>();
+        current_line.extend(extracted);
+
+        if !row.wrapped {
+            logical_lines.push(current_line);
+            current_line = Vec::new();
+            current_width = 0;
+        }
+    }
+
+    if !current_line.is_empty() || logical_lines.is_empty() {
+        logical_lines.push(current_line);
+    }
+
+    let mut anchor_positions_abs: Vec<Option<(usize, u16)>> = vec![None; anchors.len()];
+    let mut physical_rows: Vec<Row> = Vec::new();
+
+    for (line_idx, line_cells) in logical_lines.into_iter().enumerate() {
+        let line_start_abs_row = physical_rows.len();
+        let row_start_offsets = append_wrapped_line(&mut physical_rows, line_cells, new_cols);
+
+        for (anchor_idx, meta) in anchor_meta.iter().enumerate() {
+            let Some((anchor_line_idx, anchor_offset)) = meta else {
+                continue;
+            };
+            if *anchor_line_idx != line_idx {
+                continue;
+            }
+
+            let mut row_in_line = 0usize;
+            while row_in_line + 1 < row_start_offsets.len()
+                && row_start_offsets[row_in_line + 1] <= *anchor_offset
+            {
+                row_in_line += 1;
+            }
+
+            let row_start = row_start_offsets[row_in_line];
+            let col = anchor_offset
+                .saturating_sub(row_start)
+                .min(new_cols.saturating_sub(1) as usize) as u16;
+            anchor_positions_abs[anchor_idx] = Some((line_start_abs_row + row_in_line, col));
+        }
+    }
+
+    let total_rows = physical_rows.len();
+    let (scrollback, rows) = if total_rows > new_rows as usize {
+        let split_at = total_rows - new_rows as usize;
+        let visible_rows = physical_rows.split_off(split_at);
+        (physical_rows.into_iter().collect(), visible_rows)
+    } else {
+        let mut rows = physical_rows;
+        while rows.len() < new_rows as usize {
+            rows.push(Row::new(new_cols));
+        }
+        (VecDeque::new(), rows)
+    };
+
+    let visible_start = scrollback.len();
+    let anchor_positions = anchor_positions_abs
+        .into_iter()
+        .map(|pos| {
+            pos.and_then(|(abs_row, col)| {
+                if abs_row < visible_start {
+                    None
+                } else {
+                    Some(((abs_row - visible_start) as u16, col))
+                }
+            })
+        })
+        .collect();
+
+    ScreenResizePlan {
+        rows,
+        scrollback,
+        scroll_offset: old_scroll_offset,
+        anchor_positions,
+    }
+}
+
+fn extract_reflow_cells(row: &Row, preserve_until_col: Option<u16>) -> Vec<Cell> {
+    let mut last_used_col = preserve_until_col.unwrap_or(0) as usize;
+    for (col_idx, cell) in row.cells.iter().enumerate() {
+        if cell.is_continuation() {
+            continue;
+        }
+        if !cell.grapheme.is_empty() {
+            last_used_col = last_used_col.max(col_idx + cell.width.max(1) as usize);
+        }
+    }
+
+    let mut cells = Vec::new();
+    for (col_idx, cell) in row.cells.iter().enumerate() {
+        if col_idx >= last_used_col {
+            break;
+        }
+        if cell.is_continuation() {
+            continue;
+        }
+        cells.push(Cell {
+            grapheme: cell.grapheme.clone(),
+            width: cell.width.max(1),
+            attrs: cell.attrs.clone(),
+        });
+    }
+    cells
+}
+
+fn display_offset_before_col(row: &Row, col: u16) -> usize {
+    let mut offset = 0usize;
+    let target_col = col as usize;
+    for (col_idx, cell) in row.cells.iter().enumerate() {
+        if col_idx >= target_col {
+            break;
+        }
+        if cell.is_continuation() {
+            continue;
+        }
+        offset += cell.width.max(1) as usize;
+    }
+    offset.min(target_col)
+}
+
+fn row_has_content(row: &Row) -> bool {
+    row.wrapped
+        || row
+            .cells
+            .iter()
+            .any(|cell| !cell.is_continuation() && !cell.grapheme.is_empty())
+}
+
+fn append_wrapped_line(rows: &mut Vec<Row>, line_cells: Vec<Cell>, cols: u16) -> Vec<usize> {
+    let cols = cols.max(1);
+    let mut row = Row::new(cols);
+    let mut col_idx = 0usize;
+    let mut offset = 0usize;
+    let mut row_start_offsets = vec![0usize];
+
+    if line_cells.is_empty() {
+        rows.push(row);
+        return row_start_offsets;
+    }
+
+    for cell in line_cells {
+        let cell_width = cell.width.max(1) as usize;
+
+        if col_idx >= cols as usize {
+            row.wrapped = true;
+            rows.push(row);
+            row = Row::new(cols);
+            col_idx = 0;
+            row_start_offsets.push(offset);
+        }
+
+        let attrs = cell.attrs.clone();
+        row.cells[col_idx] = Cell {
+            grapheme: cell.grapheme,
+            width: cell.width.max(1),
+            attrs: attrs.clone(),
+        };
+        if cell_width == 2 && col_idx + 1 < cols as usize {
+            row.cells[col_idx + 1] = Cell::continuation(&attrs);
+        }
+
+        col_idx += cell_width;
+        offset += cell_width;
+    }
+
+    rows.push(row);
+    row_start_offsets
+}
