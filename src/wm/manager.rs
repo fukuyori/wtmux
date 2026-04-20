@@ -721,26 +721,13 @@ impl WindowManager {
             {
                 let screen = pane.session.state.active_screen();
                 let cursor = pane.session.state.active_cursor();
-                if let Some(row_data) = screen.get_row_at(prompt_row as usize) {
-                    let end_col = if cursor.row == prompt_row {
-                        cursor.col as usize
-                    } else {
-                        row_data.cells.len()
-                    };
-                    let mut cmd = String::new();
-                    for cell in row_data.cells
-                        .iter()
-                        .skip(prompt_col as usize)
-                        .take(end_col.saturating_sub(prompt_col as usize))
-                    {
-                        if !cell.is_continuation() {
-                            if cell.grapheme.is_empty() {
-                                cmd.push(' ');
-                            } else {
-                                cmd.push_str(&cell.grapheme);
-                            }
-                        }
-                    }
+                let prompt_abs_row = screen.screen_to_buffer_row(prompt_row as usize);
+                let cursor_abs_row = screen.screen_to_buffer_row(cursor.row as usize);
+                if let Some(_line) = screen.logical_line_at_absolute(prompt_abs_row) {
+                    let cmd = screen.collect_text_between(
+                        (prompt_abs_row, prompt_col as usize),
+                        (cursor_abs_row, cursor.col as usize),
+                    );
                     let trimmed = cmd.trim().to_string();
                     if !trimmed.is_empty() {
                         return Some(trimmed);
@@ -758,17 +745,7 @@ impl WindowManager {
         // ── Priority 4: strip_prompt heuristic (last resort) ──────────────
         let cursor = pane.session.state.active_cursor();
         let screen = pane.session.state.active_screen();
-        let row = screen.get_row_at(cursor.row as usize)?;
-        let mut line = String::new();
-        for cell in &row.cells {
-            if !cell.is_continuation() {
-                if cell.grapheme.is_empty() {
-                    line.push(' ');
-                } else {
-                    line.push_str(&cell.grapheme);
-                }
-            }
-        }
+        let line = screen.logical_line_at_visible(cursor.row as usize)?.text();
         Some(crate::history::strip_prompt(line.trim_end()))
     }
 

@@ -722,42 +722,10 @@ impl TerminalState {
         let (start, end) = self.normalize_selection(sel);
         
         let screen = self.active_screen();
-        let mut result = String::new();
-        
-        for abs_row in start.1..=end.1 {
-            let row = match screen.get_row_absolute(abs_row) {
-                Some(r) => r,
-                None => continue,
-            };
-            
-            let col_start = if abs_row == start.1 { start.0 as usize } else { 0 };
-            let col_end = if abs_row == end.1 { end.0 as usize + 1 } else { row.cells.len() };
-            
-            for col_idx in col_start..col_end.min(row.cells.len()) {
-                let cell = &row.cells[col_idx];
-                if !cell.is_continuation() {
-                    if cell.grapheme.is_empty() {
-                        result.push(' ');
-                    } else {
-                        result.push_str(&cell.grapheme);
-                    }
-                }
-            }
-            
-            // Add newline between rows (but not for wrapped lines)
-            if abs_row < end.1 && !row.wrapped {
-                // Trim trailing spaces from line
-                while result.ends_with(' ') {
-                    result.pop();
-                }
-                result.push('\n');
-            }
-        }
-        
-        // Trim trailing spaces
-        while result.ends_with(' ') {
-            result.pop();
-        }
+        let result = screen.collect_text_between(
+            (start.1, start.0 as usize),
+            (end.1, end.0 as usize),
+        );
         
         if result.is_empty() {
             None
@@ -779,6 +747,36 @@ pub struct ScreenBuffer {
     pub scroll_offset: usize,
     dirty_lines: Vec<bool>,
     pub full_redraw: bool,
+}
+
+pub struct LogicalLineView<'a> {
+    screen: &'a ScreenBuffer,
+    start_abs_row: usize,
+    end_abs_row: usize,
+}
+
+impl<'a> LogicalLineView<'a> {
+    // Phase 2 introduces these accessors ahead of broader call-site migration.
+    #[allow(dead_code)]
+    pub fn start_abs_row(&self) -> usize {
+        self.start_abs_row
+    }
+
+    #[allow(dead_code)]
+    pub fn end_abs_row(&self) -> usize {
+        self.end_abs_row
+    }
+
+    #[allow(dead_code)]
+    pub fn rows(&self) -> impl Iterator<Item = &'a Row> + '_ {
+        (self.start_abs_row..=self.end_abs_row)
+            .filter_map(|abs_row| self.screen.get_row_absolute(abs_row))
+    }
+
+    pub fn text(&self) -> String {
+        self.screen
+            .collect_text_between((self.start_abs_row, 0), (self.end_abs_row, usize::MAX))
+    }
 }
 
 impl ScreenBuffer {
@@ -918,9 +916,98 @@ impl ScreenBuffer {
         start_in_scrollback + visible_row as usize
     }
 
+    pub fn logical_line_bounds(&self, abs_row: usize) -> Option<(usize, usize)> {
+        self.get_row_absolute(abs_row)?;
+
+        let mut start = abs_row;
+        while start > 0 {
+            let prev = self.get_row_absolute(start - 1)?;
+            if !prev.wrapped {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut end = abs_row;
+        while let Some(row) = self.get_row_absolute(end) {
+            if !row.wrapped {
+                break;
+            }
+            end += 1;
+            if self.get_row_absolute(end).is_none() {
+                end -= 1;
+                break;
+            }
+        }
+
+        Some((start, end))
+    }
+
+    pub fn logical_line_at_absolute(&self, abs_row: usize) -> Option<LogicalLineView<'_>> {
+        let (start_abs_row, end_abs_row) = self.logical_line_bounds(abs_row)?;
+        Some(LogicalLineView {
+            screen: self,
+            start_abs_row,
+            end_abs_row,
+        })
+    }
+
+    pub fn logical_line_at_visible(&self, visible_row: usize) -> Option<LogicalLineView<'_>> {
+        let abs_row = self.screen_to_buffer_row(visible_row);
+        self.logical_line_at_absolute(abs_row)
+    }
+
     /// Get line cells at absolute row position
     pub fn get_line_at_absolute(&self, abs_row: usize) -> Option<&Vec<Cell>> {
         self.get_row_absolute(abs_row).map(|r| &r.cells)
+    }
+
+    pub fn collect_text_between(&self, start: (usize, usize), end: (usize, usize)) -> String {
+        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let mut result = String::new();
+        let mut current_row = start.0;
+
+        while current_row <= end.0 {
+            let Some((_, logical_end)) = self.logical_line_bounds(current_row) else {
+                break;
+            };
+            let segment_end = logical_end.min(end.0);
+            let mut chunk = String::new();
+
+            for abs_row in current_row..=segment_end {
+                let Some(row) = self.get_row_absolute(abs_row) else {
+                    continue;
+                };
+                let row_start = if abs_row == current_row {
+                    if abs_row == start.0 { start.1 } else { 0 }
+                } else {
+                    0
+                };
+                let row_end = if abs_row == segment_end {
+                    if abs_row == end.0 {
+                        end.1.saturating_add(1)
+                    } else {
+                        row.cells.len()
+                    }
+                } else {
+                    row.cells.len()
+                };
+                chunk.push_str(&row_text_range(row, row_start, row_end));
+            }
+
+            while chunk.ends_with(' ') {
+                chunk.pop();
+            }
+            result.push_str(&chunk);
+
+            if segment_end < end.0 {
+                result.push('\n');
+            }
+
+            current_row = segment_end.saturating_add(1);
+        }
+
+        result
     }
 
     /// Simple character view of a cell (for searching/copying)
@@ -964,6 +1051,22 @@ impl ScreenBuffer {
         self.dirty_lines.fill(false);
         self.full_redraw = false;
     }
+}
+
+fn row_text_range(row: &Row, start_col: usize, end_col: usize) -> String {
+    let mut text = String::new();
+    for col_idx in start_col..end_col.min(row.cells.len()) {
+        let cell = &row.cells[col_idx];
+        if cell.is_continuation() {
+            continue;
+        }
+        if cell.grapheme.is_empty() {
+            text.push(' ');
+        } else {
+            text.push_str(&cell.grapheme);
+        }
+    }
+    text
 }
 
 /// A single row
@@ -1500,5 +1603,37 @@ mod tests {
         state.resize(96, 4);
 
         assert!(logical_lines(&state).iter().any(|line| line == target));
+    }
+
+    #[test]
+    fn logical_line_view_merges_wrapped_rows() {
+        let mut state = TerminalState::new(6, 4);
+        for ch in "abcdefghi".chars() {
+            state.put_char(ch);
+        }
+
+        let screen = state.active_screen();
+        let logical = screen.logical_line_at_absolute(0).unwrap();
+        assert_eq!(logical.start_abs_row(), 0);
+        assert_eq!(logical.end_abs_row(), 1);
+        assert_eq!(logical.rows().count(), 2);
+        assert_eq!(logical.text(), "abcdefghi");
+    }
+
+    #[test]
+    fn collect_text_between_only_breaks_on_logical_boundaries() {
+        let mut state = TerminalState::new(6, 5);
+        for ch in "abcdefghi".chars() {
+            state.put_char(ch);
+        }
+        state.carriage_return();
+        state.linefeed();
+        for ch in "xyz".chars() {
+            state.put_char(ch);
+        }
+
+        let screen = state.active_screen();
+        assert_eq!(screen.collect_text_between((0, 0), (1, 2)), "abcdefghi");
+        assert_eq!(screen.collect_text_between((0, 0), (2, 2)), "abcdefghi\nxyz");
     }
 }

@@ -1,3 +1,16 @@
+## [1.3.1] - 2026-04-21
+
+### Changed
+
+- **Phase 2 logical-line refactor started**:
+  introduced `LogicalLineView` and logical-line text collection helpers so
+  wrapped physical rows can be read as a single logical line without changing
+  the stored row layout yet.
+
+- **Selection and command extraction now read logical lines**:
+  moved key read paths away from raw physical-row traversal for selection text,
+  shell integration command extraction, and current-line lookup.
+
 ## [1.3.0] - 2026-04-21
 
 ### Changed

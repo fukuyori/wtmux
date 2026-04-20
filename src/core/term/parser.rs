@@ -892,29 +892,17 @@ impl VtParser {
             (cursor.row as usize, 0)
         };
 
-        let Some(row_data) = screen.get_row_at(cmd_row) else {
+        let cmd_abs_row = screen.screen_to_buffer_row(cmd_row);
+        let cursor_abs_row = screen.screen_to_buffer_row(cursor.row as usize);
+
+        let Some(_logical_line) = screen.logical_line_at_absolute(cmd_abs_row) else {
             return String::new();
         };
 
-        // Collect cells from start_col onward, stop at cursor column
-        // (or end of row if cursor has moved to next line)
-        let end_col = if cursor.row as usize == cmd_row {
-            cursor.col as usize
-        } else {
-            row_data.cells.len()
-        };
-
-        let mut cmd = String::new();
-        for cell in row_data.cells.iter().skip(start_col).take(end_col.saturating_sub(start_col)) {
-            if !cell.is_continuation() {
-                if cell.grapheme.is_empty() {
-                    cmd.push(' ');
-                } else {
-                    cmd.push_str(&cell.grapheme);
-                }
-            }
-        }
-        cmd.trim_end().to_string()
+        screen
+            .collect_text_between((cmd_abs_row, start_col), (cursor_abs_row, cursor.col as usize))
+            .trim_end()
+            .to_string()
     }
 }
 
@@ -947,5 +935,17 @@ mod tests {
         }
 
         assert_eq!(state.current_attrs.fg, Color::Indexed(1));
+    }
+
+    #[test]
+    fn extract_command_from_screen_spans_wrapped_rows() {
+        let mut state = TerminalState::new(6, 4);
+        state.shell_integration.on_prompt_end(0, 0);
+        for ch in "abcdefghi".chars() {
+            state.put_char(ch);
+        }
+
+        let command = VtParser::extract_command_from_screen(&state);
+        assert_eq!(command, "abcdefghi");
     }
 }

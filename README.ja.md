@@ -4,11 +4,11 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.0-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.1-green.svg)](https://github.com/user/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.0 の主な変更
+## 1.3.1 の主な変更
 
 - 起動高速化: コマンド履歴セレクタは起動時ではなく、`Ctrl+R` を初めて使った時に読み込まれるようになりました。
 - 起動時 I/O の削減: 設定/履歴ディレクトリは、実際に書き込みが発生する時だけ作成されます。
