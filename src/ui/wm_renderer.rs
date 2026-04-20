@@ -73,6 +73,7 @@ use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
 use crate::config::ColorScheme;
 use crate::copymode::CopyMode;
+use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
 
 /// Begin a render frame (synchronized update, hide cursor, disable autowrap)
@@ -161,6 +162,16 @@ pub struct WmRenderer {
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
     /// with wrong cell widths.
     pub suppress_bold: bool,
+}
+
+#[derive(Clone, PartialEq)]
+enum RenderRowStyle {
+    Cell {
+        attrs: CellAttrs,
+        selected: bool,
+    },
+    SearchMatch,
+    CurrentMatch,
 }
 
 impl WmRenderer {
@@ -371,7 +382,6 @@ impl WmRenderer {
 
     /// Render pane content in copy mode with selection/search highlighting
     fn render_pane_with_copy_mode<W: Write>(&self, stdout: &mut W, wm: &WindowManager, copy_mode: &CopyMode) -> io::Result<()> {
-        let cs = &self.color_scheme;
         let tab = match wm.active_tab() {
             Some(t) => t,
             None => return Ok(()),
@@ -403,73 +413,22 @@ impl WmRenderer {
             execute!(stdout, MoveTo(inner_x, screen_y))?;
             
             if let Some(line) = screen.get_line_at_absolute(abs_row) {
-                let mut line_buffer = String::with_capacity(256);
-                let mut last_style: Option<(bool, bool, bool)> = None; // (selected, current_match, search_match)
-                
-                for (cell_idx, cell) in line.iter().enumerate() {
-                    if cell_idx >= render_w {
-                        break;
-                    }
-                    
-                    // Skip continuation cells
-                    if cell.width == 0 {
-                        continue;
-                    }
-                    
+                let render_row = RenderRow::new(line, render_w);
+                self.render_cells(stdout, render_row, render_w, |cell_idx, cell| {
                     let cell_col = cell_idx as u16;
-                    
-                    // Check highlighting
-                    let is_selected = copy_mode.is_selected(abs_row, cell_col);
-                    let is_current_match = copy_mode.is_current_match(abs_row, cell_col);
-                    let is_search_match = copy_mode.is_search_match(abs_row, cell_col);
-                    
-                    let current_style = (is_selected, is_current_match, is_search_match);
-                    
-                    // Check if style changed
-                    if last_style != Some(current_style) {
-                        // Flush buffer
-                        if !line_buffer.is_empty() {
-                            write!(stdout, "{}", line_buffer)?;
-                            line_buffer.clear();
+                    if copy_mode.is_current_match(abs_row, cell_col) {
+                        RenderRowStyle::CurrentMatch
+                    } else if copy_mode.is_search_match(abs_row, cell_col) {
+                        RenderRowStyle::SearchMatch
+                    } else {
+                        RenderRowStyle::Cell {
+                            attrs: cell.attrs.clone(),
+                            selected: copy_mode.is_selected(abs_row, cell_col),
                         }
-                        
-                        // Apply new style
-                        if is_current_match {
-                            execute!(stdout, 
-                                SetBackgroundColor(CtColor::Yellow),
-                                SetForegroundColor(CtColor::Black)
-                            )?;
-                        } else if is_search_match {
-                            execute!(stdout,
-                                SetBackgroundColor(CtColor::DarkYellow),
-                                SetForegroundColor(CtColor::Black)
-                            )?;
-                        } else if is_selected {
-                            execute!(stdout,
-                                SetBackgroundColor(cs.selection_bg.to_crossterm()),
-                                SetForegroundColor(cs.selection_fg.to_crossterm())
-                            )?;
-                        } else {
-                            self.apply_attrs_with_selection(stdout, &cell.attrs, false)?;
-                        }
-                        
-                        last_style = Some(current_style);
                     }
-                    
-                    line_buffer.push_str(cell.display_char());
-                }
-                
-                // Flush remaining
-                if !line_buffer.is_empty() {
-                    write!(stdout, "{}", line_buffer)?;
-                }
-                
-                // Clear rest of line
-                execute!(stdout, ResetColor)?;
+                })?;
             } else {
-                // Empty line
-                execute!(stdout, ResetColor)?;
-                write!(stdout, "{:width$}", "", width = inner_w as usize)?;
+                self.clear_row(stdout, inner_w as usize)?;
             }
         }
 
@@ -962,7 +921,7 @@ impl WmRenderer {
         // terminal handle glyph shaping / width. This avoids bespoke per-cell
         // cursor anchoring, which tended to cause visible flicker and dropped
         // characters during redraws.
-        let mut line_buffer = String::with_capacity(256);
+        let render_width = session_cols.min(inner_w as usize);
         
         for row_idx in 0..inner_h as usize {
             // --- Dirty line skip ---
@@ -971,65 +930,81 @@ impl WmRenderer {
             }
 
             let row_y = y_offset + inner_y + row_idx as u16;
-            line_buffer.clear();
             execute!(stdout, MoveTo(inner_x, row_y))?;
-
-            let mut current_attrs = CellAttrs::default();
-            let mut current_selected = false;
-            let mut last_written_col: usize = 0;
 
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
                 None => {
-                    execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
-                    write!(stdout, "{:width$}", "", width = inner_w as usize)?;
+                    self.clear_row(stdout, inner_w as usize)?;
                     continue;
                 }
             };
 
-            for (col_idx, cell) in row.cells.iter().enumerate() {
-                if col_idx >= session_cols || col_idx >= inner_w as usize {
-                    break;
-                }
-                if cell.is_continuation() {
-                    continue;
-                }
-
-                let is_selected = has_selection
-                    && pane.session.state.is_selected(col_idx as u16, row_idx as u16);
-                let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
-
-                if attrs_changed && !line_buffer.is_empty() {
-                    self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
-                    write!(stdout, "{}", line_buffer)?;
-                    last_written_col += str_display_width(&line_buffer);
-                    line_buffer.clear();
-                }
-
-                if attrs_changed {
-                    current_attrs = cell.attrs.clone();
-                    current_selected = is_selected;
-                }
-
-                line_buffer.push_str(cell.display_char());
-            }
-
-            // Flush remaining run
-            if !line_buffer.is_empty() {
-                self.apply_attrs_with_selection(stdout, &current_attrs, current_selected)?;
-                write!(stdout, "{}", line_buffer)?;
-                last_written_col += str_display_width(&line_buffer);
-                line_buffer.clear();
-            }
-
-            // Pad remaining columns to clear remnants
-            if last_written_col < inner_w as usize {
-                execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
-                write!(stdout, "{:width$}", "", width = inner_w as usize - last_written_col)?;
-            }
+            let render_row = RenderRow::new(&row.cells, render_width);
+            self.render_cells(stdout, render_row, inner_w as usize, |col_idx, cell| RenderRowStyle::Cell {
+                attrs: cell.attrs.clone(),
+                selected: has_selection
+                    && pane.session.state.is_selected(col_idx as u16, row_idx as u16),
+            })?;
         }
 
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
+        Ok(())
+    }
+
+    fn render_cells<W, F>(
+        &self,
+        stdout: &mut W,
+        row: RenderRow<'_>,
+        clear_width: usize,
+        mut style_for: F,
+    ) -> io::Result<()>
+    where
+        W: Write,
+        F: FnMut(usize, &crate::core::term::Cell) -> RenderRowStyle,
+    {
+        let rendered_width = render_row_stream(stdout, row, |col_idx, cell| style_for(col_idx, cell), |stdout, style| {
+            self.apply_render_row_style(stdout, style)
+        })?;
+
+        if rendered_width < clear_width {
+            self.clear_row_tail(stdout, clear_width - rendered_width)?;
+        }
+
+        Ok(())
+    }
+
+    fn apply_render_row_style<W: Write>(
+        &self,
+        stdout: &mut W,
+        style: &RenderRowStyle,
+    ) -> io::Result<()> {
+        match style {
+            RenderRowStyle::Cell { attrs, selected } => {
+                self.apply_attrs_with_selection(stdout, attrs, *selected)
+            }
+            RenderRowStyle::SearchMatch => execute!(
+                stdout,
+                SetBackgroundColor(CtColor::DarkYellow),
+                SetForegroundColor(CtColor::Black)
+            ),
+            RenderRowStyle::CurrentMatch => execute!(
+                stdout,
+                SetBackgroundColor(CtColor::Yellow),
+                SetForegroundColor(CtColor::Black)
+            ),
+        }
+    }
+
+    fn clear_row<W: Write>(&self, stdout: &mut W, width: usize) -> io::Result<()> {
+        self.clear_row_tail(stdout, width)
+    }
+
+    fn clear_row_tail<W: Write>(&self, stdout: &mut W, width: usize) -> io::Result<()> {
+        execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
+        if width > 0 {
+            write!(stdout, "{:width$}", "", width = width)?;
+        }
         Ok(())
     }
 

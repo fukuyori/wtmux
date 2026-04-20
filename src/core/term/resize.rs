@@ -39,6 +39,7 @@ pub(crate) fn reflow_screen(
 ) -> ScreenResizePlan {
     let new_cols = new_cols.max(1);
     let old_scroll_offset = screen.scroll_offset;
+    let old_visible_start = (old_scroll_offset > 0).then(|| screen.screen_to_buffer_row(0));
     let mut anchor_meta: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
     let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
     let mut current_line: Vec<Cell> = Vec::new();
@@ -146,10 +147,14 @@ pub(crate) fn reflow_screen(
         })
         .collect();
 
+    let new_scrollback_len = scrollback.len();
+
     ScreenResizePlan {
         rows,
         scrollback,
-        scroll_offset: old_scroll_offset,
+        scroll_offset: old_visible_start.map_or(old_scroll_offset, |visible_start| {
+            new_scrollback_len.saturating_sub(visible_start.min(new_scrollback_len))
+        }),
         anchor_positions,
     }
 }

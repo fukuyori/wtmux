@@ -14,6 +14,7 @@ use crossterm::{
 };
 
 use crate::core::term::{AttrFlags, CellAttrs, TerminalState};
+use super::row_stream::{render_row_stream, RenderRow};
 
 /// A cell for the render buffer used for diff rendering.
 #[derive(Clone, PartialEq)]
@@ -374,21 +375,16 @@ impl Renderer {
     fn render_full<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let num_rows = state.rows as usize;
-        let num_cols = state.cols as u16;
+        let num_cols = state.cols as usize;
         let has_selection = state.selection.is_some();
 
         // Hide cursor during rendering
         execute!(stdout, Hide)?;
 
-        let mut current_attrs = CellAttrs::default();
-        let mut current_selected = false;
-        let mut line_buffer = String::with_capacity(256);
-
         for row_idx in 0..num_rows {
             // Move to line start and clear line
             execute!(stdout, MoveTo(0, row_idx as u16))?;
             write!(stdout, "\x1b[K")?; // Clear to end of line
-            line_buffer.clear();
 
             // Get row accounting for scroll offset
             let row = match screen.get_row_at(row_idx) {
@@ -396,49 +392,13 @@ impl Renderer {
                 None => continue,
             };
 
-            let mut col_idx: u16 = 0;
-            for cell in &row.cells {
-                if col_idx >= num_cols {
-                    break;
-                }
-                
-                // Skip continuation cells (placeholders for wide characters)
-                if cell.is_continuation() {
-                    col_idx += 1;
-                    continue;
-                }
-
-                // Check if this cell is selected
-                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
-                
-                // Check if we need to flush and change attributes
-                let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
-                
-                if attrs_changed && !line_buffer.is_empty() {
-                    // Apply current attributes and flush buffer
-                    self.apply_attrs(stdout, &current_attrs, current_selected)?;
-                    write!(stdout, "{}", line_buffer)?;
-                    line_buffer.clear();
-                }
-                
-                if attrs_changed {
-                    current_attrs = cell.attrs.clone();
-                    current_selected = is_selected;
-                }
-
-                // Add character to buffer
-                line_buffer.push_str(cell.display_char());
-                
-                // Advance column by actual cell width
-                col_idx += cell.width.max(1) as u16;
-            }
-
-            // Flush remaining text for this line
-            if !line_buffer.is_empty() {
-                self.apply_attrs(stdout, &current_attrs, current_selected)?;
-                write!(stdout, "{}", line_buffer)?;
-                line_buffer.clear();
-            }
+            let render_row = RenderRow::new(&row.cells, num_cols);
+            self.render_line_stream(stdout, render_row, |col_idx, cell| {
+                (
+                    cell.attrs.clone(),
+                    has_selection && state.is_selected(col_idx as u16, row_idx as u16),
+                )
+            })?;
         }
 
         // Show scroll indicator if scrolled
@@ -458,13 +418,9 @@ impl Renderer {
     fn render_dirty<W: Write>(&self, stdout: &mut W, state: &TerminalState) -> io::Result<()> {
         let screen = state.active_screen();
         let has_selection = state.selection.is_some();
-        let num_cols = state.cols as u16;
+        let num_cols = state.cols as usize;
 
         execute!(stdout, Hide)?;
-
-        let mut current_attrs;
-        let mut current_selected;
-        let mut line_buffer = String::with_capacity(256);
 
         for row_idx in screen.dirty_line_indices() {
             // Get row accounting for scroll offset
@@ -476,48 +432,28 @@ impl Renderer {
             // Move to line start and clear to end of line
             execute!(stdout, MoveTo(0, row_idx as u16))?;
             write!(stdout, "\x1b[K")?; // Clear to end of line
-            line_buffer.clear();
-            current_attrs = CellAttrs::default();
-            current_selected = false;
-
-            let mut col_idx: u16 = 0;
-            for cell in &row.cells {
-                if col_idx >= num_cols {
-                    break;
-                }
-                
-                if cell.is_continuation() {
-                    col_idx += 1;
-                    continue;
-                }
-
-                let is_selected = has_selection && state.is_selected(col_idx, row_idx as u16);
-                let attrs_changed = cell.attrs != current_attrs || is_selected != current_selected;
-                
-                if attrs_changed && !line_buffer.is_empty() {
-                    self.apply_attrs(stdout, &current_attrs, current_selected)?;
-                    write!(stdout, "{}", line_buffer)?;
-                    line_buffer.clear();
-                }
-                
-                if attrs_changed {
-                    current_attrs = cell.attrs.clone();
-                    current_selected = is_selected;
-                }
-
-                line_buffer.push_str(cell.display_char());
-                col_idx += cell.width.max(1) as u16;
-            }
-
-            if !line_buffer.is_empty() {
-                self.apply_attrs(stdout, &current_attrs, current_selected)?;
-                write!(stdout, "{}", line_buffer)?;
-                line_buffer.clear();
-            }
+            let render_row = RenderRow::new(&row.cells, num_cols);
+            self.render_line_stream(stdout, render_row, |col_idx, cell| {
+                (
+                    cell.attrs.clone(),
+                    has_selection && state.is_selected(col_idx as u16, row_idx as u16),
+                )
+            })?;
         }
 
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
 
+        Ok(())
+    }
+
+    fn render_line_stream<W, F>(&self, stdout: &mut W, row: RenderRow<'_>, mut style_for: F) -> io::Result<()>
+    where
+        W: Write,
+        F: FnMut(usize, &crate::core::term::Cell) -> (CellAttrs, bool),
+    {
+        render_row_stream(stdout, row, |col_idx, cell| style_for(col_idx, cell), |stdout, (attrs, selected)| {
+            self.apply_attrs(stdout, attrs, *selected)
+        })?;
         Ok(())
     }
 

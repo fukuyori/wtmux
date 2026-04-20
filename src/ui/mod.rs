@@ -13,6 +13,7 @@
 //! - **Multi-pane mode**: Full tmux-like UI (uses `WmRenderer`)
 
 pub mod keymapper;
+mod row_stream;
 pub mod renderer;
 pub mod wm_renderer;
 pub mod context_menu;

@@ -1522,6 +1522,21 @@ mod tests {
         lines
     }
 
+    fn visible_row_text(state: &TerminalState, row_idx: usize) -> String {
+        let Some(row) = state.active_screen().get_row_at(row_idx) else {
+            return String::new();
+        };
+
+        let mut text = String::new();
+        for cell in &row.cells {
+            if cell.is_continuation() {
+                continue;
+            }
+            text.push_str(cell.display_char());
+        }
+        text.trim_end().to_string()
+    }
+
     #[test]
     fn resize_reflows_back_when_growing() {
         let mut state = TerminalState::new(10, 4);
@@ -1635,5 +1650,45 @@ mod tests {
         let screen = state.active_screen();
         assert_eq!(screen.collect_text_between((0, 0), (1, 2)), "abcdefghi");
         assert_eq!(screen.collect_text_between((0, 0), (2, 2)), "abcdefghi\nxyz");
+    }
+
+    #[test]
+    fn resize_preserves_scrolled_view_anchor() {
+        let mut state = TerminalState::new(8, 4);
+
+        for line in ["line01", "line02", "line03", "line04", "line05", "line06", "line07"] {
+            for ch in line.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+
+        state.primary_screen.scroll_view_up(2);
+        let top_before = visible_row_text(&state, 0);
+
+        state.resize(12, 6);
+
+        assert_eq!(visible_row_text(&state, 0), top_before);
+    }
+
+    #[test]
+    fn resize_keeps_scrollback_reachable() {
+        let mut state = TerminalState::new(8, 4);
+
+        for idx in 1..=12 {
+            let line = format!("l{idx:02}");
+            for ch in line.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+
+        state.resize(12, 6);
+        state.primary_screen.scroll_view_up(usize::MAX);
+
+        assert!(state.primary_screen.is_scrolled());
+        assert_eq!(visible_row_text(&state, 0), "l01");
     }
 }
