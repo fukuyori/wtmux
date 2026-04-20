@@ -2,7 +2,7 @@
 //!
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
-use super::resize::{reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
+use super::resize::{host_resize_screen, reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
 use bitflags::bitflags;
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthChar;
@@ -116,6 +116,7 @@ impl TerminalState {
     }
 
     /// Resize the terminal
+    #[allow(dead_code)]
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.resize_with_policy(cols, rows, ResizePolicy::LocalReflow);
     }
@@ -169,7 +170,8 @@ impl TerminalState {
                 }
             }
             ResizePolicy::HostDriven | ResizePolicy::NoReflow => {
-                self.primary_screen.resize(cols, rows);
+                let primary_plan = host_resize_screen(&self.primary_screen, cols, rows);
+                self.primary_screen.apply_resize_plan(primary_plan, cols, rows);
             }
         }
 
@@ -1070,6 +1072,7 @@ fn row_text_range(row: &Row, start_col: usize, end_col: usize) -> String {
 }
 
 /// A single row
+#[derive(Clone)]
 pub struct Row {
     pub cells: Vec<Cell>,
     pub wrapped: bool,
@@ -1479,6 +1482,7 @@ impl KeystrokeTracker {
 #[cfg(test)]
 mod tests {
     use super::TerminalState;
+    use crate::core::term::resize::ResizePolicy;
 
     fn row_text(state: &TerminalState, row_idx: usize) -> String {
         let Some(row) = state.active_screen().rows.get(row_idx) else {
@@ -1689,6 +1693,47 @@ mod tests {
         state.primary_screen.scroll_view_up(usize::MAX);
 
         assert!(state.primary_screen.is_scrolled());
+        assert_eq!(visible_row_text(&state, 0), "l01");
+    }
+
+    #[test]
+    fn host_driven_resize_preserves_scrolled_view_anchor() {
+        let mut state = TerminalState::new(8, 4);
+
+        for line in ["line01", "line02", "line03", "line04", "line05", "line06", "line07"] {
+            for ch in line.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+
+        state.primary_screen.scroll_view_up(2);
+        let top_before = visible_row_text(&state, 0);
+
+        state.resize_with_policy(12, 6, ResizePolicy::HostDriven);
+
+        assert_eq!(visible_row_text(&state, 0), top_before);
+    }
+
+    #[test]
+    fn host_driven_resize_preserves_total_line_count() {
+        let mut state = TerminalState::new(8, 4);
+
+        for idx in 1..=12 {
+            let line = format!("l{idx:02}");
+            for ch in line.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+
+        let total_before = state.primary_screen.total_lines();
+        state.resize_with_policy(12, 6, ResizePolicy::HostDriven);
+
+        assert_eq!(state.primary_screen.total_lines(), total_before);
+        state.primary_screen.scroll_view_up(usize::MAX);
         assert_eq!(visible_row_text(&state, 0), "l01");
     }
 }

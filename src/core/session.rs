@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use super::pty::{ConPty, PtyError};
+use super::term::resize::DEFAULT_SESSION_RESIZE_POLICY;
 use super::term::{Response, TerminalState, VtParser};
 
 /// Session events
@@ -336,20 +337,22 @@ impl Session {
     /// Resize the terminal
     #[cfg(windows)]
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        // Resize terminal state
-        self.state.resize(cols, rows);
-
-        // Resize PTY
+        // Let ConPTY / the host terminal recalculate wrapping first, then
+        // update our local state using the selected resize policy.
         if let Some(pty) = &self.pty {
             pty.resize_pty(cols, rows)?;
         }
+
+        self.state
+            .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
 
         Ok(())
     }
 
     #[cfg(not(windows))]
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
-        self.state.resize(cols, rows);
+        self.state
+            .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
         Ok(())
     }
 

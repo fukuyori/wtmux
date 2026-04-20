@@ -1,6 +1,16 @@
-## [1.3.1] - 2026-04-21
+## [1.3.4] - 2026-04-21
 
 ### Changed
+
+- **Phase 4 resize policy work started**:
+  the runtime `Session::resize()` path now uses an explicit resize policy, and
+  Windows defaults to `HostDriven` ordering so ConPTY / the host terminal can
+  recalculate wrapping before wtmux updates its local screen state.
+
+- **Host-driven resize preserves scrollback navigation**:
+  added host-driven resize planning that keeps total line count and the
+  scrolled-view anchor stable across resize, so scrollback remains reachable
+  after a window size change.
 
 - **Phase 2 logical-line refactor started**:
   introduced `LogicalLineView` and logical-line text collection helpers so

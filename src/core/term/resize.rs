@@ -31,6 +31,12 @@ pub(crate) struct ScreenResizePlan {
     pub anchor_positions: Vec<Option<(u16, u16)>>,
 }
 
+#[cfg(windows)]
+pub const DEFAULT_SESSION_RESIZE_POLICY: ResizePolicy = ResizePolicy::HostDriven;
+
+#[cfg(not(windows))]
+pub const DEFAULT_SESSION_RESIZE_POLICY: ResizePolicy = ResizePolicy::LocalReflow;
+
 pub(crate) fn reflow_screen(
     screen: &ScreenBuffer,
     new_cols: u16,
@@ -152,11 +158,66 @@ pub(crate) fn reflow_screen(
     ScreenResizePlan {
         rows,
         scrollback,
-        scroll_offset: old_visible_start.map_or(old_scroll_offset, |visible_start| {
-            new_scrollback_len.saturating_sub(visible_start.min(new_scrollback_len))
-        }),
+        scroll_offset: remap_scroll_offset(old_scroll_offset, old_visible_start, new_scrollback_len),
         anchor_positions,
     }
+}
+
+pub(crate) fn host_resize_screen(
+    screen: &ScreenBuffer,
+    new_cols: u16,
+    new_rows: u16,
+) -> ScreenResizePlan {
+    let old_scroll_offset = screen.scroll_offset;
+    let old_visible_start = (old_scroll_offset > 0).then(|| screen.screen_to_buffer_row(0));
+    let new_cols = new_cols.max(1);
+    let new_rows = new_rows.max(1);
+
+    let mut physical_rows: Vec<Row> = screen
+        .scrollback
+        .iter()
+        .chain(screen.rows.iter())
+        .cloned()
+        .collect();
+
+    let total_rows = physical_rows.len();
+    let (mut scrollback, mut rows) = if total_rows > new_rows as usize {
+        let split_at = total_rows - new_rows as usize;
+        let visible_rows = physical_rows.split_off(split_at);
+        (physical_rows.into_iter().collect(), visible_rows)
+    } else {
+        let mut rows = physical_rows;
+        while rows.len() < new_rows as usize {
+            rows.push(Row::new(new_cols));
+        }
+        (VecDeque::new(), rows)
+    };
+
+    for row in &mut scrollback {
+        row.resize(new_cols);
+    }
+    for row in &mut rows {
+        row.resize(new_cols);
+    }
+
+    let new_scrollback_len = scrollback.len();
+
+    ScreenResizePlan {
+        rows,
+        scrollback,
+        scroll_offset: remap_scroll_offset(old_scroll_offset, old_visible_start, new_scrollback_len),
+        anchor_positions: Vec::new(),
+    }
+}
+
+fn remap_scroll_offset(
+    old_scroll_offset: usize,
+    old_visible_start: Option<usize>,
+    new_scrollback_len: usize,
+) -> usize {
+    old_visible_start.map_or(old_scroll_offset, |visible_start| {
+        new_scrollback_len.saturating_sub(visible_start.min(new_scrollback_len))
+    })
 }
 
 fn extract_reflow_cells(row: &Row, preserve_until_col: Option<u16>) -> Vec<Cell> {

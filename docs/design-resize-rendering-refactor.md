@@ -242,6 +242,16 @@ pub struct ResizeOutcome {
 
 最終的には `HostDriven` を主設計に寄せる。
 
+### 現在の適用状況
+
+- `1.3.4` 時点で、Windows の通常 `Session::resize()` 経路は `HostDriven` を既定とする
+- 具体的には `PTY resize -> local state update` の順に寄せる
+- `TerminalState::resize()` は引き続き `LocalReflow` の入口として残し、テストや比較検証に使えるようにする
+- scrollback / scrolled view の位置は、resize 前に見ていた absolute row を基準に保つ
+
+この段階では「すべての resize 実装を HostDriven に統一した」わけではなく、
+通常経路の責任主体を先に固定した段階と位置付ける。
+
 ## 実施順序
 
 最小リスクの順番は以下。
@@ -277,6 +287,11 @@ pub struct ResizeOutcome {
 
 - resize 方針を `HostDriven` ベースへ統一
 - `1.3` 系の最終到達点
+
+現状メモ:
+
+- `Session::resize()` の通常経路は HostDriven へ着手済み
+- 今後は residual な `LocalReflow` 前提箇所の整理と、必要に応じた fallback の境界整理を進める
 
 ## リスク
 

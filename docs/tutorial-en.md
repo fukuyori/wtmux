@@ -6,7 +6,7 @@ For developers who work in Linux or macOS terminals, **tmux** is an indispensabl
 
 **wtmux** is a terminal multiplexer developed to bring the tmux experience to Windows. Written in Rust, it leverages Windows 10's ConPTY (Console Pseudo Terminal) to provide a native Windows experience.
 
-As of `1.3.1`, startup is a bit lighter: command history is loaded lazily on first use (`Ctrl+R`), and config/history directories are created only when wtmux actually needs to write data.
+As of `1.3.4`, startup is a bit lighter: command history is loaded lazily on first use (`Ctrl+R`), and config/history directories are created only when wtmux actually needs to write data.
 
 ### Key Features
 
@@ -357,7 +357,7 @@ color_scheme = "tokyo-night"
 
 wtmux includes its own command history feature, separate from your shell's built-in history. It records the commands you enter, eliminating the need to retype complex commands repeatedly.
 
-In `1.3.1`, the history selector is initialized lazily, so simply launching wtmux no longer loads the history file until you first press `Ctrl+R`.
+In `1.3.4`, the history selector is initialized lazily, so simply launching wtmux no longer loads the history file until you first press `Ctrl+R`.
 
 | Key | Action |
 |-----|--------|
