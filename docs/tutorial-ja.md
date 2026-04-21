@@ -24,20 +24,20 @@ Linuxやmacでターミナル作業をする人にとって、**tmux**は欠か�
 
 ### 方法1: ポータブル版（推奨）
 
-1. [Releases](https://github.com/user/wtmux/releases)ページから`wtmux-x.x.x-portable-x64.zip`をダウンロード
+1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-portable-x64.zip`をダウンロード
 2. 任意のフォルダに展開
 3. `wtmux.exe`を実行
 
 ### 方法2: インストーラー
 
-1. [Releases](https://github.com/user/wtmux/releases)ページから`wtmux-x.x.x-setup.exe`をダウンロード
+1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-setup.exe`をダウンロード
 2. インストーラーを実行
 3. コマンドプロンプトまたはPowerShellで`wtmux`を実行
 
 ### 方法3: ソースからビルド
 
 ```powershell
-git clone https://github.com/user/wtmux.git
+git clone https://github.com/fukuyori/wtmux.git
 cd wtmux
 cargo build --release
 .\target\release\wtmux.exe
@@ -525,6 +525,6 @@ wtmuxを使えば、Windowsでもtmuxライクなターミナル作業が可能�
 
 ## リンク
 
-- **GitHub**: https://github.com/user/wtmux
-- **Releases**: https://github.com/user/wtmux/releases
-- **Issue報告**: https://github.com/user/wtmux/issues
+- **GitHub**: https://github.com/fukuyori/wtmux
+- **Releases**: https://github.com/fukuyori/wtmux/releases
+- **Issue報告**: https://github.com/fukuyori/wtmux/issues

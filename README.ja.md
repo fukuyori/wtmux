@@ -4,7 +4,7 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.4-green.svg)](https://github.com/user/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -52,7 +52,7 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 ### 方法1: リリース版をダウンロード
 
-[Releases](https://github.com/user/wtmux/releases) ページからダウンロード：
+[Releases](https://github.com/fukuyori/wtmux/releases) ページからダウンロード：
 
 - **インストーラー** (`wtmux-x.x.x-setup.exe`) - 一般ユーザー向け推奨
 - **ポータブル版** (`wtmux-x.x.x-portable-x64.zip`) - インストール不要、展開して実行するだけ
@@ -72,7 +72,7 @@ cargo build --release
 ### 方法3: ソースからビルド
 
 ```bash
-git clone https://github.com/user/wtmux.git
+git clone https://github.com/fukuyori/wtmux.git
 cd wtmux
 cargo build --release
 

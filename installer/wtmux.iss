@@ -4,7 +4,7 @@
 #define MyAppName "wtmux"
 #define MyAppVersion "1.3.4"
 #define MyAppPublisher "wtmux"
-#define MyAppURL "https://github.com/user/wtmux"
+#define MyAppURL "https://github.com/fukuyori/wtmux"
 #define MyAppExeName "wtmux.exe"
 
 [Setup]

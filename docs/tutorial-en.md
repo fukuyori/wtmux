@@ -24,20 +24,20 @@ As of `1.3.4`, startup is a bit lighter: command history is loaded lazily on fir
 
 ### Option 1: Portable Version (Recommended)
 
-1. Download `wtmux-x.x.x-portable-x64.zip` from the [Releases](https://github.com/user/wtmux/releases) page
+1. Download `wtmux-x.x.x-portable-x64.zip` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
 2. Extract to any folder
 3. Run `wtmux.exe`
 
 ### Option 2: Installer
 
-1. Download `wtmux-x.x.x-setup.exe` from the [Releases](https://github.com/user/wtmux/releases) page
+1. Download `wtmux-x.x.x-setup.exe` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
 2. Run the installer
 3. Run `wtmux` from Command Prompt or PowerShell
 
 ### Option 3: Build from Source
 
 ```powershell
-git clone https://github.com/user/wtmux.git
+git clone https://github.com/fukuyori/wtmux.git
 cd wtmux
 cargo build --release
 .\target\release\wtmux.exe
@@ -525,6 +525,6 @@ Start using wtmux in your daily development workflow today!
 
 ## Links
 
-- **GitHub**: https://github.com/user/wtmux
-- **Releases**: https://github.com/user/wtmux/releases
-- **Issues**: https://github.com/user/wtmux/issues
+- **GitHub**: https://github.com/fukuyori/wtmux
+- **Releases**: https://github.com/fukuyori/wtmux/releases
+- **Issues**: https://github.com/fukuyori/wtmux/issues
