@@ -101,7 +101,7 @@ impl ContextMenu {
     /// Creates a new context menu with default menu items.
     ///
     /// The default menu includes:
-    /// - Paste (Ctrl+V)
+    /// - Paste
     /// - Zoom/Unzoom (z)
     /// - Split ─ (") - horizontal split
     /// - Split │ (%) - vertical split
@@ -115,7 +115,7 @@ impl ContextMenu {
             y: 0,
             selected: 0,
             items: vec![
-                MenuItem::new("Paste", ContextMenuAction::Paste, Some("Ctrl+V")),
+                MenuItem::new("Paste", ContextMenuAction::Paste, None),
                 MenuItem::new("Zoom/Unzoom", ContextMenuAction::ToggleZoom, Some("z")),
                 MenuItem::new("Split ─", ContextMenuAction::SplitVertical, Some("\"")),
                 MenuItem::new("Split │", ContextMenuAction::SplitHorizontal, Some("%")),

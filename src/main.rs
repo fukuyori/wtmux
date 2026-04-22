@@ -57,7 +57,7 @@ use crate::core::session::Session;
 use crate::ui::{KeyMapper, Renderer, ContextMenu, ContextMenuAction};
 use crate::wm::{WindowManager, SplitDirection};
 use crate::history::HistorySelector;
-use crate::config::{Config as WtmuxConfig, ColorScheme};
+use crate::config::{Config as WtmuxConfig, ColorScheme, ParsedKeyBindings};
 use crate::copymode::CopyMode;
 
 #[cfg(windows)]
@@ -629,6 +629,8 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
         let _ = cp; // Suppress unused warning
     }
     
+    let keybindings = ParsedKeyBindings::from_config(&wtmux_config.keybindings);
+
     // Detect terminal environment
     let terminal_env = detect_terminal_env();
     let shell_cmd_str = config.shell.clone().unwrap_or_else(|| "cmd.exe".to_string());
@@ -647,7 +649,16 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
 
     if config.multipane {
         // Multi-pane mode
-        return run_terminal_wm(config, cols, rows, shell_name, encoding_name, &terminal_env, wtmux_config);
+        return run_terminal_wm(
+            config,
+            cols,
+            rows,
+            shell_name,
+            encoding_name,
+            &terminal_env,
+            wtmux_config,
+            keybindings,
+        );
     }
 
     // Simple single-pane mode
@@ -670,7 +681,7 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
     let _ = std::io::stdout().flush();
 
     // Run main loop
-    let result = run_main_loop(&mut session, &mut renderer);
+    let result = run_main_loop(&mut session, &mut renderer, keybindings);
 
     // Cleanup - multiple attempts to ensure it works
     let _ = renderer.cleanup();
@@ -689,7 +700,16 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
 
 /// Run terminal in multi-pane mode
 #[cfg(windows)]
-fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encoding_name: &str, terminal_env: &str, wtmux_config: WtmuxConfig) -> anyhow::Result<()> {
+fn run_terminal_wm(
+    config: Config,
+    cols: u16,
+    rows: u16,
+    shell_name: &str,
+    encoding_name: &str,
+    terminal_env: &str,
+    wtmux_config: WtmuxConfig,
+    keybindings: ParsedKeyBindings,
+) -> anyhow::Result<()> {
     use crossterm::terminal;
     use crate::ui::WmRenderer;
     
@@ -750,7 +770,7 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
     let _ = std::io::stdout().flush();
 
     // Run main loop
-    let result = run_wm_main_loop(&mut wm, &mut renderer);
+    let result = run_wm_main_loop(&mut wm, &mut renderer, keybindings);
 
     // Cleanup
     let _ = renderer.cleanup();
@@ -766,7 +786,11 @@ fn run_terminal_wm(config: Config, cols: u16, rows: u16, shell_name: &str, encod
 
 /// Main event loop for window manager
 #[cfg(windows)]
-fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer) -> anyhow::Result<()> {
+fn run_wm_main_loop(
+    wm: &mut WindowManager,
+    renderer: &mut crate::ui::WmRenderer,
+    keybindings: ParsedKeyBindings,
+) -> anyhow::Result<()> {
     let poll_timeout = Duration::from_millis(10);
     let mut selector: Option<HistorySelector> = None;
     
@@ -1322,10 +1346,8 @@ fn run_wm_main_loop(wm: &mut WindowManager, renderer: &mut crate::ui::WmRenderer
                         }
                     }
 
-                    // Check for Ctrl+R (selector) - only when not in alternate screen
-                    if key_event.modifiers.contains(KeyModifiers::CONTROL) 
-                        && key_event.code == KeyCode::Char('r') 
-                        && !wm.is_in_alternate_screen() 
+                    if keybindings.history_selector.matches(&key_event)
+                        && !wm.is_in_alternate_screen()
                     {
                         let selector = get_or_create_selector(&mut selector);
                         selector.show();
@@ -1610,7 +1632,11 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
 
 /// Main event loop
 #[cfg(windows)]
-fn run_main_loop(session: &mut Session, renderer: &mut Renderer) -> anyhow::Result<()> {
+fn run_main_loop(
+    session: &mut Session,
+    renderer: &mut Renderer,
+    keybindings: ParsedKeyBindings,
+) -> anyhow::Result<()> {
     let poll_timeout = Duration::from_millis(10);
 
     loop {
@@ -1656,54 +1682,56 @@ fn run_main_loop(session: &mut Session, renderer: &mut Renderer) -> anyhow::Resu
                         continue;
                     }
 
-                    // Handle scrollback keys (Shift+PageUp/PageDown)
-                    if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                        match key_event.code {
-                            KeyCode::PageUp => {
-                                let screen = session.state.active_screen_mut();
-                                screen.scroll_view_up(10);
-                                renderer.render(&session.state)?;
-                                continue;
-                            }
-                            KeyCode::PageDown => {
-                                let screen = session.state.active_screen_mut();
-                                screen.scroll_view_down(10);
-                                renderer.render(&session.state)?;
-                                continue;
-                            }
-                            KeyCode::Home => {
-                                // Scroll to top of history
-                                let screen = session.state.active_screen_mut();
-                                let max = screen.scrollback.len();
-                                screen.scroll_offset = max;
-                                screen.mark_all_dirty();
-                                renderer.render(&session.state)?;
-                                continue;
-                            }
-                            KeyCode::End => {
-                                // Scroll to bottom (live)
-                                let screen = session.state.active_screen_mut();
-                                screen.scroll_to_bottom();
-                                renderer.render(&session.state)?;
-                                continue;
-                            }
-                            // Shift+Arrow keys for selection
-                            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-                                handle_selection_key(&mut session.state, key_event.code);
-                                session.state.active_screen_mut().full_redraw = true;
-                                renderer.render(&session.state)?;
-                                session.state.active_screen_mut().clear_dirty();
-                                continue;
-                            }
-                            _ => {}
-                        }
+                    if keybindings.scrollback_up.matches(&key_event) {
+                        let screen = session.state.active_screen_mut();
+                        screen.scroll_view_up(10);
+                        renderer.render(&session.state)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_down.matches(&key_event) {
+                        let screen = session.state.active_screen_mut();
+                        screen.scroll_view_down(10);
+                        renderer.render(&session.state)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_top.matches(&key_event) {
+                        // Scroll to top of history
+                        let screen = session.state.active_screen_mut();
+                        let max = screen.scrollback.len();
+                        screen.scroll_offset = max;
+                        screen.mark_all_dirty();
+                        renderer.render(&session.state)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_bottom.matches(&key_event) {
+                        // Scroll to bottom (live)
+                        let screen = session.state.active_screen_mut();
+                        screen.scroll_to_bottom();
+                        renderer.render(&session.state)?;
+                        continue;
                     }
 
-                    // Ctrl+Shift+C to copy selection
-                    if key_event.modifiers.contains(KeyModifiers::CONTROL) 
-                        && key_event.modifiers.contains(KeyModifiers::SHIFT)
-                        && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('C'))
-                    {
+                    let selection_direction = if keybindings.selection_left.matches(&key_event) {
+                        Some(KeyCode::Left)
+                    } else if keybindings.selection_right.matches(&key_event) {
+                        Some(KeyCode::Right)
+                    } else if keybindings.selection_up.matches(&key_event) {
+                        Some(KeyCode::Up)
+                    } else if keybindings.selection_down.matches(&key_event) {
+                        Some(KeyCode::Down)
+                    } else {
+                        None
+                    };
+
+                    if let Some(direction) = selection_direction {
+                        handle_selection_key(&mut session.state, direction);
+                        session.state.active_screen_mut().full_redraw = true;
+                        renderer.render(&session.state)?;
+                        session.state.active_screen_mut().clear_dirty();
+                        continue;
+                    }
+
+                    if keybindings.copy_selection.matches(&key_event) {
                         if let Some(text) = session.state.get_selected_text() {
                             if !text.is_empty() {
                                 #[cfg(windows)]

@@ -40,6 +40,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
 /// Main configuration
@@ -54,6 +55,8 @@ pub struct Config {
     pub prefix_key: String,
     /// Color scheme name
     pub color_scheme: String,
+    /// Global keybinding settings
+    pub keybindings: KeyBindingsConfig,
     /// Tab bar settings
     pub tab_bar: TabBarConfig,
     /// Status bar settings
@@ -71,6 +74,7 @@ impl Default for Config {
             codepage: None,
             prefix_key: "C-b".to_string(),
             color_scheme: "default".to_string(),
+            keybindings: KeyBindingsConfig::default(),
             tab_bar: TabBarConfig::default(),
             status_bar: StatusBarConfig::default(),
             pane: PaneConfig::default(),
@@ -109,6 +113,172 @@ impl PrefixKey {
     pub fn display_name(&self) -> String {
         format!("Ctrl+{}", self.char.to_ascii_uppercase())
     }
+}
+
+/// Configurable global keybinding strings loaded from `config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyBindingsConfig {
+    /// Open the command history selector.
+    pub history_selector: String,
+    /// Scroll the viewport up through scrollback.
+    pub scrollback_up: String,
+    /// Scroll the viewport down through scrollback.
+    pub scrollback_down: String,
+    /// Jump to the top of scrollback.
+    pub scrollback_top: String,
+    /// Jump to the bottom/live view.
+    pub scrollback_bottom: String,
+    /// Extend or move keyboard selection left.
+    pub selection_left: String,
+    /// Extend or move keyboard selection right.
+    pub selection_right: String,
+    /// Extend or move keyboard selection up.
+    pub selection_up: String,
+    /// Extend or move keyboard selection down.
+    pub selection_down: String,
+    /// Copy the current selection to the clipboard.
+    pub copy_selection: String,
+}
+
+impl Default for KeyBindingsConfig {
+    fn default() -> Self {
+        Self {
+            history_selector: "C-r".to_string(),
+            scrollback_up: "S-PageUp".to_string(),
+            scrollback_down: "S-PageDown".to_string(),
+            scrollback_top: "S-Home".to_string(),
+            scrollback_bottom: "S-End".to_string(),
+            selection_left: "S-Left".to_string(),
+            selection_right: "S-Right".to_string(),
+            selection_up: "S-Up".to_string(),
+            selection_down: "S-Down".to_string(),
+            copy_selection: "C-S-c".to_string(),
+        }
+    }
+}
+
+/// Parsed keybinding used at runtime for configurable global shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyBinding {
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
+}
+
+impl KeyBinding {
+    /// Parse a keybinding string.
+    ///
+    /// Supported formats:
+    /// - `"C-r"` / `"Ctrl+R"`
+    /// - `"S-PageUp"` / `"Shift+PageUp"`
+    /// - `"C-S-c"` / `"Ctrl+Shift+C"`
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.is_empty() {
+            return None;
+        }
+
+        let parts: Vec<&str> = s
+            .split(['-', '+'])
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let mut modifiers = KeyModifiers::empty();
+        for modifier in &parts[..parts.len().saturating_sub(1)] {
+            match modifier.to_ascii_lowercase().as_str() {
+                "c" | "ctrl" | "control" => modifiers |= KeyModifiers::CONTROL,
+                "s" | "shift" => modifiers |= KeyModifiers::SHIFT,
+                "a" | "alt" | "meta" | "m" => modifiers |= KeyModifiers::ALT,
+                _ => return None,
+            }
+        }
+
+        let key_part = parts.last()?.to_ascii_lowercase();
+        let code = match key_part.as_str() {
+            "up" => KeyCode::Up,
+            "down" => KeyCode::Down,
+            "left" => KeyCode::Left,
+            "right" => KeyCode::Right,
+            "pageup" | "page_up" => KeyCode::PageUp,
+            "pagedown" | "page_down" => KeyCode::PageDown,
+            "home" => KeyCode::Home,
+            "end" => KeyCode::End,
+            "enter" | "return" => KeyCode::Enter,
+            "esc" | "escape" => KeyCode::Esc,
+            "tab" => KeyCode::Tab,
+            "backspace" => KeyCode::Backspace,
+            "delete" | "del" => KeyCode::Delete,
+            "space" => KeyCode::Char(' '),
+            _ if key_part.chars().count() == 1 => KeyCode::Char(key_part.chars().next()?),
+            _ => return None,
+        };
+
+        Some(Self { code, modifiers })
+    }
+
+    pub fn matches(&self, event: &KeyEvent) -> bool {
+        let supported_modifiers = KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT;
+        if event.modifiers & supported_modifiers != self.modifiers {
+            return false;
+        }
+
+        match (self.code, event.code) {
+            (KeyCode::Char(expected), KeyCode::Char(actual)) => expected.eq_ignore_ascii_case(&actual),
+            (expected, actual) => expected == actual,
+        }
+    }
+}
+
+/// Parsed global keybindings used by the main event loop.
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedKeyBindings {
+    pub history_selector: KeyBinding,
+    pub scrollback_up: KeyBinding,
+    pub scrollback_down: KeyBinding,
+    pub scrollback_top: KeyBinding,
+    pub scrollback_bottom: KeyBinding,
+    pub selection_left: KeyBinding,
+    pub selection_right: KeyBinding,
+    pub selection_up: KeyBinding,
+    pub selection_down: KeyBinding,
+    pub copy_selection: KeyBinding,
+}
+
+impl ParsedKeyBindings {
+    pub fn from_config(config: &KeyBindingsConfig) -> Self {
+        let defaults = KeyBindingsConfig::default();
+
+        Self {
+            history_selector: parse_or_default("keybindings.history_selector", &config.history_selector, &defaults.history_selector),
+            scrollback_up: parse_or_default("keybindings.scrollback_up", &config.scrollback_up, &defaults.scrollback_up),
+            scrollback_down: parse_or_default("keybindings.scrollback_down", &config.scrollback_down, &defaults.scrollback_down),
+            scrollback_top: parse_or_default("keybindings.scrollback_top", &config.scrollback_top, &defaults.scrollback_top),
+            scrollback_bottom: parse_or_default("keybindings.scrollback_bottom", &config.scrollback_bottom, &defaults.scrollback_bottom),
+            selection_left: parse_or_default("keybindings.selection_left", &config.selection_left, &defaults.selection_left),
+            selection_right: parse_or_default("keybindings.selection_right", &config.selection_right, &defaults.selection_right),
+            selection_up: parse_or_default("keybindings.selection_up", &config.selection_up, &defaults.selection_up),
+            selection_down: parse_or_default("keybindings.selection_down", &config.selection_down, &defaults.selection_down),
+            copy_selection: parse_or_default("keybindings.copy_selection", &config.copy_selection, &defaults.copy_selection),
+        }
+    }
+}
+
+fn parse_or_default(setting_name: &str, configured: &str, default: &str) -> KeyBinding {
+    if let Some(binding) = KeyBinding::parse(configured) {
+        return binding;
+    }
+
+    eprintln!(
+        "[wtmux] Invalid {} = {:?}; falling back to {:?}",
+        setting_name,
+        configured,
+        default
+    );
+    KeyBinding::parse(default).expect("default keybinding must be valid")
 }
 
 /// Tab bar configuration
@@ -240,6 +410,51 @@ impl Config {
     /// Get the color scheme
     pub fn get_color_scheme(&self) -> ColorScheme {
         ColorScheme::by_name(&self.color_scheme)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyBinding, ParsedKeyBindings, KeyBindingsConfig};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn parses_tmux_style_binding() {
+        let binding = KeyBinding::parse("C-r").unwrap();
+        assert_eq!(binding.code, KeyCode::Char('r'));
+        assert_eq!(binding.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn parses_display_style_binding() {
+        let binding = KeyBinding::parse("Ctrl+Shift+C").unwrap();
+        assert_eq!(binding.code, KeyCode::Char('c'));
+        assert_eq!(binding.modifiers, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+    }
+
+    #[test]
+    fn matches_char_keys_case_insensitively() {
+        let binding = KeyBinding::parse("Ctrl+Shift+C").unwrap();
+        assert!(binding.matches(&key_event(KeyCode::Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn falls_back_to_defaults_for_invalid_binding() {
+        let mut config = KeyBindingsConfig::default();
+        config.history_selector = "bad-binding".to_string();
+        let parsed = ParsedKeyBindings::from_config(&config);
+
+        assert_eq!(parsed.history_selector.code, KeyCode::Char('r'));
+        assert_eq!(parsed.history_selector.modifiers, KeyModifiers::CONTROL);
     }
 }
 

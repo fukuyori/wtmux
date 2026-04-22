@@ -27,6 +27,21 @@
 # Available: default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
 color_scheme = "default"
 
+# Global keybindings outside the Ctrl+B prefix mode.
+# Accepted formats: "C-r", "S-PageUp", "C-S-c"
+# Also accepted: "Ctrl+R", "Shift+PageUp", "Ctrl+Shift+C"
+[keybindings]
+# history_selector = "C-r"
+# scrollback_up = "S-PageUp"
+# scrollback_down = "S-PageDown"
+# scrollback_top = "S-Home"
+# scrollback_bottom = "S-End"
+# selection_left = "S-Left"
+# selection_right = "S-Right"
+# selection_up = "S-Up"
+# selection_down = "S-Down"
+# copy_selection = "C-S-c"
+
 # ==============================================================================
 # Tab Bar
 # ==============================================================================

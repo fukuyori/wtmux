@@ -4,11 +4,11 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.5-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.4 の主な変更
+## 1.3.5 の主な変更
 
 - 起動高速化: コマンド履歴セレクタは起動時ではなく、`Ctrl+R` を初めて使った時に読み込まれるようになりました。
 - 起動時 I/O の削減: 設定/履歴ディレクトリは、実際に書き込みが発生する時だけ作成されます。
@@ -236,6 +236,19 @@ wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
 # 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
 
+# プレフィックス外のグローバルキーバインド
+[keybindings]
+# history_selector = "C-r"      # "Ctrl+R" 形式でも指定可能
+# scrollback_up = "S-PageUp"
+# scrollback_down = "S-PageDown"
+# scrollback_top = "S-Home"
+# scrollback_bottom = "S-End"
+# selection_left = "S-Left"
+# selection_right = "S-Right"
+# selection_up = "S-Up"
+# selection_down = "S-Down"
+# copy_selection = "C-S-c"      # "Ctrl+Shift+C" 形式でも指定可能
+
 # タブバー設定
 [tab_bar]
 visible = true
@@ -258,6 +271,9 @@ blink = true
 [scrollback]
 lines = 10000
 ```
+
+`[keybindings]` セクションでは、現在 `Ctrl+R`、スクロールバック移動、
+キーボード選択、選択コピーのプレフィックス外ショートカットを変更できます。
 
 ### フォント設定
 

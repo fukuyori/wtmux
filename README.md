@@ -4,11 +4,11 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.5-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.3.4 Highlights
+## 1.3.5 Highlights
 
 - Faster startup: the command history selector is now loaded on first use (`Ctrl+R`) instead of during startup.
 - Less startup I/O: config/history directories are created only when something is actually written.
@@ -288,6 +288,19 @@ wtmux reads configuration from `%LOCALAPPDATA%\wtmux\config.toml`.
 # Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
 
+# Global keybindings outside the prefix mode
+[keybindings]
+# history_selector = "C-r"      # Also accepts "Ctrl+R"
+# scrollback_up = "S-PageUp"
+# scrollback_down = "S-PageDown"
+# scrollback_top = "S-Home"
+# scrollback_bottom = "S-End"
+# selection_left = "S-Left"
+# selection_right = "S-Right"
+# selection_up = "S-Up"
+# selection_down = "S-Down"
+# copy_selection = "C-S-c"      # Also accepts "Ctrl+Shift+C"
+
 # Tab bar settings
 [tab_bar]
 visible = true
@@ -310,6 +323,9 @@ blink = true
 [scrollback]
 lines = 10000
 ```
+
+The `[keybindings]` section currently controls these non-prefix shortcuts:
+`Ctrl+R`, scrollback navigation, keyboard selection, and copy-selection.
 
 ### Font Settings
 
