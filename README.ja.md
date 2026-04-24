@@ -4,19 +4,19 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.5-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.6-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.5 の主な変更
+## 1.3.6 の主な変更
 
-- 起動高速化: コマンド履歴セレクタは起動時ではなく、`Ctrl+R` を初めて使った時に読み込まれるようになりました。
-- 起動時 I/O の削減: 設定/履歴ディレクトリは、実際に書き込みが発生する時だけ作成されます。
-- 常時オーバーヘッドの削減: scrollback の整理、PTY 出力処理、dirty line 管理を軽量化しました。
+- ステータスバーと履歴セレクタのショートカット表示が、設定済みのキーアサインに追従するようになりました。
+- `wtmux --help` が、設定済みのプレフィックスキーと履歴セレクタのショートカットを表示するようになりました。
+- 無効なキー設定はこれまで通り、起動を止めずにデフォルトへフォールバックします。
 
 ## 特徴
 
-- **tmux互換キーバインド** - おなじみの `Ctrl+B` プレフィックスコマンド
+- **tmux互換キーバインド** - デフォルトはおなじみの `Ctrl+B` プレフィックスコマンド。ショートカットは設定で変更可能
 - **複数タブ（ウィンドウ）** - タブの作成、切り替え、名前変更、管理
 - **ペイン分割** - 水平・垂直分割、リサイズ対応
 - **ペインズーム** - 任意のペインを全画面表示
@@ -140,7 +140,8 @@ wtmux --help
 
 ## キーバインド
 
-すべてのコマンドは `Ctrl+B` をプレフィックスキーとして使用します（tmuxと同じ）。
+プレフィックス付きコマンドは、デフォルトでは `Ctrl+B` を使用します（tmuxと同じ）。
+プレフィックスキーは `prefix_key` で変更できます。以下の表はデフォルト設定のキーです。
 
 ### ウィンドウ（タブ）
 
@@ -206,6 +207,7 @@ wtmux --help
 ### 履歴機能
 
 wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴機能が搭載されています。入力したコマンドを記録し、複雑なコマンドを何度も入力する必要がなくなります。
+履歴検索のショートカットはデフォルトでは `Ctrl+R` で、`keybindings.history_selector` で変更できます。
 
 | キー | 動作 |
 |-----|--------|
@@ -272,7 +274,7 @@ blink = true
 lines = 10000
 ```
 
-`[keybindings]` セクションでは、現在 `Ctrl+R`、スクロールバック移動、
+`[keybindings]` セクションでは、履歴検索（デフォルト `Ctrl+R`）、スクロールバック移動、
 キーボード選択、選択コピーのプレフィックス外ショートカットを変更できます。
 
 ### フォント設定

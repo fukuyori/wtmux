@@ -6,7 +6,7 @@ For developers who work in Linux or macOS terminals, **tmux** is an indispensabl
 
 **wtmux** is a terminal multiplexer developed to bring the tmux experience to Windows. Written in Rust, it leverages Windows 10's ConPTY (Console Pseudo Terminal) to provide a native Windows experience.
 
-As of `1.3.4`, startup is a bit lighter: command history is loaded lazily on first use (`Ctrl+R`), and config/history directories are created only when wtmux actually needs to write data.
+Startup is light: command history is loaded lazily on first use of the history selector shortcut (`Ctrl+R` by default), and config/history directories are created only when wtmux actually needs to write data.
 
 ### Key Features
 
@@ -89,7 +89,8 @@ wtmux
 
 ### Prefix Key
 
-All wtmux commands start with **`Ctrl+B`** (same as tmux).
+wtmux prefix commands start with **`Ctrl+B`** by default (same as tmux).
+You can change the prefix key with `prefix_key` in `config.toml`; this tutorial uses the default keybindings.
 
 For example, to create a new tab:
 1. Press `Ctrl+B` (you'll see `[PREFIX]` at the bottom)
@@ -357,7 +358,8 @@ color_scheme = "tokyo-night"
 
 wtmux includes its own command history feature, separate from your shell's built-in history. It records the commands you enter, eliminating the need to retype complex commands repeatedly.
 
-In `1.3.4`, the history selector is initialized lazily, so simply launching wtmux no longer loads the history file until you first press `Ctrl+R`.
+The history selector is initialized lazily, so simply launching wtmux no longer loads the history file until you first use the history selector shortcut.
+The shortcut defaults to `Ctrl+R` and can be changed with `keybindings.history_selector`.
 
 | Key | Action |
 |-----|--------|
@@ -382,6 +384,12 @@ codepage = 65001
 
 # Color scheme
 color_scheme = "tokyo-night"
+
+# Prefix key and non-prefix shortcuts
+# prefix_key = "C-b"
+
+[keybindings]
+# history_selector = "C-r"
 
 # Tab bar
 [tab_bar]
@@ -492,7 +500,7 @@ codepage = 65001
 
 ### Keys Not Responding
 
-Check if you're in prefix mode (`Ctrl+B`). You'll see `[PREFIX]` at the bottom.
+Check if you're in prefix mode (`Ctrl+B` by default). You'll see `[PREFIX]` at the bottom.
 
 Press `Esc` to cancel prefix mode.
 

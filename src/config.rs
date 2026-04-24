@@ -231,6 +231,41 @@ impl KeyBinding {
             (expected, actual) => expected == actual,
         }
     }
+
+    pub fn display_name(&self) -> String {
+        let mut parts = Vec::new();
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            parts.push("Ctrl".to_string());
+        }
+        if self.modifiers.contains(KeyModifiers::SHIFT) {
+            parts.push("Shift".to_string());
+        }
+        if self.modifiers.contains(KeyModifiers::ALT) {
+            parts.push("Alt".to_string());
+        }
+
+        parts.push(match self.code {
+            KeyCode::Char(' ') => "Space".to_string(),
+            KeyCode::Char(ch) if ch.is_ascii_alphabetic() => ch.to_ascii_uppercase().to_string(),
+            KeyCode::Char(ch) => ch.to_string(),
+            KeyCode::Up => "Up".to_string(),
+            KeyCode::Down => "Down".to_string(),
+            KeyCode::Left => "Left".to_string(),
+            KeyCode::Right => "Right".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            _ => format!("{:?}", self.code),
+        });
+
+        parts.join("+")
+    }
 }
 
 /// Parsed global keybindings used by the main event loop.
@@ -445,6 +480,19 @@ mod tests {
     fn matches_char_keys_case_insensitively() {
         let binding = KeyBinding::parse("Ctrl+Shift+C").unwrap();
         assert!(binding.matches(&key_event(KeyCode::Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn displays_keybinding_for_status_labels() {
+        assert_eq!(KeyBinding::parse("C-r").unwrap().display_name(), "Ctrl+R");
+        assert_eq!(
+            KeyBinding::parse("S-PageUp").unwrap().display_name(),
+            "Shift+PageUp"
+        );
+        assert_eq!(
+            KeyBinding::parse("Ctrl+Shift+C").unwrap().display_name(),
+            "Ctrl+Shift+C"
+        );
     }
 
     #[test]

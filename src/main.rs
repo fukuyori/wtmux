@@ -57,7 +57,7 @@ use crate::core::session::Session;
 use crate::ui::{KeyMapper, Renderer, ContextMenu, ContextMenuAction};
 use crate::wm::{WindowManager, SplitDirection};
 use crate::history::HistorySelector;
-use crate::config::{Config as WtmuxConfig, ColorScheme, ParsedKeyBindings};
+use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
 use crate::copymode::CopyMode;
 
 #[cfg(windows)]
@@ -150,7 +150,13 @@ fn print_version() {
     eprintln!("wtmux {}", VERSION);
 }
 
-fn print_help() {
+fn print_help(wtmux_config: &WtmuxConfig) {
+    let keybindings = ParsedKeyBindings::from_config(&wtmux_config.keybindings);
+    let history_selector = keybindings.history_selector.display_name();
+    let prefix_name = PrefixKey::parse(&wtmux_config.prefix_key)
+        .unwrap_or(PrefixKey { char: 'b' })
+        .display_name();
+
     eprintln!("wtmux {} - A tmux-like terminal multiplexer for Windows", VERSION);
     eprintln!();
     eprintln!("Usage: wtmux [OPTIONS]");
@@ -178,23 +184,35 @@ fn print_help() {
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
     eprintln!();
-    eprintln!("Multi-pane mode keybindings (tmux compatible, Ctrl+B prefix):");
-    eprintln!("  Ctrl+B, c             New window (tab)");
-    eprintln!("  Ctrl+B, &             Kill window (tab)");
-    eprintln!("  Ctrl+B, x             Kill pane");
-    eprintln!("  Ctrl+B, \"             Split pane horizontally (top/bottom)");
-    eprintln!("  Ctrl+B, %             Split pane vertically (left/right)");
-    eprintln!("  Ctrl+B, n             Next window");
-    eprintln!("  Ctrl+B, p             Previous window");
-    eprintln!("  Ctrl+B, l             Last window (toggle)");
-    eprintln!("  Ctrl+B, 0-9           Select window by number");
-    eprintln!("  Ctrl+B, o             Next pane");
-    eprintln!("  Ctrl+B, ;             Previous pane");
-    eprintln!("  Ctrl+B, Arrow         Move to pane in direction");
-    eprintln!("  Ctrl+B, z             Toggle pane zoom");
+    eprintln!(
+        "Multi-pane mode keybindings (tmux compatible, {} prefix):",
+        prefix_name
+    );
+    eprintln!("  {:<22} New window (tab)", format!("{}, c", prefix_name));
+    eprintln!("  {:<22} Kill window (tab)", format!("{}, &", prefix_name));
+    eprintln!("  {:<22} Kill pane", format!("{}, x", prefix_name));
+    eprintln!(
+        "  {:<22} Split pane horizontally (top/bottom)",
+        format!("{}, \"", prefix_name)
+    );
+    eprintln!(
+        "  {:<22} Split pane vertically (left/right)",
+        format!("{}, %", prefix_name)
+    );
+    eprintln!("  {:<22} Next window", format!("{}, n", prefix_name));
+    eprintln!("  {:<22} Previous window", format!("{}, p", prefix_name));
+    eprintln!("  {:<22} Last window (toggle)", format!("{}, l", prefix_name));
+    eprintln!("  {:<22} Select window by number", format!("{}, 0-9", prefix_name));
+    eprintln!("  {:<22} Next pane", format!("{}, o", prefix_name));
+    eprintln!("  {:<22} Previous pane", format!("{}, ;", prefix_name));
+    eprintln!(
+        "  {:<22} Move to pane in direction",
+        format!("{}, Arrow", prefix_name)
+    );
+    eprintln!("  {:<22} Toggle pane zoom", format!("{}, z", prefix_name));
     eprintln!();
     eprintln!("Snippet selector (at command prompt, not in vim/apps):");
-    eprintln!("  Ctrl+R                Open snippet selector");
+    eprintln!("  {:<22} Open snippet selector", history_selector);
     eprintln!("  ↑/↓                   Navigate snippets");
     eprintln!("  1-9                   Select by number");
     eprintln!("  Enter                 Insert selected snippet");
@@ -223,7 +241,8 @@ fn parse_args() -> Result<Config, String> {
     while i < args.len() {
         match args[i].as_str() {
             "-h" | "--help" => {
-                print_help();
+                let wtmux_config = WtmuxConfig::load();
+                print_help(&wtmux_config);
                 std::process::exit(0);
             }
             "-v" | "--version" => {
@@ -757,6 +776,7 @@ fn run_terminal_wm(
 
     // Initialize renderer with color scheme
     let mut renderer = WmRenderer::with_color_scheme(color_scheme);
+    renderer.set_keybindings(&keybindings);
     // Propagate font config into renderer
     renderer.suppress_bold = wtmux_config.font.suppress_bold;
     renderer.init()?;

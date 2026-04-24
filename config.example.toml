@@ -27,7 +27,7 @@
 # Available: default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
 color_scheme = "default"
 
-# Global keybindings outside the Ctrl+B prefix mode.
+# Global keybindings outside the prefix mode.
 # Accepted formats: "C-r", "S-PageUp", "C-S-c"
 # Also accepted: "Ctrl+R", "Shift+PageUp", "Ctrl+Shift+C"
 [keybindings]

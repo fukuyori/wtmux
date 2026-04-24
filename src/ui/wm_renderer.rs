@@ -71,7 +71,7 @@ fn truncate_to_display_width(s: &str, max_width: usize) -> String {
 
 use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
-use crate::config::ColorScheme;
+use crate::config::{ColorScheme, ParsedKeyBindings};
 use crate::copymode::CopyMode;
 use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
@@ -155,6 +155,7 @@ impl BorderChars {
 pub struct WmRenderer {
     initialized: bool,
     pub color_scheme: ColorScheme,
+    history_selector_shortcut: String,
     /// Last rendered layout generation (for detecting changes)
     last_generation: u64,
     /// When true, SGR 1 (Bold) is suppressed.
@@ -180,6 +181,7 @@ impl WmRenderer {
         Self {
             initialized: false,
             color_scheme: ColorScheme::default(),
+            history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
             suppress_bold: false,
         }
@@ -189,9 +191,15 @@ impl WmRenderer {
         Self {
             initialized: false,
             color_scheme,
+            history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
             suppress_bold: false,
         }
+    }
+
+    /// Set keyboard shortcut labels used by the status bar.
+    pub fn set_keybindings(&mut self, keybindings: &ParsedKeyBindings) {
+        self.history_selector_shortcut = keybindings.history_selector.display_name();
     }
 
     /// Set color scheme
@@ -673,8 +681,8 @@ impl WmRenderer {
             SetForegroundColor(cs.selector_fg.to_crossterm())
         )?;
 
-        // Top border: "┌─ History [Ctrl+R] ───┐"
-        let title = "History [Ctrl+R]";
+        // Top border: "┌─ History [<shortcut>] ───┐"
+        let title = format!("History [{}]", self.history_selector_shortcut);
         let title_section_width = 3 + title.len() + 1; // "┌─ " + title + " "
         execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
         write!(stdout, "┌─ {} ", title)?;
@@ -1090,7 +1098,7 @@ impl WmRenderer {
         let shortcuts = if wm.prefix_mode {
             r#"c:new x:kill ":split %:vsplit n/p:win o:pane z:zoom t:theme"#.to_string()
         } else {
-            format!("{}: prefix | Ctrl+R: history", prefix_name)
+            format!("{}: prefix | {}: history", prefix_name, self.history_selector_shortcut)
         };
         
         let left_len = status.len();

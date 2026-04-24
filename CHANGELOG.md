@@ -1,3 +1,15 @@
+## [1.3.6] - 2026-04-24
+
+### Changed
+
+- **Shortcut labels now follow configured keybindings**:
+  the status bar, history selector title, and `wtmux --help` output now show
+  the configured history selector shortcut instead of always showing `Ctrl+R`.
+
+- **Help output now reflects the configured prefix key**:
+  `wtmux --help` reads `config.toml` for display purposes and shows the active
+  prefix key in the multi-pane keybinding list.
+
 ## [1.3.5] - 2026-04-22
 
 ### Changed
