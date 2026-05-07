@@ -1,3 +1,16 @@
+## [1.3.7] - 2026-05-08
+
+### Changed
+
+- **Split-pane cursor blink is steadier**:
+  normal multi-pane rendering no longer hides and re-shows the host cursor on
+  every frame, so output from another pane does not reset the focused cursor's
+  blink cycle.
+
+- **Renderer cursor handling was split out**:
+  frame guards and cached cursor presentation now live in smaller UI modules,
+  keeping `WmRenderer` focused on multi-pane composition.
+
 ## [1.3.6] - 2026-04-24
 
 ### Changed

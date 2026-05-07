@@ -10,6 +10,10 @@
   - `[[package]] name = "wtmux"` の version
 - `installer/wtmux.iss`
   - `MyAppVersion`
+- `installer/wtmux.wxs`
+  - WiX `Product` version
+- `installer/msix/AppxManifest.xml`
+  - MSIX identity version (`x.y.z.0`)
 - `CHANGELOG.md`
   - 先頭のリリース見出し
 - `README.md`
@@ -32,10 +36,10 @@
 
 ## 確認コマンド
 
-版番号を `1.3.6` から次の版へ上げるときは、まず現在値を検索する。
+版番号を `1.3.7` から次の版へ上げるときは、まず現在値を検索する。
 
 ```powershell
-rg -n "1\.3\.6" Cargo.toml Cargo.lock README.md README.ja.md CHANGELOG.md docs installer
+rg -n "1\.3\.7" Cargo.toml Cargo.lock README.md README.ja.md CHANGELOG.md docs installer
 ```
 
 汎用的に「version が入りそうな場所」を見るときは次も使える。

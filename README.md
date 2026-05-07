@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.6-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.3.6 Highlights
+## 1.3.7 Highlights
 
-- Shortcut labels in the status bar and history selector now follow configured keybindings.
-- `wtmux --help` now reflects the configured prefix key and history selector shortcut.
-- Invalid keybinding values still fall back to the defaults instead of interrupting startup.
+- Split panes no longer reset the focused cursor blink when another pane updates.
+- Cursor visibility and shape updates are now cached to avoid unnecessary host cursor toggles.
+- Multi-pane frame and cursor handling were split into smaller UI modules.
 
 ## Features
 

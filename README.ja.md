@@ -4,15 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.6-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.6 の主な変更
+## 1.3.7 の主な変更
 
-- ステータスバーと履歴セレクタのショートカット表示が、設定済みのキーアサインに追従するようになりました。
-- `wtmux --help` が、設定済みのプレフィックスキーと履歴セレクタのショートカットを表示するようになりました。
-- 無効なキー設定はこれまで通り、起動を止めずにデフォルトへフォールバックします。
+- 分割ペインで片方の表示だけが更新されたときに、フォーカス側カーソルのブリンクがリセットされにくくなりました。
+- カーソルの表示状態と形状をキャッシュし、不要なホストカーソル切り替えを抑えました。
+- マルチペイン描画のフレーム制御とカーソル制御を小さな UI モジュールへ分割しました。
 
 ## 特徴
 

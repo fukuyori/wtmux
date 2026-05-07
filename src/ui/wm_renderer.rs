@@ -11,11 +11,11 @@
 //! The renderer uses synchronized updates to prevent screen tearing:
 //!
 //! ```text
-//! begin_frame()  → Hide cursor, disable autowrap, start sync
+//! begin_frame()  → Disable autowrap, start sync
 //!     ↓
 //! render content → Tab bar, panes, status bar
 //!     ↓
-//! end_frame()    → Show cursor, enable autowrap, end sync, flush
+//! end_frame()    → Enable autowrap, end sync, flush
 //! ```
 //!
 //! # Performance Optimizations
@@ -26,7 +26,7 @@
 
 use std::io::{self, Write};
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{MoveTo, Show},
     execute,
     style::{
         Attribute, Color as CtColor, ResetColor, SetAttribute,
@@ -75,47 +75,8 @@ use crate::config::{ColorScheme, ParsedKeyBindings};
 use crate::copymode::CopyMode;
 use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
-
-/// Begin a render frame (synchronized update, hide cursor, disable autowrap)
-fn begin_frame<W: Write>(out: &mut W) -> io::Result<()> {
-    write!(out, "\x1b[?2026h")?;  // Begin synchronized update
-    write!(out, "\x1b[?7l")?;      // Disable autowrap
-    execute!(out, Hide)?;
-    Ok(())
-}
-
-/// End a render frame (show cursor, enable autowrap, end synchronized update, flush)
-fn end_frame<W: Write>(out: &mut W) -> io::Result<()> {
-    execute!(out, Show)?;          // Show cursor
-    write!(out, "\x1b[?7h")?;      // Enable autowrap
-    write!(out, "\x1b[?2026l")?;   // End synchronized update
-    out.flush()?;
-    Ok(())
-}
-
-/// Execute a render operation with frame guards, ensuring cleanup on error
-fn with_frame<W: Write, F, R>(out: &mut W, f: F) -> io::Result<R>
-where
-    F: FnOnce(&mut W) -> io::Result<R>,
-{
-    begin_frame(out)?;
-    let result = f(out);
-    // Always end frame, even on error
-    let _ = end_frame(out);
-    result
-}
-
-/// Execute an operation with cursor hidden, ensuring Show on exit
-fn with_cursor_hidden<W: Write, F, R>(out: &mut W, f: F) -> io::Result<R>
-where
-    F: FnOnce(&mut W) -> io::Result<R>,
-{
-    execute!(out, Hide)?;
-    let result = f(out);
-    let _ = execute!(out, Show);
-    let _ = out.flush();
-    result
-}
+use super::cursor::CursorPresenter;
+use super::frame::{with_cursor_hidden, with_frame, with_hidden_cursor_frame};
 
 /// Border characters
 #[allow(dead_code)]
@@ -158,6 +119,7 @@ pub struct WmRenderer {
     history_selector_shortcut: String,
     /// Last rendered layout generation (for detecting changes)
     last_generation: u64,
+    cursor: CursorPresenter,
     /// When true, SGR 1 (Bold) is suppressed.
     /// Use this when the Nerd Font installed lacks a Bold face and the OS
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
@@ -183,6 +145,7 @@ impl WmRenderer {
             color_scheme: ColorScheme::default(),
             history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
+            cursor: CursorPresenter::default(),
             suppress_bold: false,
         }
     }
@@ -193,6 +156,7 @@ impl WmRenderer {
             color_scheme,
             history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
+            cursor: CursorPresenter::default(),
             suppress_bold: false,
         }
     }
@@ -221,6 +185,7 @@ impl WmRenderer {
         stdout.flush()?;
         
         self.initialized = true;
+        self.invalidate_cursor_cache();
         Ok(())
     }
 
@@ -245,6 +210,7 @@ impl WmRenderer {
         )?;
         terminal::disable_raw_mode()?;
         self.initialized = false;
+        self.invalidate_cursor_cache();
         Ok(())
     }
 
@@ -259,12 +225,17 @@ impl WmRenderer {
         self.render_with_selector(wm, None)
     }
 
+    fn invalidate_cursor_cache(&mut self) {
+        self.cursor.invalidate();
+    }
+
     /// Render with optional snippet selector
     pub fn render_with_selector(&mut self, wm: &WindowManager, selector: Option<&crate::history::HistorySelector>) -> io::Result<()> {
         let stdout = io::stdout();
         let mut out = io::BufWriter::with_capacity(65536, stdout.lock());
+        let snippet_visible = selector.map(|s| s.visible).unwrap_or(false);
 
-        with_frame(&mut out, |out| {
+        let result = with_frame(&mut out, |out| {
             self.render_tab_bar(out, wm)?;
             self.render_panes(out, wm)?;
             self.render_status_bar(out, wm)?;
@@ -276,25 +247,17 @@ impl WmRenderer {
             }
 
             // Show cursor at focused pane's cursor position (unless snippet selector is visible)
-            let snippet_visible = selector.map(|s| s.visible).unwrap_or(false);
             if !snippet_visible {
-                if let Some(tab) = wm.active_tab() {
-                    if let Some(pane) = tab.focused_pane() {
-                        let cursor = pane.session.state.active_cursor();
-                        let (inner_x, inner_y) = pane.inner_pos();
-                        if cursor.visible {
-                            let shape_code = cursor.shape.to_decscusr();
-                            write!(out, "\x1b[{} q", shape_code)?;
-                            execute!(
-                                out,
-                                MoveTo(inner_x + cursor.col, wm.tab_bar_height + inner_y + cursor.row)
-                            )?;
-                        }
-                    }
-                }
+                self.cursor.show_focused_pane_cursor(out, wm)?;
             }
             Ok(())
-        })
+        });
+
+        if snippet_visible {
+            self.invalidate_cursor_cache();
+        }
+
+        result
     }
 
     /// Render with pane numbers overlay
@@ -306,13 +269,15 @@ impl WmRenderer {
             self.init()?;
         }
 
-        with_frame(&mut out, |out| {
+        let result = with_hidden_cursor_frame(&mut out, |out| {
             self.render_tab_bar(out, wm)?;
             self.render_panes(out, wm)?;
             self.render_status_bar(out, wm)?;
             self.render_pane_numbers(out, wm)?;
             Ok(())
-        })
+        });
+        self.invalidate_cursor_cache();
+        result
     }
 
     /// Render pane numbers overlay
@@ -348,7 +313,7 @@ impl WmRenderer {
             self.init()?;
         }
 
-        with_frame(&mut out, |out| {
+        let result = with_hidden_cursor_frame(&mut out, |out| {
             self.render_pane_with_copy_mode(out, wm, copy_mode)?;
             self.render_copy_mode_status(out, wm, copy_mode)?;
 
@@ -363,7 +328,9 @@ impl WmRenderer {
                 }
             }
             Ok(())
-        })
+        });
+        self.invalidate_cursor_cache();
+        result
     }
 
     /// Fast update for copy mode - only update cursor and status
@@ -371,7 +338,7 @@ impl WmRenderer {
         let stdout = io::stdout();
         let mut out = stdout.lock();
 
-        with_cursor_hidden(&mut out, |out| {
+        let result = with_cursor_hidden(&mut out, |out| {
             self.render_copy_mode_status(out, wm, copy_mode)?;
 
             // Position cursor at copy mode location
@@ -385,7 +352,9 @@ impl WmRenderer {
                 }
             }
             Ok(())
-        })
+        });
+        self.invalidate_cursor_cache();
+        result
     }
 
     /// Render pane content in copy mode with selection/search highlighting
@@ -488,13 +457,15 @@ impl WmRenderer {
             self.init()?;
         }
 
-        with_frame(&mut out, |out| {
+        let result = with_hidden_cursor_frame(&mut out, |out| {
             self.render_tab_bar(out, wm)?;
             self.render_panes(out, wm)?;
             self.render_status_bar(out, wm)?;
             self.render_rename_popup(out, wm, rename_buffer)?;
             Ok(())
-        })
+        });
+        self.invalidate_cursor_cache();
+        result
     }
 
     /// Render rename popup in center of screen
@@ -563,13 +534,15 @@ impl WmRenderer {
             self.init()?;
         }
 
-        with_frame(&mut out, |out| {
+        let result = with_hidden_cursor_frame(&mut out, |out| {
             self.render_tab_bar(out, wm)?;
             self.render_panes(out, wm)?;
             self.render_status_bar(out, wm)?;
             self.render_theme_selector(out, wm, themes, selected)?;
             Ok(())
-        })
+        });
+        self.invalidate_cursor_cache();
+        result
     }
 
     /// Render theme selector overlay
@@ -1192,18 +1165,20 @@ impl WmRenderer {
             with_cursor_hidden(&mut stdout, |out| {
                 self.render_context_menu(out, menu)
             })?;
+            self.invalidate_cursor_cache();
         }
         
         Ok(())
     }
 
     /// Render only the context menu (for hover updates without full redraw)
-    pub fn render_context_menu_only(&self, menu: &ContextMenu) -> io::Result<()> {
+    pub fn render_context_menu_only(&mut self, menu: &ContextMenu) -> io::Result<()> {
         if menu.visible {
             let mut stdout = io::stdout().lock();
             with_cursor_hidden(&mut stdout, |out| {
                 self.render_context_menu(out, menu)
             })?;
+            self.invalidate_cursor_cache();
         }
         Ok(())
     }
