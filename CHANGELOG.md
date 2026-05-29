@@ -1,3 +1,13 @@
+## [1.3.8] - 2026-05-30
+
+### Changed
+
+- **Mouse click no longer copies accidental single-cell selections**:
+  wtmux now copies mouse selections on button release only after the selected
+  range actually moves away from the initial mouse-down cell. Normal
+  drag-to-copy behavior is preserved, and click-only selections are cleared
+  without copying.
+
 ## [1.3.7] - 2026-05-08
 
 ### Changed

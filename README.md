@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.8-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.3.7 Highlights
+## 1.3.8 Highlights
 
-- Split panes no longer reset the focused cursor blink when another pane updates.
-- Cursor visibility and shape updates are now cached to avoid unnecessary host cursor toggles.
-- Multi-pane frame and cursor handling were split into smaller UI modules.
+- Mouse clicks no longer copy a single cell just because the pointer moved slightly.
+- Drag-to-copy still copies on mouse release after the selection actually moves.
+- Mouse selection is cleared on release when no text range was selected.
 
 ## Features
 

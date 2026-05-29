@@ -4,15 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.7-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.8-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.7 の主な変更
+## 1.3.8 の主な変更
 
-- 分割ペインで片方の表示だけが更新されたときに、フォーカス側カーソルのブリンクがリセットされにくくなりました。
-- カーソルの表示状態と形状をキャッシュし、不要なホストカーソル切り替えを抑えました。
-- マルチペイン描画のフレーム制御とカーソル制御を小さな UI モジュールへ分割しました。
+- マウスクリック時にポインタが少し動いただけで 1 文字コピーされないようにしました。
+- ドラッグで選択範囲が実際に動いた場合は、これまで通りボタンを離したときにコピーします。
+- 範囲が選択されなかった場合は、マウスボタンを離した時点で選択表示を解除します。
 
 ## 特徴
 

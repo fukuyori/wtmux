@@ -79,6 +79,8 @@ pub struct WindowManager {
     pub prefix_mode: bool,
     /// Configured prefix key
     pub prefix_key: PrefixKey,
+    /// Whether the current mouse selection actually moved past the down cell.
+    mouse_selection_moved: bool,
 }
 
 impl WindowManager {
@@ -109,6 +111,7 @@ impl WindowManager {
             default_codepage: codepage,
             prefix_mode: false,
             prefix_key,
+            mouse_selection_moved: false,
         }
     }
 
@@ -478,6 +481,8 @@ impl WindowManager {
     /// Handle mouse down at position (start selection)
     /// Returns true if focus changed to a different pane
     pub fn handle_mouse_down(&mut self, col: u16, row: u16) -> bool {
+        self.mouse_selection_moved = false;
+
         // Check if click is on tab bar
         if row < self.tab_bar_height {
             return self.handle_tab_click(col);
@@ -547,14 +552,25 @@ impl WindowManager {
                 let pane_col = col.saturating_sub(inner_x);
                 let pane_row = content_row.saturating_sub(inner_y);
                 pane.session.state.update_selection(pane_col, pane_row);
+                if let Some(selection) = pane.session.state.selection.as_ref() {
+                    self.mouse_selection_moved |= selection.start != selection.end;
+                }
             }
         }
     }
 
     /// Handle mouse up (end selection and copy)
     pub fn handle_mouse_up(&mut self) -> Option<String> {
+        let mouse_selection_moved = self.mouse_selection_moved;
+        self.mouse_selection_moved = false;
+
         if let Some(tab) = self.active_tab_mut() {
             if let Some(pane) = tab.focused_pane_mut() {
+                if !mouse_selection_moved {
+                    pane.session.state.clear_selection();
+                    return None;
+                }
+
                 let text = pane.session.state.get_selected_text();
                 pane.session.state.clear_selection();
                 return text;
