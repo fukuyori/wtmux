@@ -101,7 +101,6 @@ impl Renderer {
             stdout,
             EnterAlternateScreen,
             crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste,
             DisableLineWrap,
             Clear(ClearType::All),
             MoveTo(0, 0)
@@ -145,11 +144,7 @@ impl Renderer {
         let _ = execute!(stdout, EnableLineWrap);
         
         // Disable mouse capture
-        let _ = execute!(
-            stdout,
-            crossterm::event::DisableBracketedPaste,
-            crossterm::event::DisableMouseCapture
-        );
+        let _ = execute!(stdout, crossterm::event::DisableMouseCapture);
         
         // Leave alternate screen
         let _ = execute!(stdout, LeaveAlternateScreen);

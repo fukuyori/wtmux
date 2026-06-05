@@ -180,7 +180,6 @@ impl WmRenderer {
             stdout,
             crossterm::terminal::EnterAlternateScreen,
             crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste,
             Clear(ClearType::All)
         )?;
         stdout.flush()?;
@@ -206,7 +205,6 @@ impl WmRenderer {
         execute!(
             stdout,
             Show,
-            crossterm::event::DisableBracketedPaste,
             crossterm::event::DisableMouseCapture,
             crossterm::terminal::LeaveAlternateScreen
         )?;

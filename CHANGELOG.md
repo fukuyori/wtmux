@@ -2,10 +2,12 @@
 
 ### Changed
 
-- **Emoji input now reaches the focused pane**:
-  bracketed paste is enabled for both renderers, and multi-pane mode now
-  forwards paste-style input events to the focused pane. This fixes Windows
-  emoji panel input such as `🚶`.
+- **Emoji input now works with Windows IME input**:
+  Windows input is now read through a small wtmux wrapper that preserves
+  key-down UTF-16 surrogate pairs from IME and emoji-panel input, fixing
+  non-BMP characters such as `🚶`. PowerShell and PowerShell 7 sessions also
+  set both `InputEncoding` and `OutputEncoding` to UTF-8 so ConPTY input is
+  decoded correctly.
 
 ## [1.3.8] - 2026-05-30
 

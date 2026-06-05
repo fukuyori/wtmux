@@ -47,14 +47,14 @@ use std::env;
 use std::io::Write;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::core::session::Session;
-use crate::ui::{KeyMapper, Renderer, ContextMenu, ContextMenuAction};
+use crate::ui::{input, KeyMapper, Renderer, ContextMenu, ContextMenuAction};
 use crate::wm::{WindowManager, SplitDirection};
 use crate::history::HistorySelector;
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
@@ -890,8 +890,8 @@ fn run_wm_main_loop(
         }
 
         // Poll for events
-        if event::poll(poll_timeout)? {
-            match event::read()? {
+        if input::poll(poll_timeout)? {
+            match input::read()? {
                 Event::Key(key_event) => {
                     if key_event.kind != KeyEventKind::Press {
                         continue;
@@ -1707,8 +1707,8 @@ fn run_main_loop(
         }
 
         // Process input events
-        if event::poll(poll_timeout)? {
-            let evt = event::read()?;
+        if input::poll(poll_timeout)? {
+            let evt = input::read()?;
             // Log all events to debug file
             renderer.log_mouse_event(&format!("Event received: {:?}", evt));
             

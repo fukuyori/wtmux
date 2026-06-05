@@ -10,9 +10,9 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 ## 1.3.9 Highlights
 
-- Emoji and other non-BMP characters entered through Windows paste-style input are forwarded to the focused pane.
-- Bracketed paste is enabled for both single-pane and multi-pane renderers.
-- Key mapping now verifies that non-BMP characters are encoded as UTF-8.
+- Windows input now preserves IME and emoji-panel non-BMP characters such as 🚶.
+- PowerShell and PowerShell 7 sessions now set both input and output encoding to UTF-8.
+- Key mapping and Windows surrogate-pair handling are covered by tests.
 
 ## Features
 
