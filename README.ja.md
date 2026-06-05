@@ -4,15 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.9-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.10-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.9 の主な変更
+## 1.3.10 の主な変更
 
+- MSI パッケージのインストーラーバージョンを更新し、古い 1.3.9 のバイナリが確実に置き換わるようにしました。
 - Windows 入力で IME や絵文字パネルから届く 🚶 などの非 BMP 文字を保持するようにしました。
 - PowerShell / PowerShell 7 セッションで、入力と出力の両方を UTF-8 に設定するようにしました。
-- キー入力の UTF-8 変換と Windows のサロゲートペア処理をテストで確認するようにしました。
 
 ## 特徴
 

@@ -1,3 +1,11 @@
+## [1.3.10] - 2026-06-05
+
+### Changed
+
+- **MSI upgrades now replace the installed binary**:
+  bumped the installer/package version to `1.3.10` so Windows Installer treats
+  the package as a newer upgrade and replaces older `1.3.9` installations.
+
 ## [1.3.9] - 2026-06-05
 
 ### Changed
