@@ -353,18 +353,21 @@ impl WindowManager {
         }
     }
 
-    /// Process output for all tabs and handle closed panes
+    /// Process output for all tabs and handle closed panes.
+    /// Returns true when pane content or tab layout changed and a render is needed.
     pub fn process_output(&mut self) -> bool {
-        let mut any_output = false;
+        let mut changed = false;
         let tabs_to_check: Vec<TabId> = self.tabs.keys().cloned().collect();
         
         for tab_id in tabs_to_check.iter() {
             if let Some(tab) = self.tabs.get_mut(tab_id) {
                 if tab.process_output() {
-                    any_output = true;
+                    changed = true;
                 }
                 // Clean up dead panes
-                tab.cleanup_dead_panes();
+                if tab.cleanup_dead_panes() {
+                    changed = true;
+                }
             }
         }
         
@@ -376,16 +379,19 @@ impl WindowManager {
         for tab_id in empty_tabs {
             self.tabs.remove(&tab_id);
             self.tab_order.retain(|&id| id != tab_id);
+            changed = true;
         }
         
         // Update active tab if needed
         if !self.tabs.contains_key(&self.active_tab) {
             if let Some(&new_active) = self.tab_order.first() {
                 self.active_tab = new_active;
+                self.force_full_redraw();
+                changed = true;
             }
         }
         
-        any_output
+        changed
     }
 
     /// Check if any tab is still running
@@ -451,23 +457,59 @@ impl WindowManager {
         let tabs = self.tab_info();
         let mut x: u16 = 0;
         
-        for (id, name, _active) in tabs {
+        for (i, (id, name, _active)) in tabs.iter().enumerate() {
             // Tab format: " name " with separator "│"
             let tab_width = name.chars().count() as u16 + 2; // " name "
             
             if col >= x && col < x + tab_width {
-                return Some(id);
+                return Some(*id);
             }
             
-            x += tab_width + 1; // +1 for separator "│"
+            x += tab_width;
+            if i + 1 < tabs.len() {
+                x += 1; // separator "│"
+            }
         }
         
         None
     }
 
+    /// Return the clickable tab-bar range for the new-tab button.
+    pub fn new_tab_button_range(&self) -> Option<std::ops::Range<u16>> {
+        let tabs = self.tab_info();
+        let mut x: u16 = 0;
+
+        for (i, (_id, name, _active)) in tabs.iter().enumerate() {
+            x = x.saturating_add(name.chars().count() as u16 + 2);
+            if i + 1 < tabs.len() {
+                x = x.saturating_add(1);
+            }
+        }
+
+        let start = if tabs.is_empty() {
+            0
+        } else {
+            x.saturating_add(1)
+        };
+        let width = 3; // "[+]"
+        let end = start.saturating_add(width);
+
+        (end <= self.width).then_some(start..end)
+    }
+
+    pub fn is_new_tab_button_at_position(&self, col: u16) -> bool {
+        self.new_tab_button_range()
+            .is_some_and(|range| range.contains(&col))
+    }
+
     /// Handle tab bar click - switches to clicked tab
-    /// Returns true if tab changed
+    /// Returns true if tab changed or a new tab was created.
     pub fn handle_tab_click(&mut self, col: u16) -> bool {
+        if self.is_new_tab_button_at_position(col) {
+            self.new_tab();
+            return true;
+        }
+
         if let Some(tab_id) = self.tab_at_position(col) {
             if tab_id != self.active_tab {
                 self.last_active_tab = Some(self.active_tab);
@@ -883,5 +925,43 @@ impl WindowManager {
                     None
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manager(width: u16) -> WindowManager {
+        WindowManager::new(width, 24, None, None, PrefixKey { char: 'b' })
+    }
+
+    #[test]
+    fn new_tab_button_range_starts_after_rendered_tabs() {
+        let wm = test_manager(20);
+
+        assert_eq!(wm.tab_at_position(0), Some(1));
+        assert_eq!(wm.tab_at_position(7), Some(1));
+        assert_eq!(wm.tab_at_position(8), None);
+        assert_eq!(wm.new_tab_button_range(), Some(9..12));
+        assert!(wm.is_new_tab_button_at_position(9));
+        assert!(wm.is_new_tab_button_at_position(11));
+        assert!(!wm.is_new_tab_button_at_position(12));
+    }
+
+    #[test]
+    fn new_tab_button_is_hidden_when_tab_bar_is_too_narrow() {
+        let wm = test_manager(10);
+
+        assert_eq!(wm.new_tab_button_range(), None);
+        assert!(!wm.is_new_tab_button_at_position(9));
+    }
+
+    #[test]
+    fn process_output_reports_tab_removal_when_only_pane_exited() {
+        let mut wm = test_manager(80);
+
+        assert!(wm.process_output());
+        assert!(wm.tabs.is_empty());
     }
 }

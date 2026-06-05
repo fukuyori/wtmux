@@ -96,11 +96,14 @@ For example, to create a new tab:
 1. Press `Ctrl+B` (you'll see `[PREFIX]` at the bottom)
 2. Press `c`
 
+You can also click `[+]` in the tab bar to create a new tab with the mouse.
+
 ### Tab Operations
 
 | Key | Action |
 |-----|--------|
 | `Ctrl+B, c` | Create new tab |
+| Click `[+]` in the tab bar | Create new tab |
 | `Ctrl+B, n` | Next tab |
 | `Ctrl+B, p` | Previous tab |
 | `Ctrl+B, 0-9` | Select tab by number |
@@ -331,6 +334,7 @@ wtmux includes 8 built-in color schemes.
 1. Press `Ctrl+B, t` to open theme selector
 2. Use `↑`/`↓` to browse themes
 3. Press `Enter` to apply
+4. Press `Esc` to cancel without changing the theme
 
 ### Available Themes
 
@@ -460,7 +464,7 @@ Press `Ctrl+B, b` to send `Ctrl+B` to the application
 
 Create tabs for different tasks and name them:
 
-1. Press `Ctrl+B, c` to create new tab
+1. Press `Ctrl+B, c` or click `[+]` in the tab bar to create a new tab
 2. Press `Ctrl+B, ,` to rename (e.g., "frontend", "backend", "logs")
 3. Use `Ctrl+B, 0`-`9` to switch quickly
 
@@ -518,7 +522,7 @@ With wtmux, you can enjoy tmux-like terminal workflows on Windows.
 
 | Action | Key |
 |--------|-----|
-| New tab | `Ctrl+B, c` |
+| New tab | `Ctrl+B, c` or tab-bar `[+]` |
 | Vertical split | `Ctrl+B, %` |
 | Horizontal split | `Ctrl+B, "` |
 | Navigate panes | `Ctrl+B, arrow` |

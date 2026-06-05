@@ -863,8 +863,8 @@ fn run_wm_main_loop(
             pane_numbers_visible = false;
         }
 
-        // Process output from all panes
-        let has_output = wm.process_output();
+        // Process output and closed panes/tabs.
+        let needs_render = wm.process_output();
         
         // Check again after processing output (panes may have exited)
         if !wm.is_running() {
@@ -876,7 +876,7 @@ fn run_wm_main_loop(
         if copy_mode.active || rename_mode || context_menu.visible {
             // In copy mode, rename mode, or context menu, only render on key events
             // (rendering happens in the key handler below)
-        } else if has_output {
+        } else if needs_render {
             if theme_selector_visible {
                 renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
             } else if pane_numbers_visible {
@@ -1106,6 +1106,7 @@ fn run_wm_main_loop(
                         match key_event.code {
                             KeyCode::Esc => {
                                 theme_selector_visible = false;
+                                wm.force_full_redraw();
                             }
                             KeyCode::Up => {
                                 if theme_selector_index > 0 {
@@ -1121,6 +1122,7 @@ fn run_wm_main_loop(
                                 let scheme_name = theme_list[theme_selector_index];
                                 renderer.set_color_scheme(ColorScheme::by_name(scheme_name));
                                 theme_selector_visible = false;
+                                wm.force_full_redraw();
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
@@ -1129,11 +1131,16 @@ fn run_wm_main_loop(
                                     let scheme_name = theme_list[theme_selector_index];
                                     renderer.set_color_scheme(ColorScheme::by_name(scheme_name));
                                     theme_selector_visible = false;
+                                    wm.force_full_redraw();
                                 }
                             }
                             _ => {}
                         }
-                        renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                        if theme_selector_visible {
+                            renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                        } else {
+                            renderer.render(wm)?;
+                        }
                         continue;
                     }
 

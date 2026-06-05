@@ -273,8 +273,9 @@ impl Tab {
         self.panes.values().any(|p| p.session.is_running())
     }
 
-    /// Clean up dead panes (where shell has exited)
-    pub fn cleanup_dead_panes(&mut self) {
+    /// Clean up dead panes (where shell has exited).
+    /// Returns true if any pane was removed.
+    pub fn cleanup_dead_panes(&mut self) -> bool {
         let dead_panes: Vec<PaneId> = self.panes
             .iter()
             .filter(|(_, pane)| !pane.session.is_running())
@@ -282,9 +283,10 @@ impl Tab {
             .collect();
         
         if dead_panes.is_empty() {
-            return;
+            return false;
         }
         
+        let removed_any = !dead_panes.is_empty();
         for pane_id in dead_panes {
             // Remove from layout
             if let Some(new_layout) = self.layout.remove(pane_id) {
@@ -310,6 +312,8 @@ impl Tab {
         if !self.panes.is_empty() {
             self.reflow(ReflowReason::Close);
         }
+
+        removed_any
     }
 
     /// Toggle zoom on focused pane
@@ -430,5 +434,18 @@ impl Tab {
         
         // Update pane positions
         self.reflow(ReflowReason::LayoutChanged);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_dead_panes_reports_removed_panes() {
+        let mut tab = Tab::new(1, "1:main".to_string(), 80, 22);
+
+        assert!(tab.cleanup_dead_panes());
+        assert!(tab.panes.is_empty());
     }
 }

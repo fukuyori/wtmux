@@ -1,3 +1,23 @@
+## [1.4.0] - 2026-06-05
+
+### Changed
+
+- **New tabs can be created from the tab bar**:
+  the tab bar now shows a `[+]` button next to the tabs, and clicking it creates
+  a new tab.
+
+- **Single-pane input no longer overlaps the status bar after resize**:
+  Windows console resize events now use the reported cell count directly instead
+  of adding an extra row and column.
+
+- **Theme selector closes cleanly with Esc**:
+  closing or applying the theme selector now forces the underlying panes to
+  redraw, clearing the overlay immediately.
+
+- **Tabs close promptly when their shell exits**:
+  pane and tab cleanup now requests a render even when the exiting shell has no
+  remaining output, so closed tabs disappear immediately in multi-tab sessions.
+
 ## [1.3.10] - 2026-06-05
 
 ### Changed

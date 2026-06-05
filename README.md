@@ -4,15 +4,16 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.10-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.3.10 Highlights
+## 1.4.0 Highlights
 
-- MSI packages now use a new installer version so Windows Installer upgrades replace older 1.3.9 binaries.
-- Windows input now preserves IME and emoji-panel non-BMP characters such as 🚶.
-- PowerShell and PowerShell 7 sessions now set both input and output encoding to UTF-8.
+- The tab bar now shows a `[+]` button that creates a new tab with a mouse click.
+- Windows resize events now keep single-pane input above the status bar.
+- Theme selector overlays now disappear immediately when closed with Esc.
+- Closed tabs are redrawn immediately when a shell exits in a multi-tab session.
 
 ## Features
 
@@ -152,6 +153,7 @@ The tables below show the default keybindings.
 | Key | Action |
 |-----|--------|
 | `Ctrl+B, c` | Create new window |
+| Click `[+]` in the tab bar | Create new window |
 | `Ctrl+B, &` | Kill current window |
 | `Ctrl+B, n` | Next window |
 | `Ctrl+B, p` | Previous window |
@@ -204,6 +206,7 @@ In copy mode:
 | Key | Action |
 |-----|--------|
 | `Ctrl+B, t` | Theme selector |
+| `Esc` in theme selector | Cancel theme selector |
 | `Ctrl+B, r` | Reset cursor shape |
 | `Ctrl+B, b` | Send Ctrl+B to application |
 | `Esc` | Cancel prefix mode |
@@ -409,6 +412,7 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Left drag | Select text | App receives event |
 | Shift + Left drag | Select text | Select text |
 | Left click on tab bar | Switch tab | Switch tab |
+| Left click `[+]` in tab bar | Create new tab | Create new tab |
 | Right click | Context menu (Paste, Zoom, Split, etc.) | Context menu |
 | Scroll wheel | Scroll buffer | App receives event |
 

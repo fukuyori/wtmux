@@ -28,7 +28,7 @@ mod windows_input {
     use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::System::Console::{
         GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle,
-        ReadConsoleInputW, DOUBLE_CLICK, FOCUS_EVENT, FROM_LEFT_1ST_BUTTON_PRESSED,
+        ReadConsoleInputW, COORD, DOUBLE_CLICK, FOCUS_EVENT, FROM_LEFT_1ST_BUTTON_PRESSED,
         FROM_LEFT_2ND_BUTTON_PRESSED, INPUT_RECORD, KEY_EVENT, KEY_EVENT_RECORD,
         LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, MOUSE_EVENT, MOUSE_HWHEELED, MOUSE_MOVED,
         MOUSE_WHEELED, RIGHTMOST_BUTTON_PRESSED, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED,
@@ -144,7 +144,7 @@ mod windows_input {
                 MOUSE_EVENT => unsafe { self.parse_mouse(record.Event.MouseEvent) },
                 WINDOW_BUFFER_SIZE_EVENT => {
                     let size = unsafe { record.Event.WindowBufferSizeEvent.dwSize };
-                    Some(Event::Resize(size.X as u16 + 1, size.Y as u16 + 1))
+                    Some(resize_event_from_buffer_size(size))
                 }
                 FOCUS_EVENT => {
                     let focus = unsafe { record.Event.FocusEvent.bSetFocus };
@@ -332,6 +332,10 @@ mod windows_input {
         buffer_row.max(0) as u16
     }
 
+    fn resize_event_from_buffer_size(size: COORD) -> Event {
+        Event::Resize(size.X.max(0) as u16, size.Y.max(0) as u16)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -371,6 +375,14 @@ mod windows_input {
                     KeyCode::Char('🚶'),
                     KeyModifiers::empty()
                 )))
+            );
+        }
+
+        #[test]
+        fn window_buffer_size_event_uses_cell_count_without_extra_row() {
+            assert_eq!(
+                resize_event_from_buffer_size(COORD { X: 120, Y: 30 }),
+                Event::Resize(120, 30)
             );
         }
     }

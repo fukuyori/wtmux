@@ -4,15 +4,16 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.10-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.10 の主な変更
+## 1.4.0 の主な変更
 
-- MSI パッケージのインストーラーバージョンを更新し、古い 1.3.9 のバイナリが確実に置き換わるようにしました。
-- Windows 入力で IME や絵文字パネルから届く 🚶 などの非 BMP 文字を保持するようにしました。
-- PowerShell / PowerShell 7 セッションで、入力と出力の両方を UTF-8 に設定するようにしました。
+- タブバーに `[+]` ボタンを表示し、マウスクリックで新しいタブを作成できるようにしました。
+- Windows のリサイズイベント処理を修正し、1ペイン時の入力がステータスバーに重ならないようにしました。
+- テーマ selector を Esc で閉じたとき、残像が残らないようにしました。
+- 複数タブ時にシェルが終了したタブをすぐ再描画して閉じるようにしました。
 
 ## 特徴
 
@@ -148,6 +149,7 @@ wtmux --help
 | キー | 動作 |
 |-----|--------|
 | `Ctrl+B, c` | 新規ウィンドウ作成 |
+| タブバーの `[+]` をクリック | 新規ウィンドウ作成 |
 | `Ctrl+B, &` | 現在のウィンドウを閉じる |
 | `Ctrl+B, n` | 次のウィンドウ |
 | `Ctrl+B, p` | 前のウィンドウ |
@@ -200,6 +202,7 @@ wtmux --help
 | キー | 動作 |
 |-----|--------|
 | `Ctrl+B, t` | テーマ選択 |
+| テーマ選択中の `Esc` | テーマ選択をキャンセル |
 | `Ctrl+B, r` | カーソル形状をリセット |
 | `Ctrl+B, b` | アプリケーションにCtrl+Bを送信 |
 | `Esc` | プレフィックスモードをキャンセル |
@@ -356,6 +359,7 @@ wtmuxは包括的なマウスサポートを提供しています。
 | 左ドラッグ | テキスト選択 | アプリに転送 |
 | Shift + 左ドラッグ | テキスト選択 | テキスト選択 |
 | タブバーを左クリック | タブ切り替え | タブ切り替え |
+| タブバーの `[+]` を左クリック | 新規タブ作成 | 新規タブ作成 |
 | 右クリック | コンテキストメニュー（Paste, Zoom, Split等） | コンテキストメニュー |
 | スクロールホイール | バッファをスクロール | アプリに転送 |
 

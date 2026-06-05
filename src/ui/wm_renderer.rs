@@ -827,6 +827,16 @@ impl WmRenderer {
             }
         }
 
+        if let Some(range) = wm.new_tab_button_range() {
+            execute!(
+                stdout,
+                MoveTo(range.start, 0),
+                SetBackgroundColor(cs.tab_bar_bg.to_crossterm()),
+                SetForegroundColor(cs.tab_bar_fg.to_crossterm())
+            )?;
+            write!(stdout, "[+]")?;
+        }
+
         // Show prefix mode indicator
         if wm.prefix_mode {
             execute!(stdout, MoveTo(wm.width - 10, 0))?;
