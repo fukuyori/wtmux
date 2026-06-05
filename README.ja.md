@@ -4,15 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.8-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.9-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.3.8 の主な変更
+## 1.3.9 の主な変更
 
-- マウスクリック時にポインタが少し動いただけで 1 文字コピーされないようにしました。
-- ドラッグで選択範囲が実際に動いた場合は、これまで通りボタンを離したときにコピーします。
-- 範囲が選択されなかった場合は、マウスボタンを離した時点で選択表示を解除します。
+- Windows の貼り付け形式で届く絵文字などの非 BMP 文字を、フォーカス中のペインへ渡すようにしました。
+- シングルペイン/マルチペインの両方で bracketed paste を有効化しました。
+- 非 BMP 文字が UTF-8 としてキー入力へ渡ることをテストで確認するようにしました。
 
 ## 特徴
 

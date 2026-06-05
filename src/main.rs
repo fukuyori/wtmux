@@ -1566,6 +1566,23 @@ fn run_wm_main_loop(
                     last_resize_time = std::time::Instant::now();
                 }
 
+                Event::Paste(text) => {
+                    if selector_is_visible(&selector) {
+                        if let Some(selector) = selector.as_mut() {
+                            selector.hide();
+                        }
+                    }
+                    context_menu.hide();
+                    copy_mode.exit();
+                    rename_mode = false;
+                    rename_buffer.clear();
+                    theme_selector_visible = false;
+                    pane_numbers_visible = false;
+                    wm.prefix_mode = false;
+                    wm.scroll_to_bottom();
+                    let _ = wm.paste(&text);
+                }
+
                 _ => {}
             }
         }

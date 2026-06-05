@@ -313,6 +313,10 @@ mod tests {
         let event = key_event(KeyCode::Char('a'), KeyModifiers::NONE);
         assert_eq!(KeyMapper::map(&event, &modes), Some(b"a".to_vec()));
 
+        // Non-BMP characters must be forwarded as UTF-8.
+        let event = key_event(KeyCode::Char('🚶'), KeyModifiers::NONE);
+        assert_eq!(KeyMapper::map(&event, &modes), Some("🚶".as_bytes().to_vec()));
+
         // Ctrl+C
         let event = key_event(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(KeyMapper::map(&event, &modes), Some(vec![0x03]));

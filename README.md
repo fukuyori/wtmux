@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.3.8-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.3.9-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.3.8 Highlights
+## 1.3.9 Highlights
 
-- Mouse clicks no longer copy a single cell just because the pointer moved slightly.
-- Drag-to-copy still copies on mouse release after the selection actually moves.
-- Mouse selection is cleared on release when no text range was selected.
+- Emoji and other non-BMP characters entered through Windows paste-style input are forwarded to the focused pane.
+- Bracketed paste is enabled for both single-pane and multi-pane renderers.
+- Key mapping now verifies that non-BMP characters are encoded as UTF-8.
 
 ## Features
 

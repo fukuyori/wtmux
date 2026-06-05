@@ -1,3 +1,12 @@
+## [1.3.9] - 2026-06-05
+
+### Changed
+
+- **Emoji input now reaches the focused pane**:
+  bracketed paste is enabled for both renderers, and multi-pane mode now
+  forwards paste-style input events to the focused pane. This fixes Windows
+  emoji panel input such as `🚶`.
+
 ## [1.3.8] - 2026-05-30
 
 ### Changed
