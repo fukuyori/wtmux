@@ -4,11 +4,11 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.4.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.5.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.4.0 の主な変更
+## 1.5.0 の主な変更
 
 - タブバーに `[+]` ボタンを表示し、マウスクリックで新しいタブを作成できるようにしました。
 - Windows のリサイズイベント処理を修正し、1ペイン時の入力がステータスバーに重ならないようにしました。

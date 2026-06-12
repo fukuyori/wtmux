@@ -42,6 +42,7 @@ mod wm;
 mod history;
 mod config;
 mod copymode;
+mod tmux_compat;
 
 use std::env;
 use std::io::Write;
@@ -544,6 +545,10 @@ fn ensure_native_console() -> bool {
 fn main() -> anyhow::Result<()> {
     // Check for -n/--native flag early (before full parsing)
     let args: Vec<String> = env::args().collect();
+    if tmux_compat::maybe_run_tmux_compat_cli(&args)? {
+        return Ok(());
+    }
+
     let wants_native = args.iter().any(|a| a == "-n" || a == "--native");
     let no_relaunch = args.iter().any(|a| a == "--no-relaunch");
     
@@ -813,6 +818,7 @@ fn run_wm_main_loop(
 ) -> anyhow::Result<()> {
     let poll_timeout = Duration::from_millis(10);
     let mut selector: Option<HistorySelector> = None;
+    let mut status_publisher = tmux_compat::StatusPublisher::default();
     
     // Theme selector state
     let mut theme_selector_visible = false;
@@ -865,6 +871,10 @@ fn run_wm_main_loop(
 
         // Process output and closed panes/tabs.
         let needs_render = wm.process_output();
+
+        if let Some(snapshot) = wm.tmux_active_pane_snapshot() {
+            status_publisher.publish(&snapshot);
+        }
         
         // Check again after processing output (panes may have exited)
         if !wm.is_running() {
@@ -1682,6 +1692,7 @@ fn run_main_loop(
     keybindings: ParsedKeyBindings,
 ) -> anyhow::Result<()> {
     let poll_timeout = Duration::from_millis(10);
+    let mut status_publisher = tmux_compat::StatusPublisher::default();
 
     loop {
         // Check if session is still running at the start of each iteration
@@ -1712,6 +1723,8 @@ fn run_main_loop(
                 }
             }
         }
+
+        status_publisher.publish(&tmux_compat::PaneSnapshot::from_session(session));
 
         // Process input events
         if input::poll(poll_timeout)? {

@@ -19,6 +19,12 @@ pub struct TerminalState {
     pub current_attrs: CellAttrs,
     pub modes: TerminalModes,
     pub title: String,
+    /// Best-known current working directory for this pane.
+    ///
+    /// Initialized from the wtmux process cwd and updated by OSC 7 or
+    /// Windows Terminal's OSC 9;9 cwd notifications when the child shell
+    /// emits them.
+    pub current_path: String,
     /// Scroll region (top, bottom) - 0-indexed, inclusive
     pub scroll_region: (u16, u16),
     /// Text selection state
@@ -76,6 +82,10 @@ impl TerminalState {
             current_attrs: CellAttrs::default(),
             modes: TerminalModes::default(),
             title: String::from("RustTerm"),
+            current_path: std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             scroll_region: (0, rows.saturating_sub(1)),
             selection: None,
             shell_integration: ShellIntegration::default(),

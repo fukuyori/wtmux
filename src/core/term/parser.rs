@@ -808,6 +808,16 @@ impl VtParser {
                     // Set title
                     state.title = text.to_string();
                 }
+                "7" => {
+                    if let Some(path) = osc7_to_path(text) {
+                        state.current_path = path;
+                    }
+                }
+                "9" => {
+                    if let Some(path) = osc9_9_to_path(text) {
+                        state.current_path = path;
+                    }
+                }
                 // ── Shell Integration ─────────────────────────────────────
                 // OSC 133 : FinalTerm / standard shell integration
                 // OSC 633 : VS Code extension (superset of OSC 133)
@@ -906,6 +916,71 @@ impl VtParser {
     }
 }
 
+fn osc7_to_path(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("file://")?;
+    let path_start = if rest.starts_with('/') {
+        rest
+    } else {
+        let slash = rest.find('/')?;
+        &rest[slash..]
+    };
+    let decoded = percent_decode(path_start);
+
+    #[cfg(windows)]
+    {
+        if decoded.len() >= 3
+            && decoded.as_bytes()[0] == b'/'
+            && decoded.as_bytes()[2] == b':'
+        {
+            return Some(decoded[1..].replace('/', "\\"));
+        }
+        Some(decoded.replace('/', "\\"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        Some(decoded)
+    }
+}
+
+fn osc9_9_to_path(text: &str) -> Option<String> {
+    let path = text.strip_prefix("9;")?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,5 +1022,28 @@ mod tests {
 
         let command = VtParser::extract_command_from_screen(&state);
         assert_eq!(command, "abcdefghi");
+    }
+
+    #[test]
+    fn osc7_path_decodes_file_uri() {
+        #[cfg(windows)]
+        assert_eq!(
+            osc7_to_path("file://host/C:/Users/n_fuk/My%20Project").as_deref(),
+            Some("C:\\Users\\n_fuk\\My Project")
+        );
+
+        #[cfg(not(windows))]
+        assert_eq!(
+            osc7_to_path("file://host/home/n_fuk/My%20Project").as_deref(),
+            Some("/home/n_fuk/My Project")
+        );
+    }
+
+    #[test]
+    fn osc9_9_path_uses_literal_windows_path() {
+        assert_eq!(
+            osc9_9_to_path("9;C:\\Users\\n_fuk\\My Project").as_deref(),
+            Some("C:\\Users\\n_fuk\\My Project")
+        );
     }
 }

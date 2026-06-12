@@ -896,6 +896,34 @@ impl WindowManager {
             })
             .unwrap_or((false, false))
     }
+
+    /// Build the tmux-compatible status snapshot for the active pane.
+    pub fn tmux_active_pane_snapshot(&self) -> Option<crate::tmux_compat::PaneSnapshot> {
+        let tab = self.active_tab()?;
+        let pane = tab.focused_pane()?;
+        let pane_index = tab
+            .pane_order
+            .iter()
+            .position(|id| *id == tab.focused_pane)
+            .unwrap_or(0);
+
+        Some(crate::tmux_compat::PaneSnapshot {
+            pid: std::process::id(),
+            session_id: crate::tmux_compat::session_id_for_pid(std::process::id()),
+            window_index: self
+                .tab_order
+                .iter()
+                .position(|id| *id == self.active_tab)
+                .unwrap_or(0),
+            pane_index,
+            pane_id: pane.id,
+            pane_current_path: pane.session.state.current_path.clone(),
+            pane_title: pane.session.state.title.clone(),
+            pane_dead: !pane.session.is_running(),
+            pane_width: pane.session.state.cols,
+            pane_height: pane.session.state.rows,
+        })
+    }
     
     /// Convert screen coordinates to pane-relative coordinates.
     ///
