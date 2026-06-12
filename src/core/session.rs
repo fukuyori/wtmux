@@ -94,8 +94,25 @@ impl Session {
     /// Start the session with a shell command and specific codepage
     #[cfg(windows)]
     pub fn start_with_codepage(&mut self, command: Option<&str>, codepage: Option<u32>) -> Result<(), PtyError> {
+        self.start_with_options(command, codepage, false)
+    }
+
+    /// Start the session with a shell command, codepage, and shell options.
+    #[cfg(windows)]
+    pub fn start_with_options(
+        &mut self,
+        command: Option<&str>,
+        codepage: Option<u32>,
+        cwd_prompt_hook: bool,
+    ) -> Result<(), PtyError> {
         let (cols, rows) = (self.state.cols, self.state.rows);
-        let pty = Arc::new(ConPty::new_with_codepage(cols, rows, command, codepage)?);
+        let pty = Arc::new(ConPty::new_with_options(
+            cols,
+            rows,
+            command,
+            codepage,
+            cwd_prompt_hook,
+        )?);
         self.pty = Some(pty.clone());
         self.running.store(true, Ordering::SeqCst);
 

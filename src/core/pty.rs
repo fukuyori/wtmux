@@ -71,15 +71,33 @@ impl ConPty {
     /// Create a new ConPTY instance and spawn a shell
     #[allow(dead_code)]
     pub fn new(cols: u16, rows: u16, command: Option<&str>) -> Result<Self> {
-        unsafe { Self::create_internal(cols, rows, command, None) }
+        unsafe { Self::create_internal(cols, rows, command, None, false) }
     }
 
     /// Create a new ConPTY instance with specific codepage
+    #[allow(dead_code)]
     pub fn new_with_codepage(cols: u16, rows: u16, command: Option<&str>, codepage: Option<u32>) -> Result<Self> {
-        unsafe { Self::create_internal(cols, rows, command, codepage) }
+        Self::new_with_options(cols, rows, command, codepage, false)
     }
 
-    unsafe fn create_internal(cols: u16, rows: u16, command: Option<&str>, codepage: Option<u32>) -> Result<Self> {
+    /// Create a new ConPTY instance with specific codepage and shell options.
+    pub fn new_with_options(
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        codepage: Option<u32>,
+        cwd_prompt_hook: bool,
+    ) -> Result<Self> {
+        unsafe { Self::create_internal(cols, rows, command, codepage, cwd_prompt_hook) }
+    }
+
+    unsafe fn create_internal(
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        codepage: Option<u32>,
+        cwd_prompt_hook: bool,
+    ) -> Result<Self> {
         // Create pipes for PTY communication
         let mut pty_input_read = HANDLE::default();
         let mut pty_input_write = HANDLE::default();
@@ -144,7 +162,7 @@ impl ConPty {
 
         let mut process_info = PROCESS_INFORMATION::default();
 
-        let cmd = build_shell_command(command, codepage);
+        let cmd = build_shell_command(command, codepage, cwd_prompt_hook);
         let mut cmd_wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
 
         // Create process
@@ -317,27 +335,77 @@ impl Drop for ConPty {
     }
 }
 
-fn build_shell_command(command: Option<&str>, codepage: Option<u32>) -> String {
+fn build_shell_command(command: Option<&str>, codepage: Option<u32>, cwd_prompt_hook: bool) -> String {
     match (command, codepage) {
         (Some(cmd), Some(cp)) => {
             let cmd_lower = cmd.to_lowercase();
             if cmd_lower == "cmd.exe" || cmd_lower == "cmd" {
-                format!("cmd.exe /k \"chcp {} >nul\"", cp)
+                let hook = if cwd_prompt_hook {
+                    format!(" & {}", cmd_cwd_prompt_hook())
+                } else {
+                    String::new()
+                };
+                format!("cmd.exe /k \"chcp {} >nul{}\"", cp, hook)
             } else if cmd_lower.contains("powershell") || cmd_lower.contains("pwsh") {
-                format!(
-                    "{} -NoExit -Command \"[Console]::InputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\"",
-                    cmd
-                )
+                format!("{} -NoExit -Command \"{}\"", cmd, powershell_startup_script(cwd_prompt_hook))
             } else if cmd_lower.contains("wsl") {
                 cmd.to_string()
             } else {
                 format!("cmd.exe /k \"chcp {} >nul & {}\"", cp, cmd)
             }
         }
-        (Some(cmd), None) => cmd.to_string(),
-        (None, Some(cp)) => format!("cmd.exe /k \"chcp {} >nul\"", cp),
-        (None, None) => "cmd.exe".to_string(),
+        (Some(cmd), None) => {
+            let cmd_lower = cmd.to_lowercase();
+            if cmd_lower == "cmd.exe" || cmd_lower == "cmd" {
+                if cwd_prompt_hook {
+                    format!("cmd.exe /k \"{}\"", cmd_cwd_prompt_hook())
+                } else {
+                    cmd.to_string()
+                }
+            } else if cmd_lower.contains("powershell") || cmd_lower.contains("pwsh") {
+                format!("{} -NoExit -Command \"{}\"", cmd, powershell_startup_script(cwd_prompt_hook))
+            } else {
+                cmd.to_string()
+            }
+        }
+        (None, Some(cp)) => {
+            let hook = if cwd_prompt_hook {
+                format!(" & {}", cmd_cwd_prompt_hook())
+            } else {
+                String::new()
+            };
+            format!("cmd.exe /k \"chcp {} >nul{}\"", cp, hook)
+        }
+        (None, None) => {
+            if cwd_prompt_hook {
+                format!("cmd.exe /k \"{}\"", cmd_cwd_prompt_hook())
+            } else {
+                "cmd.exe".to_string()
+            }
+        }
     }
+}
+
+fn cmd_cwd_prompt_hook() -> &'static str {
+    "if defined PROMPT (prompt $E]9;9;$P$E\\%PROMPT%) else (prompt $E]9;9;$P$E\\$P$G)"
+}
+
+fn powershell_startup_script(cwd_prompt_hook: bool) -> String {
+    let mut script = String::new();
+    if cwd_prompt_hook {
+        script.push_str(concat!(
+            "$__wtmux_original_prompt = if (Test-Path Function:\\prompt) { ${function:prompt} } else { { 'PS ' + (Get-Location) + '> ' } }; ",
+            "function global:prompt { ",
+            "$location = Get-Location; ",
+            "$path = if ($location.Provider.Name -eq 'FileSystem') { $location.ProviderPath } else { $location.Path }; ",
+            "[Console]::Out.Write(([string][char]27 + ']9;9;' + $path + [string][char]27 + '\\')); ",
+            "& $__wtmux_original_prompt ",
+            "}; "
+        ));
+    }
+    script.push_str("[Console]::InputEncoding = [System.Text.Encoding]::UTF8; ");
+    script.push_str("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8");
+    script
 }
 
 #[cfg(test)]
@@ -353,9 +421,49 @@ mod tests {
 
     #[test]
     fn powershell_sets_input_and_output_encoding() {
-        let cmd = build_shell_command(Some("pwsh.exe"), Some(65001));
+        let cmd = build_shell_command(Some("pwsh.exe"), Some(65001), true);
 
         assert!(cmd.contains("[Console]::InputEncoding = [System.Text.Encoding]::UTF8"));
         assert!(cmd.contains("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"));
+    }
+
+    #[test]
+    fn powershell_wraps_prompt_with_cwd_osc() {
+        let cmd = build_shell_command(Some("pwsh.exe"), Some(65001), true);
+
+        assert!(cmd.contains("function global:prompt"));
+        assert!(cmd.contains("]9;9;"));
+        assert!(cmd.contains("$__wtmux_original_prompt"));
+    }
+
+    #[test]
+    fn cmd_wraps_prompt_with_cwd_osc() {
+        let cmd = build_shell_command(Some("cmd.exe"), Some(65001), true);
+
+        assert!(cmd.contains("prompt $E]9;9;$P$E\\"));
+        assert!(cmd.contains("%PROMPT%"));
+    }
+
+    #[test]
+    fn wsl_command_is_not_wrapped() {
+        let cmd = build_shell_command(Some("wsl.exe"), Some(65001), true);
+
+        assert_eq!(cmd, "wsl.exe");
+    }
+
+    #[test]
+    fn powershell_cwd_prompt_hook_can_be_disabled() {
+        let cmd = build_shell_command(Some("pwsh.exe"), Some(65001), false);
+
+        assert!(!cmd.contains("function global:prompt"));
+        assert!(!cmd.contains("]9;9;"));
+        assert!(cmd.contains("[Console]::InputEncoding = [System.Text.Encoding]::UTF8"));
+    }
+
+    #[test]
+    fn cmd_cwd_prompt_hook_can_be_disabled() {
+        let cmd = build_shell_command(Some("cmd.exe"), Some(65001), false);
+
+        assert_eq!(cmd, "cmd.exe /k \"chcp 65001 >nul\"");
     }
 }

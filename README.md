@@ -4,16 +4,16 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.5.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.5.0 Highlights
+## 1.5.1 Highlights
 
-- The tab bar now shows a `[+]` button that creates a new tab with a mouse click.
-- Windows resize events now keep single-pane input above the status bar.
-- Theme selector overlays now disappear immediately when closed with Esc.
-- Closed tabs are redrawn immediately when a shell exits in a multi-tab session.
+- `display-message -p '#{pane_current_path}'` reports the active pane cwd for tmux-compatible tools.
+- cmd.exe and PowerShell panes can optionally publish cwd changes from the prompt, including after aliases and directory-jump functions.
+- `cwd_prompt_hook = true`, `--cwd-prompt-hook on`, or `-P on` enables the prompt hook; it is off by default to avoid prompt side effects.
+- OSC 7 and Windows Terminal OSC 9;9 cwd notifications remain supported for shells that emit them directly.
 
 ## Features
 
@@ -140,6 +140,8 @@ wtmux --help
 | `-w, --wsl` | Use WSL |
 | `-s, --shell <CMD>` | Custom shell command |
 | `--sjis` | Shift-JIS encoding (default: UTF-8) |
+| `-P, --cwd-prompt-hook <on\|off>` | Set cmd.exe / PowerShell prompt hook cwd tracking |
+| `--no-cwd-prompt-hook` | Disable cmd.exe / PowerShell prompt hook cwd tracking |
 | `-v, --version` | Show version |
 | `-h, --help` | Show help |
 
@@ -288,6 +290,10 @@ wtmux reads configuration from `%LOCALAPPDATA%\wtmux\config.toml`.
 
 # Prefix key (default: "C-b" for Ctrl+B)
 # prefix_key = "C-a"  # Change to Ctrl+A
+
+# Inject a prompt hook into cmd.exe / PowerShell to publish pane cwd changes.
+# Disabled by default to avoid interfering with custom prompts.
+# cwd_prompt_hook = false
 
 # Color scheme
 # Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night

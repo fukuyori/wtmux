@@ -4,16 +4,16 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.5.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.5.0 の主な変更
+## 1.5.1 の主な変更
 
-- タブバーに `[+]` ボタンを表示し、マウスクリックで新しいタブを作成できるようにしました。
-- Windows のリサイズイベント処理を修正し、1ペイン時の入力がステータスバーに重ならないようにしました。
-- テーマ selector を Esc で閉じたとき、残像が残らないようにしました。
-- 複数タブ時にシェルが終了したタブをすぐ再描画して閉じるようにしました。
+- `display-message -p '#{pane_current_path}'` で tmux 互換ツール向けに active pane の cwd を返せるようにしました。
+- cmd.exe / PowerShell では任意でプロンプトから cwd 変更を通知でき、alias やディレクトリジャンプ関数の後も追跡できます。
+- `cwd_prompt_hook = true`、`--cwd-prompt-hook on`、または `-P on` で有効化します。プロンプトへの副作用を避けるため標準では無効です。
+- OSC 7 / Windows Terminal OSC 9;9 の cwd 通知も引き続き利用します。
 
 ## 特徴
 
@@ -136,6 +136,8 @@ wtmux --help
 | `-w, --wsl` | WSLを使用 |
 | `-s, --shell <CMD>` | カスタムシェルコマンド |
 | `--sjis` | Shift-JISエンコーディング（デフォルト: UTF-8） |
+| `-P, --cwd-prompt-hook <on\|off>` | cmd.exe / PowerShell の cwd 追跡用プロンプトフックを設定 |
+| `--no-cwd-prompt-hook` | cmd.exe / PowerShell の cwd 追跡用プロンプトフックを無効化 |
 | `-v, --version` | バージョン表示 |
 | `-h, --help` | ヘルプ表示 |
 
@@ -236,6 +238,10 @@ wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
 
 # プレフィックスキー（デフォルト: "C-b" = Ctrl+B）
 # prefix_key = "C-a"  # Ctrl+Aに変更
+
+# cmd.exe / PowerShell にプロンプトフックを入れて pane cwd の変化を通知します。
+# プロンプトへの副作用を避けるため標準では無効です。
+# cwd_prompt_hook = false
 
 # カラースキーム
 # 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night

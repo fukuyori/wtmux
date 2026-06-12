@@ -55,6 +55,8 @@ pub struct Config {
     pub prefix_key: String,
     /// Color scheme name
     pub color_scheme: String,
+    /// Inject a prompt hook into supported shells to publish the pane cwd.
+    pub cwd_prompt_hook: bool,
     /// Global keybinding settings
     pub keybindings: KeyBindingsConfig,
     /// Tab bar settings
@@ -74,6 +76,7 @@ impl Default for Config {
             codepage: None,
             prefix_key: "C-b".to_string(),
             color_scheme: "default".to_string(),
+            cwd_prompt_hook: false,
             keybindings: KeyBindingsConfig::default(),
             tab_bar: TabBarConfig::default(),
             status_bar: StatusBarConfig::default(),
@@ -450,7 +453,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyBinding, ParsedKeyBindings, KeyBindingsConfig};
+    use super::{Config, KeyBinding, ParsedKeyBindings, KeyBindingsConfig};
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -503,6 +506,18 @@ mod tests {
 
         assert_eq!(parsed.history_selector.code, KeyCode::Char('r'));
         assert_eq!(parsed.history_selector.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn cwd_prompt_hook_defaults_to_disabled() {
+        assert!(!Config::default().cwd_prompt_hook);
+    }
+
+    #[test]
+    fn cwd_prompt_hook_can_be_enabled_from_toml() {
+        let config: Config = toml::from_str("cwd_prompt_hook = true").unwrap();
+
+        assert!(config.cwd_prompt_hook);
     }
 }
 

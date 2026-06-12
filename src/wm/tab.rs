@@ -73,7 +73,13 @@ impl Tab {
     }
 
     /// Split the current pane
-    pub fn split(&mut self, direction: SplitDirection, shell_cmd: Option<&str>, codepage: Option<u32>) -> Option<PaneId> {
+    pub fn split(
+        &mut self,
+        direction: SplitDirection,
+        shell_cmd: Option<&str>,
+        codepage: Option<u32>,
+        cwd_prompt_hook: bool,
+    ) -> Option<PaneId> {
         // Unzoom if zoomed
         self.zoomed_pane = None;
         
@@ -99,7 +105,7 @@ impl Tab {
         new_pane.border = BorderStyle::Single;
         
         // Start the session
-        if let Err(e) = new_pane.session.start_with_codepage(shell_cmd, codepage) {
+        if let Err(e) = new_pane.session.start_with_options(shell_cmd, codepage, cwd_prompt_hook) {
             eprintln!("Failed to start pane session: {}", e);
             return None;
         }

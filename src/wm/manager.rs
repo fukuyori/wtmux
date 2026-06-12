@@ -75,6 +75,8 @@ pub struct WindowManager {
     pub default_shell: Option<String>,
     /// Default codepage
     pub default_codepage: Option<u32>,
+    /// Inject shell prompt hooks that publish cwd changes.
+    pub cwd_prompt_hook: bool,
     /// Prefix key mode (like tmux Ctrl+b)
     pub prefix_mode: bool,
     /// Configured prefix key
@@ -85,7 +87,14 @@ pub struct WindowManager {
 
 impl WindowManager {
     /// Create a new window manager
-    pub fn new(width: u16, height: u16, shell: Option<String>, codepage: Option<u32>, prefix_key: PrefixKey) -> Self {
+    pub fn new(
+        width: u16,
+        height: u16,
+        shell: Option<String>,
+        codepage: Option<u32>,
+        prefix_key: PrefixKey,
+        cwd_prompt_hook: bool,
+    ) -> Self {
         let tab_bar_height = 1;
         let status_bar_height = 1;
         let content_height = height.saturating_sub(tab_bar_height + status_bar_height);
@@ -109,6 +118,7 @@ impl WindowManager {
             status_bar_height,
             default_shell: shell,
             default_codepage: codepage,
+            cwd_prompt_hook,
             prefix_mode: false,
             prefix_key,
             mouse_selection_moved: false,
@@ -131,9 +141,10 @@ impl WindowManager {
         
         // Start session in the initial pane
         if let Some(pane) = tab.focused_pane_mut() {
-            let _ = pane.session.start_with_codepage(
+            let _ = pane.session.start_with_options(
                 self.default_shell.as_deref(),
-                self.default_codepage
+                self.default_codepage,
+                self.cwd_prompt_hook,
             );
         }
         
@@ -206,14 +217,26 @@ impl WindowManager {
     pub fn split_horizontal(&mut self) -> Option<PaneId> {
         let shell = self.default_shell.clone();
         let codepage = self.default_codepage;
-        self.active_tab_mut()?.split(SplitDirection::Horizontal, shell.as_deref(), codepage)
+        let cwd_prompt_hook = self.cwd_prompt_hook;
+        self.active_tab_mut()?.split(
+            SplitDirection::Horizontal,
+            shell.as_deref(),
+            codepage,
+            cwd_prompt_hook,
+        )
     }
 
     /// Split the current pane vertically
     pub fn split_vertical(&mut self) -> Option<PaneId> {
         let shell = self.default_shell.clone();
         let codepage = self.default_codepage;
-        self.active_tab_mut()?.split(SplitDirection::Vertical, shell.as_deref(), codepage)
+        let cwd_prompt_hook = self.cwd_prompt_hook;
+        self.active_tab_mut()?.split(
+            SplitDirection::Vertical,
+            shell.as_deref(),
+            codepage,
+            cwd_prompt_hook,
+        )
     }
 
     /// Close the current pane
@@ -658,11 +681,13 @@ impl WindowManager {
     pub fn start(&mut self) -> Result<(), String> {
         let shell = self.default_shell.clone();
         let codepage = self.default_codepage;
+        let cwd_prompt_hook = self.cwd_prompt_hook;
         if let Some(tab) = self.active_tab_mut() {
             if let Some(pane) = tab.focused_pane_mut() {
-                pane.session.start_with_codepage(
+                pane.session.start_with_options(
                     shell.as_deref(),
-                    codepage
+                    codepage,
+                    cwd_prompt_hook,
                 ).map_err(|e| e.to_string())?;
             }
         }
@@ -961,7 +986,7 @@ mod tests {
     use super::*;
 
     fn test_manager(width: u16) -> WindowManager {
-        WindowManager::new(width, 24, None, None, PrefixKey { char: 'b' })
+        WindowManager::new(width, 24, None, None, PrefixKey { char: 'b' }, true)
     }
 
     #[test]

@@ -1,3 +1,18 @@
+## [1.5.1] - 2026-06-12
+
+### Added
+
+- **Optional prompt-based cwd tracking for arbitrary directory jumps**:
+  cmd.exe and PowerShell sessions can opt in to a prompt hook that publishes
+  cwd changes after aliases, functions, and directory-jump tools that do not
+  use built-in `cd` commands.
+
+- **cwd prompt hook controls**:
+  the prompt hook is disabled by default and can be enabled with
+  `cwd_prompt_hook = true` in `config.toml`, `--cwd-prompt-hook on`, or
+  `-P on` at startup. `--cwd-prompt-hook off`, `-P off`, and
+  `--no-cwd-prompt-hook` can force it off when the config enables it.
+
 ## [1.5.0] - 2026-06-12
 
 ### Added

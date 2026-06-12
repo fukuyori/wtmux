@@ -128,6 +128,10 @@ struct Config {
     debug: bool,
     /// Enable VT byte trace to file (--vt-trace)
     vt_trace: bool,
+    /// Inject shell prompt hooks that publish pane cwd changes
+    cwd_prompt_hook: bool,
+    /// cwd prompt hook was explicitly set via command line
+    cwd_prompt_hook_from_cli: bool,
 }
 
 impl Default for Config {
@@ -140,6 +144,8 @@ impl Default for Config {
             shell_from_cli: false,
             debug: false,  // Logging disabled by default
             vt_trace: false,
+            cwd_prompt_hook: false,
+            cwd_prompt_hook_from_cli: false,
         }
     }
 }
@@ -182,6 +188,9 @@ fn print_help(wtmux_config: &WtmuxConfig) {
     eprintln!("  -n, --native          Run in native console window");
     eprintln!("  -d, --debug           Enable debug logging to file");
     eprintln!("  --vt-trace            Trace raw PTY bytes to %LOCALAPPDATA%\\wtmux\\vt_trace.log");
+    eprintln!("  -P, --cwd-prompt-hook <on|off>");
+    eprintln!("                         Set shell prompt hook cwd tracking");
+    eprintln!("  --no-cwd-prompt-hook  Disable shell prompt hook cwd tracking");
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
     eprintln!();
@@ -301,6 +310,39 @@ fn parse_args() -> Result<Config, String> {
             "--vt-trace" => {
                 config.vt_trace = true;
             }
+            "-P" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("Missing cwd prompt hook argument: expected on or off".to_string());
+                }
+                config.cwd_prompt_hook = parse_cwd_prompt_hook_value(&args[i])?;
+                config.cwd_prompt_hook_from_cli = true;
+            }
+            "--cwd-prompt-hook" => {
+                if i + 1 < args.len() {
+                    if let Some(value) = try_parse_cwd_prompt_hook_value(&args[i + 1])? {
+                        config.cwd_prompt_hook = value;
+                        i += 1;
+                    } else {
+                        config.cwd_prompt_hook = true;
+                    }
+                } else {
+                    config.cwd_prompt_hook = true;
+                }
+                config.cwd_prompt_hook_from_cli = true;
+            }
+            "--no-cwd-prompt-hook" => {
+                config.cwd_prompt_hook = false;
+                config.cwd_prompt_hook_from_cli = true;
+            }
+            arg if arg.starts_with("--cwd-prompt-hook=") => {
+                let value = arg
+                    .split_once('=')
+                    .map(|(_, value)| value)
+                    .unwrap_or_default();
+                config.cwd_prompt_hook = parse_cwd_prompt_hook_value(value)?;
+                config.cwd_prompt_hook_from_cli = true;
+            }
             arg => {
                 return Err(format!("Unknown argument: {}. Use -h for help.", arg));
             }
@@ -309,6 +351,51 @@ fn parse_args() -> Result<Config, String> {
     }
 
     Ok(config)
+}
+
+fn parse_cwd_prompt_hook_value(value: &str) -> Result<bool, String> {
+    try_parse_cwd_prompt_hook_value(value)?.ok_or_else(|| {
+        format!(
+            "Invalid cwd prompt hook value: {}. Expected on or off.",
+            value
+        )
+    })
+}
+
+fn try_parse_cwd_prompt_hook_value(value: &str) -> Result<Option<bool>, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" | "enable" | "enabled" => Ok(Some(true)),
+        "off" | "false" | "0" | "no" | "disable" | "disabled" => Ok(Some(false)),
+        value if value.starts_with('-') => Ok(None),
+        _ => Err(format!(
+            "Invalid cwd prompt hook value: {}. Expected on or off.",
+            value
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_cwd_prompt_hook_value, try_parse_cwd_prompt_hook_value};
+
+    #[test]
+    fn parses_cwd_prompt_hook_on_values() {
+        for value in ["on", "true", "1", "yes", "enable", "enabled"] {
+            assert!(parse_cwd_prompt_hook_value(value).unwrap());
+        }
+    }
+
+    #[test]
+    fn parses_cwd_prompt_hook_off_values() {
+        for value in ["off", "false", "0", "no", "disable", "disabled"] {
+            assert!(!parse_cwd_prompt_hook_value(value).unwrap());
+        }
+    }
+
+    #[test]
+    fn leaves_next_option_for_cwd_prompt_hook_flag() {
+        assert_eq!(try_parse_cwd_prompt_hook_value("-c").unwrap(), None);
+    }
 }
 
 /// Check if running inside Windows Terminal
@@ -652,6 +739,10 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
         // For now, config file codepage is not applied (CLI default takes precedence)
         let _ = cp; // Suppress unused warning
     }
+
+    if !config.cwd_prompt_hook_from_cli {
+        config.cwd_prompt_hook = wtmux_config.cwd_prompt_hook;
+    }
     
     let keybindings = ParsedKeyBindings::from_config(&wtmux_config.keybindings);
 
@@ -690,7 +781,11 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
     let mut session = Session::new(1, cols, rows);
 
     // Start shell with optional codepage
-    if let Err(e) = session.start_with_codepage(Some(&shell_cmd_str), config.codepage) {
+    if let Err(e) = session.start_with_options(
+        Some(&shell_cmd_str),
+        config.codepage,
+        config.cwd_prompt_hook,
+    ) {
         error!("Failed to start shell: {}", e);
         return Err(e.into());
     }
@@ -751,6 +846,7 @@ fn run_terminal_wm(
         config.shell.clone(),
         config.codepage,
         prefix_key,
+        config.cwd_prompt_hook,
     );
     
     // Start initial session

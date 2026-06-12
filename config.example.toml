@@ -19,6 +19,10 @@
 # Examples: "C-b" (Ctrl+B), "C-a" (Ctrl+A), "C-s" (Ctrl+S)
 # prefix_key = "C-b"
 
+# Inject a prompt hook into cmd.exe / PowerShell to publish the pane cwd.
+# Disabled by default to avoid interfering with custom prompts.
+# cwd_prompt_hook = false
+
 # ==============================================================================
 # Appearance
 # ==============================================================================
