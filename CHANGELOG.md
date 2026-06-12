@@ -1,3 +1,18 @@
+## [1.5.0] - 2026-06-12
+
+### Added
+
+- **tmux-compatible cwd query commands**:
+  added a narrow tmux-compatible CLI surface for external cwd sync tools,
+  including `wtmux display-message -p '#{pane_current_path}'`,
+  `wtmux list-clients -F '#{client_pid}\t#{session_id}'`, and
+  `wtmux display-message -p -t '<session_id>' '#{pane_current_path}'`.
+
+- **Pane cwd tracking for shell integrations**:
+  panes now track the best-known current directory from OSC 7 and Windows
+  Terminal `OSC 9;9` cwd notifications, falling back to the wtmux startup
+  directory when no shell notification is available.
+
 ## [1.4.0] - 2026-06-05
 
 ### Changed
