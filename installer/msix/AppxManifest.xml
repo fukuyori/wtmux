@@ -10,7 +10,7 @@
   <Identity
     Name="wtmux"
     Publisher="CN=wtmux"
-    Version="1.5.1.0"
+    Version="1.6.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>

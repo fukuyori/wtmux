@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use super::tab::{Tab, TabId};
 use super::pane::PaneId;
-use super::layout::SplitDirection;
+use super::layout::{SplitDirection, SplitResizeTarget};
 
 use crate::config::PrefixKey;
 
@@ -83,6 +83,8 @@ pub struct WindowManager {
     pub prefix_key: PrefixKey,
     /// Whether the current mouse selection actually moved past the down cell.
     mouse_selection_moved: bool,
+    /// Active split boundary resize drag, if any.
+    mouse_resize_drag: Option<SplitResizeTarget>,
 }
 
 impl WindowManager {
@@ -122,6 +124,7 @@ impl WindowManager {
             prefix_mode: false,
             prefix_key,
             mouse_selection_moved: false,
+            mouse_resize_drag: None,
         }
     }
 
@@ -547,6 +550,7 @@ impl WindowManager {
     /// Returns true if focus changed to a different pane
     pub fn handle_mouse_down(&mut self, col: u16, row: u16) -> bool {
         self.mouse_selection_moved = false;
+        self.mouse_resize_drag = None;
 
         // Check if click is on tab bar
         if row < self.tab_bar_height {
@@ -555,6 +559,13 @@ impl WindowManager {
         
         // Adjust row for content area
         let content_row = row - self.tab_bar_height;
+
+        if let Some(tab) = self.active_tab_mut() {
+            if let Some(target) = tab.split_resize_target_at(col, content_row) {
+                self.mouse_resize_drag = Some(target);
+                return false;
+            }
+        }
         
         // Find pane at position and focus it
         if let Some(tab) = self.active_tab_mut() {
@@ -605,6 +616,19 @@ impl WindowManager {
 
     /// Handle mouse drag (extend selection)
     pub fn handle_mouse_drag(&mut self, col: u16, row: u16) {
+        if let Some(target) = self.mouse_resize_drag.clone() {
+            if row < self.tab_bar_height {
+                return;
+            }
+            let content_row = row - self.tab_bar_height;
+            if let Some(tab) = self.active_tab_mut() {
+                if tab.resize_split_to(&target, col, content_row) {
+                    self.mouse_selection_moved = false;
+                }
+            }
+            return;
+        }
+
         if row < self.tab_bar_height {
             return;
         }
@@ -626,6 +650,11 @@ impl WindowManager {
 
     /// Handle mouse up (end selection and copy)
     pub fn handle_mouse_up(&mut self) -> Option<String> {
+        if self.mouse_resize_drag.take().is_some() {
+            self.mouse_selection_moved = false;
+            return None;
+        }
+
         let mouse_selection_moved = self.mouse_selection_moved;
         self.mouse_selection_moved = false;
 
@@ -642,6 +671,24 @@ impl WindowManager {
             }
         }
         None
+    }
+
+    /// Returns true if a screen coordinate is on a split boundary.
+    pub fn is_split_resize_target(&self, col: u16, row: u16) -> bool {
+        if row < self.tab_bar_height || row >= self.height.saturating_sub(self.status_bar_height) {
+            return false;
+        }
+
+        let content_row = row - self.tab_bar_height;
+        self.tabs
+            .get(&self.active_tab)
+            .and_then(|tab| tab.split_resize_target_at(col, content_row))
+            .is_some()
+    }
+
+    /// Returns true while the user is dragging a split boundary.
+    pub fn is_resizing_split(&self) -> bool {
+        self.mouse_resize_drag.is_some()
     }
 
     /// Handle scroll

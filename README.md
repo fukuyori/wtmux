@@ -4,16 +4,16 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.5.1 Highlights
+## 1.6.0 Highlights
 
-- `display-message -p '#{pane_current_path}'` reports the active pane cwd for tmux-compatible tools.
 - cmd.exe and PowerShell panes can optionally publish cwd changes from the prompt, including after aliases and directory-jump functions.
 - `cwd_prompt_hook = true`, `--cwd-prompt-hook on`, or `-P on` enables the prompt hook; it is off by default to avoid prompt side effects.
-- OSC 7 and Windows Terminal OSC 9;9 cwd notifications remain supported for shells that emit them directly.
+- Pane split borders can be resized with the left mouse button.
+- Focused pane borders redraw correctly when focus moves between panes.
 
 ## Features
 
@@ -397,6 +397,12 @@ You can select text with the mouse and copy it to the clipboard:
 
 This works the same as standard terminal text selection.
 
+### Split Resize
+
+Drag a pane split border with the left mouse button to resize adjacent panes.
+Boundary dragging is handled by wtmux even when the focused TUI application has
+enabled mouse tracking.
+
 ### Mouse Passthrough for TUI Applications
 
 When running TUI applications that use mouse input (e.g., htop, mc, vim with mouse, or apps using crossterm's `EnableMouseCapture`), mouse events are automatically passed through to the application.
@@ -417,6 +423,7 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 |--------|-----------------|---------------------------|
 | Left drag | Select text | App receives event |
 | Shift + Left drag | Select text | Select text |
+| Left drag on split border | Resize panes | Resize panes |
 | Left click on tab bar | Switch tab | Switch tab |
 | Left click `[+]` in tab bar | Create new tab | Create new tab |
 | Right click | Context menu (Paste, Zoom, Split, etc.) | Context menu |

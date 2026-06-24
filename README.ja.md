@@ -4,16 +4,16 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.5.1 の主な変更
+## 1.6.0 の主な変更
 
-- `display-message -p '#{pane_current_path}'` で tmux 互換ツール向けに active pane の cwd を返せるようにしました。
 - cmd.exe / PowerShell では任意でプロンプトから cwd 変更を通知でき、alias やディレクトリジャンプ関数の後も追跡できます。
 - `cwd_prompt_hook = true`、`--cwd-prompt-hook on`、または `-P on` で有効化します。プロンプトへの副作用を避けるため標準では無効です。
-- OSC 7 / Windows Terminal OSC 9;9 の cwd 通知も引き続き利用します。
+- ペインの分割境界を左ドラッグでリサイズできるようにしました。
+- フォーカス移動時に、以前のペイン枠のハイライトが残らないようにしました。
 
 ## 特徴
 
@@ -344,6 +344,11 @@ wtmuxは包括的なマウスサポートを提供しています。
 
 通常のターミナルと同じ操作でテキスト選択ができます。
 
+### 分割境界のリサイズ
+
+ペインの分割境界を左ボタンでドラッグすると、隣接するペインのサイズを変更できます。
+フォーカス中のTUIアプリがマウストラッキングを有効にしている場合でも、境界ドラッグはwtmux側で処理されます。
+
 ### TUIアプリケーションへのマウスパススルー
 
 マウス入力を使用するTUIアプリケーション（htop、mc、マウス対応のvim、crosstermの`EnableMouseCapture`を使用するアプリなど）を実行すると、マウスイベントは自動的にアプリケーションに転送されます。
@@ -364,6 +369,7 @@ wtmuxは包括的なマウスサポートを提供しています。
 |------|------------|------------------------|
 | 左ドラッグ | テキスト選択 | アプリに転送 |
 | Shift + 左ドラッグ | テキスト選択 | テキスト選択 |
+| 分割境界を左ドラッグ | ペインサイズ変更 | ペインサイズ変更 |
 | タブバーを左クリック | タブ切り替え | タブ切り替え |
 | タブバーの `[+]` を左クリック | 新規タブ作成 | 新規タブ作成 |
 | 右クリック | コンテキストメニュー（Paste, Zoom, Split等） | コンテキストメニュー |

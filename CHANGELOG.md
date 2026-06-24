@@ -1,4 +1,4 @@
-## [1.5.1] - 2026-06-12
+## [1.6.0] - 2026-06-24
 
 ### Added
 
@@ -12,6 +12,16 @@
   `cwd_prompt_hook = true` in `config.toml`, `--cwd-prompt-hook on`, or
   `-P on` at startup. `--cwd-prompt-hook off`, `-P off`, and
   `--no-cwd-prompt-hook` can force it off when the config enables it.
+
+- **Mouse split resizing**:
+  pane split boundaries can now be resized by dragging the border with the
+  left mouse button.
+
+### Fixed
+
+- **Focused pane border redraws after focus changes**:
+  pane focus changes now force border redraws so the previously focused pane no
+  longer remains highlighted.
 
 ## [1.5.0] - 2026-06-12
 

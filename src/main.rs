@@ -1587,6 +1587,33 @@ fn run_wm_main_loop(
                         }
                         continue;
                     }
+
+                    let split_resize_mouse_event = match mouse_event.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            wm.is_split_resize_target(mouse_event.column, mouse_event.row)
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                            wm.is_resizing_split()
+                        }
+                        _ => false,
+                    };
+
+                    if split_resize_mouse_event {
+                        match mouse_event.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                wm.handle_mouse_down(mouse_event.column, mouse_event.row);
+                            }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                wm.handle_mouse_drag(mouse_event.column, mouse_event.row);
+                            }
+                            MouseEventKind::Up(MouseButton::Left) => {
+                                let _ = wm.handle_mouse_up();
+                            }
+                            _ => {}
+                        }
+                        renderer.render_with_selector(wm, selector.as_ref())?;
+                        continue;
+                    }
                     
                     // Check for mouse passthrough to child application
                     // Shift key bypasses passthrough for wtmux's own text selection

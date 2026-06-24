@@ -2,6 +2,24 @@
 
 use super::pane::PaneId;
 
+/// A path to a split node inside the layout tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayoutPathStep {
+    First,
+    Second,
+}
+
+/// Split boundary selected for mouse resizing.
+#[derive(Clone, Debug)]
+pub struct SplitResizeTarget {
+    pub path: Vec<LayoutPathStep>,
+    pub direction: SplitDirection,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
 /// Direction of split
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SplitDirection {
@@ -309,6 +327,175 @@ impl Layout {
         }
     }
 
+    /// Find a split boundary at the given layout-relative coordinate.
+    pub fn split_resize_target_at(
+        &self,
+        col: u16,
+        row: u16,
+        width: u16,
+        height: u16,
+    ) -> Option<SplitResizeTarget> {
+        self.split_resize_target_at_inner(col, row, 0, 0, width, height, Vec::new())
+    }
+
+    fn split_resize_target_at_inner(
+        &self,
+        col: u16,
+        row: u16,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        path: Vec<LayoutPathStep>,
+    ) -> Option<SplitResizeTarget> {
+        match self {
+            Layout::Pane(_) => None,
+            Layout::Split { direction, ratio, first, second } => {
+                match direction {
+                    SplitDirection::Horizontal => {
+                        let first_width = ((width as f32) * ratio) as u16;
+                        let second_width = width.saturating_sub(first_width);
+
+                        let mut first_path = path.clone();
+                        first_path.push(LayoutPathStep::First);
+                        if let Some(target) = first.split_resize_target_at_inner(
+                            col,
+                            row,
+                            x,
+                            y,
+                            first_width,
+                            height,
+                            first_path,
+                        ) {
+                            return Some(target);
+                        }
+
+                        let mut second_path = path.clone();
+                        second_path.push(LayoutPathStep::Second);
+                        if let Some(target) = second.split_resize_target_at_inner(
+                            col,
+                            row,
+                            x + first_width,
+                            y,
+                            second_width,
+                            height,
+                            second_path,
+                        ) {
+                            return Some(target);
+                        }
+
+                        let boundary_left = x + first_width.saturating_sub(1);
+                        let boundary_right = x + first_width;
+                        if first_width > 0
+                            && second_width > 0
+                            && row >= y
+                            && row < y + height
+                            && (col == boundary_left || col == boundary_right)
+                        {
+                            return Some(SplitResizeTarget {
+                                path,
+                                direction: *direction,
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
+                        }
+                    }
+                    SplitDirection::Vertical => {
+                        let first_height = ((height as f32) * ratio) as u16;
+                        let second_height = height.saturating_sub(first_height);
+
+                        let mut first_path = path.clone();
+                        first_path.push(LayoutPathStep::First);
+                        if let Some(target) = first.split_resize_target_at_inner(
+                            col,
+                            row,
+                            x,
+                            y,
+                            width,
+                            first_height,
+                            first_path,
+                        ) {
+                            return Some(target);
+                        }
+
+                        let mut second_path = path.clone();
+                        second_path.push(LayoutPathStep::Second);
+                        if let Some(target) = second.split_resize_target_at_inner(
+                            col,
+                            row,
+                            x,
+                            y + first_height,
+                            width,
+                            second_height,
+                            second_path,
+                        ) {
+                            return Some(target);
+                        }
+
+                        let boundary_top = y + first_height.saturating_sub(1);
+                        let boundary_bottom = y + first_height;
+                        if first_height > 0
+                            && second_height > 0
+                            && col >= x
+                            && col < x + width
+                            && (row == boundary_top || row == boundary_bottom)
+                        {
+                            return Some(SplitResizeTarget {
+                                path,
+                                direction: *direction,
+                                x,
+                                y,
+                                width,
+                                height,
+                            });
+                        }
+                    }
+                }
+
+                None
+            }
+        }
+    }
+
+    /// Resize a split selected by `SplitResizeTarget`.
+    pub fn resize_split_to(&mut self, target: &SplitResizeTarget, col: u16, row: u16) -> bool {
+        let ratio = match target.direction {
+            SplitDirection::Horizontal => {
+                if target.width <= 2 {
+                    return false;
+                }
+                (col.saturating_sub(target.x) as f32 / target.width as f32).clamp(0.1, 0.9)
+            }
+            SplitDirection::Vertical => {
+                if target.height <= 2 {
+                    return false;
+                }
+                (row.saturating_sub(target.y) as f32 / target.height as f32).clamp(0.1, 0.9)
+            }
+        };
+
+        self.set_split_ratio_at_path(&target.path, ratio)
+    }
+
+    fn set_split_ratio_at_path(&mut self, path: &[LayoutPathStep], new_ratio: f32) -> bool {
+        match self {
+            Layout::Pane(_) => false,
+            Layout::Split { ratio, first, second, .. } => {
+                if path.is_empty() {
+                    *ratio = new_ratio;
+                    true
+                } else {
+                    match path[0] {
+                        LayoutPathStep::First => first.set_split_ratio_at_path(&path[1..], new_ratio),
+                        LayoutPathStep::Second => second.set_split_ratio_at_path(&path[1..], new_ratio),
+                    }
+                }
+            }
+        }
+    }
+
     /// Find pane in a direction from current pane
     pub fn find_neighbor(&self, from: PaneId, direction: SplitDirection, forward: bool) -> Option<PaneId> {
         let positions = self.calculate_positions(0, 0, 100, 100);
@@ -496,6 +683,46 @@ impl Layout {
                 first.replace_pane_id(from, to);
                 second.replace_pane_id(from, to);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_horizontal_split_boundary_for_mouse_resize() {
+        let layout = Layout::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(Layout::Pane(1)),
+            second: Box::new(Layout::Pane(2)),
+        };
+
+        let target = layout.split_resize_target_at(40, 5, 80, 20).unwrap();
+
+        assert_eq!(target.direction, SplitDirection::Horizontal);
+        assert!(target.path.is_empty());
+    }
+
+    #[test]
+    fn mouse_resize_updates_split_ratio() {
+        let mut layout = Layout::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(Layout::Pane(1)),
+            second: Box::new(Layout::Pane(2)),
+        };
+        let target = layout.split_resize_target_at(40, 5, 80, 20).unwrap();
+
+        assert!(layout.resize_split_to(&target, 60, 5));
+
+        match layout {
+            Layout::Split { ratio, .. } => {
+                assert!((ratio - 0.75).abs() < f32::EPSILON);
+            }
+            Layout::Pane(_) => panic!("expected split"),
         }
     }
 }

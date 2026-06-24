@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use super::pane::{Pane, PaneId, BorderStyle};
-use super::layout::{Layout, LayoutType, SplitDirection};
+use super::layout::{Layout, LayoutType, SplitDirection, SplitResizeTarget};
 
 /// Unique identifier for a tab
 pub type TabId = u64;
@@ -159,6 +159,11 @@ impl Tab {
 
     /// Focus a specific pane
     pub fn focus_pane(&mut self, pane_id: PaneId) {
+        let old_focus = self.focused_pane;
+        if old_focus == pane_id {
+            return;
+        }
+
         // Check if zoom target will change
         let zoom_target_changed = self.zoomed_pane.is_some() && self.zoomed_pane != Some(pane_id);
         
@@ -168,7 +173,7 @@ impl Tab {
         }
         
         // Unfocus current
-        if let Some(pane) = self.panes.get_mut(&self.focused_pane) {
+        if let Some(pane) = self.panes.get_mut(&old_focus) {
             pane.focused = false;
         }
         
@@ -176,11 +181,18 @@ impl Tab {
         if let Some(pane) = self.panes.get_mut(&pane_id) {
             pane.focused = true;
             self.focused_pane = pane_id;
+        } else if let Some(pane) = self.panes.get_mut(&old_focus) {
+            pane.focused = true;
+            return;
         }
         
         // If zoom target changed, reflow to update geometry
         if zoom_target_changed {
             self.reflow(ReflowReason::FocusChanged);
+        } else {
+            // Focus changes only alter border colors, but partial rendering would
+            // otherwise skip panes whose terminal content has no dirty lines.
+            self.layout_generation += 1;
         }
     }
 
@@ -365,6 +377,27 @@ impl Tab {
         }
         self.layout.resize_in_direction(self.focused_pane, direction, arrow_up_or_left);
         self.reflow(ReflowReason::LayoutChanged);
+    }
+
+    /// Find a split boundary at a tab-local coordinate for mouse resizing.
+    pub fn split_resize_target_at(&self, col: u16, row: u16) -> Option<SplitResizeTarget> {
+        if self.zoomed_pane.is_some() {
+            return None;
+        }
+        self.layout.split_resize_target_at(col, row, self.width, self.height)
+    }
+
+    /// Resize a split boundary selected by mouse.
+    pub fn resize_split_to(&mut self, target: &SplitResizeTarget, col: u16, row: u16) -> bool {
+        if self.zoomed_pane.is_some() {
+            return false;
+        }
+        if self.layout.resize_split_to(target, col, row) {
+            self.reflow(ReflowReason::LayoutChanged);
+            true
+        } else {
+            false
+        }
     }
 
     /// Swap current pane with next pane in order
