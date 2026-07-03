@@ -355,6 +355,12 @@ impl TerminalState {
         let cols = self.cols;
         let is_primary = !self.using_alternate;
 
+        // Scrolling more than the region height is visually identical to
+        // scrolling exactly the region height; clamp so a hostile
+        // `\e[65535S` can't spin this loop for no visible effect.
+        let region_height = bottom.saturating_sub(top).saturating_add(1);
+        let n = n.min(region_height);
+
         let screen = self.active_screen_mut();
 
         for _ in 0..n {
@@ -367,13 +373,24 @@ impl TerminalState {
                 screen.rows.insert(bottom as usize, Row::new(cols));
             }
         }
-        screen.mark_all_dirty();
+        if screen.scroll_offset > 0 {
+            // Viewing scrollback: every visible row's content shifts
+            screen.mark_all_dirty();
+        } else {
+            // Only rows inside the scroll region changed
+            for row in (top as usize)..=(bottom as usize).min(screen.rows.len().saturating_sub(1)) {
+                screen.mark_dirty(row);
+            }
+        }
     }
 
     /// Scroll the screen down by n lines
     pub fn scroll_down(&mut self, n: u16) {
         let (top, bottom) = self.scroll_region;
         let cols = self.cols;
+
+        let region_height = bottom.saturating_sub(top).saturating_add(1);
+        let n = n.min(region_height);
 
         let screen = self.active_screen_mut();
 
@@ -383,7 +400,14 @@ impl TerminalState {
                 screen.rows.insert(top as usize, Row::new(cols));
             }
         }
-        screen.mark_all_dirty();
+        if screen.scroll_offset > 0 {
+            screen.mark_all_dirty();
+        } else {
+            // Only rows inside the scroll region changed
+            for row in (top as usize)..=(bottom as usize).min(screen.rows.len().saturating_sub(1)) {
+                screen.mark_dirty(row);
+            }
+        }
     }
 
     /// Cursor up
@@ -519,6 +543,8 @@ impl TerminalState {
 
         let screen = self.active_screen_mut();
 
+        // Inserting more lines than fit below the cursor has no further effect
+        let n = (n as usize).min(screen.rows.len().saturating_sub(cursor_row));
         for _ in 0..n {
             if cursor_row < screen.rows.len() {
                 screen.rows.insert(cursor_row, Row::new(cols));
@@ -527,7 +553,14 @@ impl TerminalState {
                 }
             }
         }
-        screen.mark_all_dirty();
+        if screen.scroll_offset > 0 {
+            screen.mark_all_dirty();
+        } else {
+            // Rows from the cursor down shifted
+            for row in cursor_row..screen.rows.len() {
+                screen.mark_dirty(row);
+            }
+        }
     }
 
     /// Delete lines at cursor position
@@ -537,13 +570,22 @@ impl TerminalState {
 
         let screen = self.active_screen_mut();
 
+        // Deleting more lines than exist below the cursor has no further effect
+        let n = (n as usize).min(screen.rows.len().saturating_sub(cursor_row));
         for _ in 0..n {
             if cursor_row < screen.rows.len() {
                 screen.rows.remove(cursor_row);
                 screen.rows.push(Row::new(cols));
             }
         }
-        screen.mark_all_dirty();
+        if screen.scroll_offset > 0 {
+            screen.mark_all_dirty();
+        } else {
+            // Rows from the cursor down shifted
+            for row in cursor_row..screen.rows.len() {
+                screen.mark_dirty(row);
+            }
+        }
     }
 
     /// Set scroll region

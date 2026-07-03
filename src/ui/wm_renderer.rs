@@ -1130,27 +1130,31 @@ impl WmRenderer {
         //   "swap FG=blue with BG=terminal-default-bg" → correct dark arrow.
         if attrs.flags.contains(AttrFlags::INVERSE) { sgr.push_str(";7"); }
 
+        // write! into the String (fmt::Write) formats in place — no per-cell
+        // String allocations on this hot path.  Writing to a String is
+        // infallible, so the results can be ignored.
+        use std::fmt::Write as _;
         if selected {
-            sgr.push_str(&format!(";38;2;{};{};{}", cs.selection_fg.r, cs.selection_fg.g, cs.selection_fg.b));
-            sgr.push_str(&format!(";48;2;{};{};{}", cs.selection_bg.r, cs.selection_bg.g, cs.selection_bg.b));
+            let _ = write!(sgr, ";38;2;{};{};{}", cs.selection_fg.r, cs.selection_fg.g, cs.selection_fg.b);
+            let _ = write!(sgr, ";48;2;{};{};{}", cs.selection_bg.r, cs.selection_bg.g, cs.selection_bg.b);
         } else {
             match attrs.fg {
                 Color::Default => {}
                 Color::Indexed(idx) => {
-                    if idx < 8        { sgr.push_str(&format!(";{}", 30 + idx)); }
-                    else if idx < 16  { sgr.push_str(&format!(";{}", 90 + (idx - 8))); }
-                    else              { sgr.push_str(&format!(";38;5;{}", idx)); }
+                    if idx < 8        { let _ = write!(sgr, ";{}", 30 + idx); }
+                    else if idx < 16  { let _ = write!(sgr, ";{}", 90 + (idx - 8)); }
+                    else              { let _ = write!(sgr, ";38;5;{}", idx); }
                 }
-                Color::Rgb(r, g, b) => { sgr.push_str(&format!(";38;2;{};{};{}", r, g, b)); }
+                Color::Rgb(r, g, b) => { let _ = write!(sgr, ";38;2;{};{};{}", r, g, b); }
             }
             match attrs.bg {
                 Color::Default => {}
                 Color::Indexed(idx) => {
-                    if idx < 8        { sgr.push_str(&format!(";{}", 40 + idx)); }
-                    else if idx < 16  { sgr.push_str(&format!(";{}", 100 + (idx - 8))); }
-                    else              { sgr.push_str(&format!(";48;5;{}", idx)); }
+                    if idx < 8        { let _ = write!(sgr, ";{}", 40 + idx); }
+                    else if idx < 16  { let _ = write!(sgr, ";{}", 100 + (idx - 8)); }
+                    else              { let _ = write!(sgr, ";48;5;{}", idx); }
                 }
-                Color::Rgb(r, g, b) => { sgr.push_str(&format!(";48;2;{};{};{}", r, g, b)); }
+                Color::Rgb(r, g, b) => { let _ = write!(sgr, ";48;2;{};{};{}", r, g, b); }
             }
         }
 

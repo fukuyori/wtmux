@@ -611,9 +611,9 @@ impl Layout {
     fn try_move_adjacent_boundary(&mut self, pane_id: PaneId, target_dir: SplitDirection, 
                                    look_for_second_boundary: bool, move_decrease: bool) -> bool {
         match self {
-            Layout::Pane(id) => {
+            Layout::Pane(_) => {
                 // This is the pane itself - no boundary here
-                *id == pane_id && false
+                false
             }
             Layout::Split { direction, first, second, ratio } => {
                 let first_ids = first.pane_ids();

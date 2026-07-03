@@ -912,7 +912,13 @@ fn run_wm_main_loop(
     renderer: &mut crate::ui::WmRenderer,
     keybindings: ParsedKeyBindings,
 ) -> anyhow::Result<()> {
-    let poll_timeout = Duration::from_millis(10);
+    // Adaptive polling: 10ms while output is flowing, relaxing to 50ms after
+    // ~0.5s of idle to cut wake-ups. Input events wake poll() immediately
+    // regardless of the timeout, so only the first PTY output after an idle
+    // period can be delayed (by at most 50ms).
+    let active_poll = Duration::from_millis(10);
+    let idle_poll = Duration::from_millis(50);
+    let mut idle_ticks: u32 = 0;
     let mut selector: Option<HistorySelector> = None;
     let mut status_publisher = tmux_compat::StatusPublisher::default();
     
@@ -967,6 +973,11 @@ fn run_wm_main_loop(
 
         // Process output and closed panes/tabs.
         let needs_render = wm.process_output();
+        if needs_render {
+            idle_ticks = 0;
+        } else {
+            idle_ticks = idle_ticks.saturating_add(1);
+        }
 
         if let Some(snapshot) = wm.tmux_active_pane_snapshot() {
             status_publisher.publish(&snapshot);
@@ -996,7 +1007,9 @@ fn run_wm_main_loop(
         }
 
         // Poll for events
+        let poll_timeout = if idle_ticks > 50 { idle_poll } else { active_poll };
         if input::poll(poll_timeout)? {
+            idle_ticks = 0;
             match input::read()? {
                 Event::Key(key_event) => {
                     if key_event.kind != KeyEventKind::Press {
@@ -1814,7 +1827,10 @@ fn run_main_loop(
     renderer: &mut Renderer,
     keybindings: ParsedKeyBindings,
 ) -> anyhow::Result<()> {
-    let poll_timeout = Duration::from_millis(10);
+    // Adaptive polling: see the wm event loop for rationale
+    let active_poll = Duration::from_millis(10);
+    let idle_poll = Duration::from_millis(50);
+    let mut idle_ticks: u32 = 0;
     let mut status_publisher = tmux_compat::StatusPublisher::default();
 
     loop {
@@ -1828,11 +1844,13 @@ fn run_main_loop(
         match session.process_output() {
             Ok(true) => {
                 // Output processed, render
+                idle_ticks = 0;
                 renderer.render(&session.state)?;
                 session.state.active_screen_mut().clear_dirty();
             }
             Ok(false) => {
                 // No output, check again
+                idle_ticks = idle_ticks.saturating_add(1);
                 if !session.is_running() {
                     info!("Session ended (no output)");
                     break;
@@ -1850,7 +1868,9 @@ fn run_main_loop(
         status_publisher.publish(&tmux_compat::PaneSnapshot::from_session(session));
 
         // Process input events
+        let poll_timeout = if idle_ticks > 50 { idle_poll } else { active_poll };
         if input::poll(poll_timeout)? {
+            idle_ticks = 0;
             let evt = input::read()?;
             // Log all events to debug file
             renderer.log_mouse_event(&format!("Event received: {:?}", evt));

@@ -471,23 +471,26 @@ impl Renderer {
         // XOR: show reverse if either INVERSE flag or selected, but not both
         if attrs.flags.contains(AttrFlags::INVERSE) != is_selected { sgr.push_str(";7"); }
 
+        // write! into the String (fmt::Write) avoids per-cell allocations;
+        // writing to a String is infallible.
+        use std::fmt::Write as _;
         match attrs.fg {
             TermColor::Default => {}
             TermColor::Indexed(idx) => {
-                if idx < 8       { sgr.push_str(&format!(";{}", 30 + idx)); }
-                else if idx < 16 { sgr.push_str(&format!(";{}", 90 + (idx - 8))); }
-                else             { sgr.push_str(&format!(";38;5;{}", idx)); }
+                if idx < 8       { let _ = write!(sgr, ";{}", 30 + idx); }
+                else if idx < 16 { let _ = write!(sgr, ";{}", 90 + (idx - 8)); }
+                else             { let _ = write!(sgr, ";38;5;{}", idx); }
             }
-            TermColor::Rgb(r, g, b) => { sgr.push_str(&format!(";38;2;{};{};{}", r, g, b)); }
+            TermColor::Rgb(r, g, b) => { let _ = write!(sgr, ";38;2;{};{};{}", r, g, b); }
         }
         match attrs.bg {
             TermColor::Default => {}
             TermColor::Indexed(idx) => {
-                if idx < 8       { sgr.push_str(&format!(";{}", 40 + idx)); }
-                else if idx < 16 { sgr.push_str(&format!(";{}", 100 + (idx - 8))); }
-                else             { sgr.push_str(&format!(";48;5;{}", idx)); }
+                if idx < 8       { let _ = write!(sgr, ";{}", 40 + idx); }
+                else if idx < 16 { let _ = write!(sgr, ";{}", 100 + (idx - 8)); }
+                else             { let _ = write!(sgr, ";48;5;{}", idx); }
             }
-            TermColor::Rgb(r, g, b) => { sgr.push_str(&format!(";48;2;{};{};{}", r, g, b)); }
+            TermColor::Rgb(r, g, b) => { let _ = write!(sgr, ";48;2;{};{};{}", r, g, b); }
         }
 
         sgr.push('m');

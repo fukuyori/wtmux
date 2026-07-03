@@ -67,6 +67,67 @@ pub struct ConPty {
 // Safety: ConPty handles are thread-safe when accessed properly
 unsafe impl Send for ConPty {}
 
+/// RAII guard that closes a Win32 HANDLE on drop unless released.
+/// Ensures early returns in `create_internal` don't leak pipe handles.
+struct HandleGuard(Option<HANDLE>);
+
+impl HandleGuard {
+    fn new(handle: HANDLE) -> Self {
+        Self(Some(handle))
+    }
+
+    fn get(&self) -> HANDLE {
+        self.0.unwrap_or_default()
+    }
+
+    /// Take ownership of the handle; the guard will no longer close it
+    fn release(mut self) -> HANDLE {
+        self.0.take().unwrap_or_default()
+    }
+}
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            if !handle.is_invalid() {
+                unsafe {
+                    let _ = CloseHandle(handle);
+                }
+            }
+        }
+    }
+}
+
+/// RAII guard that closes a pseudo console on drop unless released
+struct HpcGuard(Option<HPCON>);
+
+impl HpcGuard {
+    fn get(&self) -> HPCON {
+        self.0.unwrap_or_default()
+    }
+
+    fn release(mut self) -> HPCON {
+        self.0.take().unwrap_or_default()
+    }
+}
+
+impl Drop for HpcGuard {
+    fn drop(&mut self) {
+        if let Some(hpc) = self.0.take() {
+            unsafe { ClosePseudoConsole(hpc) };
+        }
+    }
+}
+
+/// RAII guard that deletes a proc-thread attribute list on drop
+struct AttrListGuard(LPPROC_THREAD_ATTRIBUTE_LIST);
+
+impl Drop for AttrListGuard {
+    fn drop(&mut self) {
+        unsafe { DeleteProcThreadAttributeList(self.0) };
+    }
+}
+
 impl ConPty {
     /// Create a new ConPTY instance and spawn a shell
     #[allow(dead_code)]
@@ -104,13 +165,18 @@ impl ConPty {
         let mut pty_output_read = HANDLE::default();
         let mut pty_output_write = HANDLE::default();
 
-        // Input pipe (we write, PTY reads)
+        // Input pipe (we write, PTY reads).  Guards close the handles on any
+        // early return below so a failed spawn doesn't leak them.
         CreatePipe(&mut pty_input_read, &mut pty_input_write, None, 0)
             .map_err(PtyError::PipeCreation)?;
+        let pty_input_read = HandleGuard::new(pty_input_read);
+        let pty_input_write = HandleGuard::new(pty_input_write);
 
         // Output pipe (PTY writes, we read)
         CreatePipe(&mut pty_output_read, &mut pty_output_write, None, 0)
             .map_err(PtyError::PipeCreation)?;
+        let pty_output_read = HandleGuard::new(pty_output_read);
+        let pty_output_write = HandleGuard::new(pty_output_write);
 
         // Create pseudo console
         let size = COORD {
@@ -118,12 +184,13 @@ impl ConPty {
             Y: rows as i16,
         };
 
-        let hpc = CreatePseudoConsole(size, pty_input_read, pty_output_write, 0)
+        let hpc = CreatePseudoConsole(size, pty_input_read.get(), pty_output_write.get(), 0)
             .map_err(PtyError::ConPtyCreation)?;
+        let hpc = HpcGuard(Some(hpc));
 
-        // Close the handles that the ConPTY now owns
-        let _ = CloseHandle(pty_input_read);
-        let _ = CloseHandle(pty_output_write);
+        // Close the handles that the ConPTY now owns (it duplicated them)
+        drop(pty_input_read);
+        drop(pty_output_write);
 
         // Prepare process startup
         let mut attr_list_size: usize = 0;
@@ -133,12 +200,21 @@ impl ConPty {
             0,
             &mut attr_list_size,
         );
+        if attr_list_size == 0 {
+            // The size-query call is expected to fail with
+            // ERROR_INSUFFICIENT_BUFFER while reporting the required size;
+            // a zero size means the API itself is misbehaving.
+            return Err(PtyError::ProcessSpawn(windows::core::Error::from_win32()));
+        }
 
         let mut attr_list_buffer = vec![0u8; attr_list_size];
         let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_list_buffer.as_mut_ptr() as *mut _);
 
         InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_list_size)
             .map_err(PtyError::ProcessSpawn)?;
+        // Delete the attribute list on all paths (success and error) once
+        // initialization has succeeded
+        let _attr_list_guard = AttrListGuard(attr_list);
 
         // Associate ConPTY with the process
         const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
@@ -146,7 +222,7 @@ impl ConPty {
             attr_list,
             0,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-            Some(hpc.0 as *const _),
+            Some(hpc.get().0 as *const _),
             std::mem::size_of::<HPCON>(),
             None,
             None,
@@ -180,12 +256,10 @@ impl ConPty {
         )
         .map_err(PtyError::ProcessSpawn)?;
 
-        DeleteProcThreadAttributeList(attr_list);
-
         Ok(ConPty {
-            hpc,
-            input_write: pty_input_write,
-            output_read: pty_output_read,
+            hpc: hpc.release(),
+            input_write: pty_input_write.release(),
+            output_read: pty_output_read.release(),
             process: process_info,
             cols,
             rows,

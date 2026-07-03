@@ -29,7 +29,9 @@
 //! - `api_key`, `apikey`, `auth`
 //! - Patterns like `--password=` or `-p=`
 
+use std::collections::VecDeque;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Maximum number of history entries
@@ -47,11 +49,15 @@ pub struct HistoryEntry {
 /// Command history storage
 pub struct CommandHistory {
     /// All history entries (newest last)
-    entries: Vec<HistoryEntry>,
+    entries: VecDeque<HistoryEntry>,
     /// File path for persistence
     file_path: Option<PathBuf>,
     /// Maximum entries
     max_entries: usize,
+    /// Number of lines currently in the history file.  Adds normally append a
+    /// single line; once the file grows well past `max_entries` it is
+    /// compacted with a full rewrite.
+    file_lines: usize,
 }
 
 impl CommandHistory {
@@ -59,9 +65,10 @@ impl CommandHistory {
     pub fn new() -> Self {
         let file_path = Self::get_history_path();
         let mut history = Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             file_path,
             max_entries: HISTORY_LIMIT,
+            file_lines: 0,
         };
         history.load();
         history
@@ -75,13 +82,15 @@ impl CommandHistory {
 
     /// Load history from file
     fn load(&mut self) {
+        let mut lines_in_file = 0usize;
         if let Some(ref path) = self.file_path {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(path) {
                     for line in content.lines() {
+                        lines_in_file += 1;
                         if let Some((ts_str, cmd)) = line.split_once(';') {
                             if let Ok(timestamp) = ts_str.parse::<u64>() {
-                                self.entries.push(HistoryEntry {
+                                self.entries.push_back(HistoryEntry {
                                     command: cmd.to_string(),
                                     timestamp,
                                 });
@@ -90,6 +99,15 @@ impl CommandHistory {
                     }
                 }
             }
+        }
+        // Keep only the newest max_entries
+        while self.entries.len() > self.max_entries {
+            self.entries.pop_front();
+        }
+        self.file_lines = lines_in_file;
+        // Compact a file that grew past the limit (append-mode leftovers)
+        if lines_in_file > self.entries.len() {
+            self.save();
         }
     }
 
@@ -105,18 +123,35 @@ impl CommandHistory {
         removed
     }
 
-    /// Save history to file
-    fn save(&self) {
+    /// Save history to file (full rewrite; used for compaction and deletes)
+    fn save(&mut self) {
         if let Some(ref path) = self.file_path {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            let content: String = self.entries
-                .iter()
-                .map(|e| format!("{};{}", e.timestamp, e.command))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let _ = fs::write(path, content);
+            let mut content = String::new();
+            for e in &self.entries {
+                use std::fmt::Write as _;
+                let _ = writeln!(content, "{};{}", e.timestamp, e.command);
+            }
+            if fs::write(path, content).is_ok() {
+                self.file_lines = self.entries.len();
+            }
+        }
+    }
+
+    /// Append a single entry to the history file (O(1) I/O per command,
+    /// instead of rewriting the whole file on every add)
+    fn append_to_file(&mut self, entry: &HistoryEntry) {
+        if let Some(ref path) = self.file_path {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+                if writeln!(file, "{};{}", entry.timestamp, entry.command).is_ok() {
+                    self.file_lines += 1;
+                }
+            }
         }
     }
 
@@ -129,7 +164,7 @@ impl CommandHistory {
         }
 
         // Skip if same as last command (dedup consecutive)
-        if let Some(last) = self.entries.last() {
+        if let Some(last) = self.entries.back() {
             if last.command == trimmed {
                 return;
             }
@@ -146,17 +181,24 @@ impl CommandHistory {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        self.entries.push(HistoryEntry {
+        let entry = HistoryEntry {
             command: trimmed.to_string(),
             timestamp,
-        });
+        };
+        self.entries.push_back(entry);
 
         // Trim if exceeding limit
         while self.entries.len() > self.max_entries {
-            self.entries.remove(0);
+            self.entries.pop_front();
         }
 
-        self.save();
+        // Normally just append one line; compact with a full rewrite once the
+        // file has accumulated twice the limit in stale lines.
+        if self.file_lines >= self.max_entries * 2 {
+            self.save();
+        } else if let Some(entry) = self.entries.back().cloned() {
+            self.append_to_file(&entry);
+        }
     }
 
     /// Check if command is sensitive (shouldn't be saved)

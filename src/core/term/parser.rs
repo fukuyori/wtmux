@@ -19,6 +19,13 @@
 
 use super::state::{AttrFlags, Color, TerminalState};
 
+/// Maximum bytes accumulated for an OSC string body.  A program that never
+/// sends a terminator (BEL/ST) must not be able to grow memory unboundedly.
+const MAX_OSC_LEN: usize = 4096;
+
+/// Maximum characters kept from an OSC 0/1/2 title.
+const MAX_TITLE_LEN: usize = 256;
+
 /// Response that needs to be sent back to the PTY
 #[derive(Debug, Clone)]
 pub enum Response {
@@ -117,7 +124,9 @@ impl VtParser {
             | ParserState::OscString => {
                 // Append to OSC string so that titles/paths with non-ASCII
                 // characters (e.g. Japanese directory names) are captured correctly.
-                if matches!(self.state, ParserState::OscString) {
+                if matches!(self.state, ParserState::OscString)
+                    && self.osc_string.len() < MAX_OSC_LEN
+                {
                     self.osc_string.push(ch);
                 }
                 return None;
@@ -424,7 +433,10 @@ impl VtParser {
                 self.state = ParserState::Ground;
             }
             _ => {
-                self.osc_string.push(byte as char);
+                // Cap accumulation so a missing terminator can't grow memory unboundedly
+                if self.osc_string.len() < MAX_OSC_LEN {
+                    self.osc_string.push(byte as char);
+                }
             }
         }
         None
@@ -517,10 +529,13 @@ impl VtParser {
                 let col = cursor.col as usize;
 
                 // Shift cells right
-                for _ in 0..n {
-                    if col < screen.rows[row].cells.len() {
-                        screen.rows[row].cells.pop();
-                        screen.rows[row].cells.insert(col, super::state::Cell::default());
+                if let Some(r) = screen.rows.get_mut(row) {
+                    let n = n.min(r.cells.len());
+                    for _ in 0..n {
+                        if col < r.cells.len() {
+                            r.cells.pop();
+                            r.cells.insert(col, super::state::Cell::default());
+                        }
                     }
                 }
                 screen.mark_dirty(row);
@@ -534,10 +549,13 @@ impl VtParser {
                 let row = cursor.row as usize;
                 let col = cursor.col as usize;
 
-                for _ in 0..n {
-                    if col < screen.rows[row].cells.len() {
-                        screen.rows[row].cells.remove(col);
-                        screen.rows[row].cells.push(super::state::Cell::default());
+                if let Some(r) = screen.rows.get_mut(row) {
+                    let n = n.min(r.cells.len());
+                    for _ in 0..n {
+                        if col < r.cells.len() {
+                            r.cells.remove(col);
+                            r.cells.push(super::state::Cell::default());
+                        }
                     }
                 }
                 screen.mark_dirty(row);
@@ -553,9 +571,10 @@ impl VtParser {
                 
                 let screen = state.active_screen_mut();
 
-                for i in 0..n {
-                    if col + i < screen.rows[row].cells.len() {
-                        screen.rows[row].cells[col + i].clear(&attrs);
+                if let Some(r) = screen.rows.get_mut(row) {
+                    let end = col.saturating_add(n).min(r.cells.len());
+                    for cell in r.cells.get_mut(col..end).unwrap_or(&mut []) {
+                        cell.clear(&attrs);
                     }
                 }
                 screen.mark_dirty(row);
@@ -805,8 +824,13 @@ impl VtParser {
 
             match code {
                 "0" | "1" | "2" => {
-                    // Set title
-                    state.title = text.to_string();
+                    // Set title. Strip control characters so a title can never
+                    // inject escape sequences when rendered into pane borders.
+                    state.title = text
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(MAX_TITLE_LEN)
+                        .collect();
                 }
                 "7" => {
                     if let Some(path) = osc7_to_path(text) {
@@ -1045,5 +1069,66 @@ mod tests {
             osc9_9_to_path("9;C:\\Users\\n_fuk\\My Project").as_deref(),
             Some("C:\\Users\\n_fuk\\My Project")
         );
+    }
+
+    #[test]
+    fn osc_title_strips_control_chars_and_caps_length() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Title containing control characters (BS, CR, C1 CSI) that must not
+        // survive into state.title, terminated by BEL
+        for byte in b"\x1b]0;a\x08b\rc\x9bd\x07" {
+            parser.feed(*byte, &mut state);
+        }
+        assert_eq!(state.title, "abcd");
+
+        // Overlong title is truncated to MAX_TITLE_LEN
+        for byte in b"\x1b]2;" {
+            parser.feed(*byte, &mut state);
+        }
+        for _ in 0..(MAX_TITLE_LEN + 100) {
+            parser.feed(b'x', &mut state);
+        }
+        parser.feed(0x07, &mut state);
+        assert_eq!(state.title.len(), MAX_TITLE_LEN);
+    }
+
+    #[test]
+    fn osc_body_without_terminator_is_capped() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        for byte in b"\x1b]0;" {
+            parser.feed(*byte, &mut state);
+        }
+        // A program that never sends BEL/ST must not grow memory unboundedly
+        for _ in 0..(MAX_OSC_LEN * 4) {
+            parser.feed(b'x', &mut state);
+        }
+        assert!(parser.osc_string.len() <= MAX_OSC_LEN);
+    }
+
+    #[test]
+    fn huge_csi_params_neither_hang_nor_panic() {
+        let mut state = TerminalState::new(20, 6);
+        let mut parser = VtParser::new();
+
+        // Scroll, insert/delete lines, insert/delete/erase chars, cursor
+        // moves — all with the maximum parameter value
+        for seq in [
+            "\x1b[65535S", "\x1b[65535T", "\x1b[65535L", "\x1b[65535M",
+            "\x1b[65535@", "\x1b[65535P", "\x1b[65535X",
+            "\x1b[65535;65535H", "\x1b[65535A", "\x1b[65535B",
+        ] {
+            for byte in seq.bytes() {
+                parser.feed(byte, &mut state);
+            }
+        }
+
+        // Screen must stay structurally intact
+        assert_eq!(state.active_screen().rows.len(), 6);
+        assert!(state.active_cursor().row < 6);
+        assert!(state.active_cursor().col < 20);
     }
 }

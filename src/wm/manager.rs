@@ -451,9 +451,11 @@ impl WindowManager {
 
     /// Get tab info for rendering tab bar
     pub fn tab_info(&self) -> Vec<(TabId, String, bool)> {
-        self.tab_order.iter().map(|&id| {
-            let tab = self.tabs.get(&id).unwrap();
-            (id, tab.name.clone(), id == self.active_tab)
+        self.tab_order.iter().filter_map(|&id| {
+            // Skip ids that are missing from the map rather than panicking if
+            // tab_order and tabs ever get out of sync
+            let tab = self.tabs.get(&id)?;
+            Some((id, tab.name.clone(), id == self.active_tab))
         }).collect()
     }
 

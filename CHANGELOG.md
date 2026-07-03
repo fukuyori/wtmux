@@ -1,3 +1,44 @@
+## [1.7.0] - 2026-07-03
+
+### Changed
+
+- **Faster rendering**:
+  SGR escape sequences are now formatted in place instead of allocating
+  strings per cell, and scrolling / line insert / line delete only redraw the
+  rows that actually changed instead of the whole screen.
+
+- **Lighter command history I/O**:
+  adding a command now appends a single line to the history file instead of
+  rewriting all entries; the file is compacted automatically once it grows
+  past twice the entry limit.
+
+- **Lower idle CPU usage**:
+  the event loop relaxes its polling interval from 10ms to 50ms after about
+  half a second of inactivity. Key input still wakes the loop immediately.
+
+### Fixed
+
+- **Escape-sequence injection via window titles**:
+  OSC 0/1/2 titles are sanitized (control characters stripped, length capped)
+  before being stored, so a program running in a pane can no longer inject
+  escape sequences into pane border rendering.
+
+- **Unbounded memory growth from unterminated OSC strings**:
+  OSC string bodies are now capped at 4KB while waiting for a terminator.
+
+- **Hostile escape sequences could stall or crash the parser**:
+  oversized CSI parameters (e.g. `ESC[65535S`) are clamped to the screen
+  height, and row access in insert/delete/erase character handlers no longer
+  panics if the cursor invariant is ever violated.
+
+- **Win32 handle leaks on PTY spawn failure**:
+  pipe handles, the pseudo console, and the process attribute list are now
+  released via RAII guards when `CreatePseudoConsole` or `CreateProcessW`
+  fails.
+
+- **Tab bar rendering could panic**:
+  tab ids missing from the tab map are skipped instead of panicking.
+
 ## [1.6.0] - 2026-06-24
 
 ### Added

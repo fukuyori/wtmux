@@ -4,16 +4,17 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.7.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.6.0 Highlights
+## 1.7.0 Highlights
 
-- cmd.exe and PowerShell panes can optionally publish cwd changes from the prompt, including after aliases and directory-jump functions.
-- `cwd_prompt_hook = true`, `--cwd-prompt-hook on`, or `-P on` enables the prompt hook; it is off by default to avoid prompt side effects.
-- Pane split borders can be resized with the left mouse button.
-- Focused pane borders redraw correctly when focus moves between panes.
+- Faster rendering: per-cell string allocations removed from the SGR hot path, and scrolling only redraws the rows that changed.
+- Lower idle CPU usage: the event loop relaxes its polling interval while idle; key input still responds immediately.
+- Command history now appends to its file instead of rewriting all entries on every command.
+- Hardened against hostile escape sequences: window titles are sanitized before rendering, OSC strings are length-capped, and oversized CSI parameters can no longer stall the parser.
+- Win32 handles are no longer leaked when spawning a pane's shell fails.
 
 ## Features
 
