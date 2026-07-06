@@ -216,10 +216,15 @@ impl TerminalState {
             (cursor.row, cursor.col)
         };
 
-        // Handle line wrap - only when cursor is completely beyond the screen edge
-        // We allow writing at cols-1 even for wide characters, trusting ConPTY to handle wrapping
-        // This prevents premature wrapping when unicode-width differs from ConPTY's calculation
-        if cursor_col >= self.cols {
+        // Handle line wrap - either the cursor is completely beyond the screen
+        // edge, or a wide char lands exactly on the last column: it has no
+        // room for its continuation cell there, and rendering later clips any
+        // cell that would cross the right edge (to avoid bleeding into a
+        // neighboring pane), so writing it there would silently drop it.
+        // Wrapping early instead matches how real terminals avoid splitting a
+        // double-width glyph across the margin.
+        let wide_char_needs_early_wrap = width == 2 && cursor_col + 1 == self.cols;
+        if cursor_col >= self.cols || wide_char_needs_early_wrap {
             if self.modes.auto_wrap {
                 {
                     let screen = self.active_screen_mut();
@@ -244,8 +249,15 @@ impl TerminalState {
             return;
         }
 
-        // Handle overwriting wide characters
+        // Handle overwriting wide characters. A wide char covers two cells,
+        // so both columns it lands on must be checked: overwriting only the
+        // second cell can also bisect an existing wide pair there (new char
+        // at cols N..N+1, old wide char at N+1..N+2 — the old char's
+        // continuation at N+2 would otherwise be left orphaned).
         self.handle_wide_char_overwrite(row, col);
+        if width == 2 && col + 1 < self.cols as usize {
+            self.handle_wide_char_overwrite(row, col + 1);
+        }
 
         // Clone attrs before mutable borrow
         let attrs = self.current_attrs.clone();
@@ -289,8 +301,15 @@ impl TerminalState {
         let cols = self.cols as usize;
         let screen = self.active_screen_mut();
 
-        // Check if we're overwriting the right half of a wide char
-        if col > 0 && screen.rows[row].cells[col].is_continuation() {
+        // Check if we're overwriting the right half of a wide char. Only
+        // blank the left neighbor when it really is the wide lead of this
+        // continuation — an orphaned continuation (its lead already
+        // overwritten) must not blank an unrelated neighbor, e.g. the fresh
+        // continuation of a wide char written just before this one.
+        if col > 0
+            && screen.rows[row].cells[col].is_continuation()
+            && screen.rows[row].cells[col - 1].width == 2
+        {
             screen.rows[row].cells[col - 1] = Cell {
                 grapheme: " ".to_string(),
                 width: 1,
@@ -532,6 +551,10 @@ impl TerminalState {
             }
             _ => {}
         }
+        // A partial erase can land mid wide-char (e.g. the cursor sits on a
+        // continuation cell), leaving an orphaned width-2 half whose column
+        // accounting no longer matches the visible glyphs.
+        screen.rows[row].repair_wide_pairs();
         screen.mark_dirty(row);
     }
 
@@ -1148,6 +1171,37 @@ impl Row {
         }
         self.wrapped = false;
     }
+
+    /// Restore the wide-char invariant — every width-2 cell is immediately
+    /// followed by exactly one continuation cell — after an operation that
+    /// erased or shifted an arbitrary cell range (EL/ECH/ICH/DCH). Orphaned
+    /// halves become blanks; left in place they make the row's column
+    /// accounting disagree with the visible glyphs, which shows up as gaps
+    /// or overflow at pane boundaries.
+    pub fn repair_wide_pairs(&mut self) {
+        let len = self.cells.len();
+        let mut i = 0;
+        while i < len {
+            if self.cells[i].width == 2 {
+                if i + 1 < len && self.cells[i + 1].is_continuation() {
+                    i += 2;
+                    continue;
+                }
+                // A wide char in the last column legitimately has no
+                // continuation (put_char defers edge handling to the host);
+                // only a mid-row wide cell without one is an orphan.
+                if i + 1 < len {
+                    let attrs = self.cells[i].attrs.clone();
+                    self.cells[i].clear(&attrs);
+                }
+            } else if self.cells[i].is_continuation() {
+                // Continuation without a preceding wide char.
+                let attrs = self.cells[i].attrs.clone();
+                self.cells[i].clear(&attrs);
+            }
+            i += 1;
+        }
+    }
 }
 
 /// A single cell
@@ -1627,6 +1681,149 @@ mod tests {
 
         assert_eq!(row_text(&state, 0), "hello");
         assert_eq!(row_text(&state, 1), "world");
+    }
+
+    #[test]
+    fn erase_in_line_repairs_split_wide_char() {
+        let mut state = TerminalState::new(10, 4);
+        for ch in "日本".chars() {
+            state.put_char(ch);
+        }
+
+        // Land the cursor on 日's continuation cell (col 1), then erase to
+        // end of line — the erase wipes the continuation but not the wide
+        // half, which must be repaired to a blank. Left as width 2 it makes
+        // the row's column accounting disagree with the visible glyphs.
+        state.active_cursor_mut().col = 1;
+        state.erase_in_line(0);
+
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].width, 1);
+        assert!(row.cells[0].grapheme.is_empty());
+        assert!(row.cells.iter().all(|c| !c.is_continuation()));
+    }
+
+    #[test]
+    fn wide_char_overwriting_next_wide_lead_blanks_its_orphaned_continuation() {
+        // Old: 日 at cols 1-2. New: 語 written at cols 0-1 — its continuation
+        // overwrites 日's lead, so 日's old continuation at col 2 must be
+        // blanked, not left as an orphan (an orphan there renders as a stray
+        // blank and corrupts later overwrites at that column).
+        let mut state = TerminalState::new(10, 2);
+        state.put_char(' ');
+        state.put_char('日'); // cols 1-2
+        state.active_cursor_mut().col = 0;
+        state.put_char('語'); // cols 0-1
+
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "語");
+        assert!(row.cells[1].is_continuation());
+        assert!(
+            !row.cells[2].is_continuation(),
+            "old wide char's continuation must be blanked, not orphaned"
+        );
+    }
+
+    #[test]
+    fn orphaned_continuation_overwrite_does_not_blank_unrelated_neighbor() {
+        // cells: 日 at cols 0-1, then a fabricated orphaned continuation at
+        // col 2 (as left behind by a partial rewrite). Writing at col 2 must
+        // not blank col 1 — col 1 is 日's continuation, not the orphan's lead.
+        let mut state = TerminalState::new(10, 2);
+        state.put_char('日'); // cols 0-1
+        state.active_screen_mut().rows[0].cells[2] =
+            crate::core::term::Cell::continuation(&crate::core::term::CellAttrs::default());
+
+        state.active_cursor_mut().col = 2;
+        state.put_char('A');
+
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "日");
+        assert!(
+            row.cells[1].is_continuation(),
+            "日 must stay intact when the orphan next to it is overwritten"
+        );
+        assert_eq!(row.cells[2].grapheme, "A");
+    }
+
+    #[test]
+    fn wide_char_landing_on_last_column_wraps_instead_of_being_dropped() {
+        // cols=10: filling 9 narrow chars leaves the cursor at col 9 (last
+        // column) right as a wide CJK char arrives — the exact edge case hit
+        // repeatedly when wrapping a long CJK paragraph at an arbitrary pane
+        // width. A wide char placed there has no room for its continuation
+        // cell, and render_row_stream clips any cell that would cross the
+        // right edge (to avoid bleeding into a neighboring pane) — so without
+        // an early wrap here, the glyph is silently dropped from render.
+        let mut state = TerminalState::new(10, 4);
+        for ch in "123456789".chars() {
+            state.put_char(ch);
+        }
+        state.put_char('日');
+        state.put_char('K');
+
+        let row0 = &state.active_screen().rows[0];
+        assert_eq!(row0.cells[9].grapheme, "", "last column stays blank; the wide char wrapped to the next row");
+        assert!(row0.wrapped);
+
+        let row1 = &state.active_screen().rows[1];
+        assert_eq!(row1.cells[0].grapheme, "日");
+        assert!(row1.cells[1].is_continuation());
+        assert_eq!(row1.cells[2].grapheme, "K");
+
+        let mut out = Vec::new();
+        {
+            use std::io::Write as _;
+            crate::ui::row_stream::render_row_stream(
+                &mut out,
+                crate::ui::row_stream::RenderRow::new(&row1.cells, 10),
+                |_col_idx, _cell| (),
+                |stdout, _style| write!(stdout, ""),
+            )
+            .expect("row stream renders");
+        }
+
+        assert_eq!(String::from_utf8(out).expect("utf8").trim_end(), "日K");
+    }
+
+    #[test]
+    fn long_cjk_paragraph_survives_wrapping_without_dropping_characters() {
+        // Regression test for the wtmux bug where wrapping a long CJK
+        // paragraph (the じゅげむ tongue-twister) at a narrow pane width
+        // dropped characters and left stray gaps — caused by a wide char
+        // landing on the last column with nowhere for its continuation cell,
+        // then getting clipped out entirely by render_row_stream's
+        // right-edge guard. Exercised across several widths since the exact
+        // column where a wide char lands on the edge shifts with the width.
+        let text = "じゅげむ じゅげむ ごこうのすりきれ かいじゃりすいぎょの すいぎょうまつ うんらいまつ ふうらいまつ くうねるところに すむところ やぶらこうじの ぶらこうじ パイポパイポ パイポのシューリンガン シューリンガンのグーリンダイ グーリンダイのポンポコピーのポンポコナーの ちょうきゅうめいの ちょうすけ";
+
+        for cols in [20u16, 24, 33, 40, 55, 80] {
+            let mut state = TerminalState::new(cols, 60);
+            for ch in text.chars() {
+                state.put_char(ch);
+            }
+
+            let last_row = state.active_cursor().row as usize;
+            let mut rendered = String::new();
+            for row in &state.active_screen().rows[0..=last_row] {
+                let mut out = Vec::new();
+                {
+                    use std::io::Write as _;
+                    crate::ui::row_stream::render_row_stream(
+                        &mut out,
+                        crate::ui::row_stream::RenderRow::new(&row.cells, cols as usize),
+                        |_col_idx, _cell| (),
+                        |stdout, _style| write!(stdout, ""),
+                    )
+                    .expect("row stream renders");
+                }
+                rendered.push_str(&String::from_utf8(out).expect("utf8"));
+            }
+
+            let expected: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            let actual: String = rendered.chars().filter(|c| !c.is_whitespace()).collect();
+            assert_eq!(actual, expected, "character mismatch at cols={cols}");
+        }
     }
 
     #[test]

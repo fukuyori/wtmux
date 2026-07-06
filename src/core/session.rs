@@ -37,6 +37,11 @@ pub struct Session {
     parser: VtParser,
     /// Optional VT byte trace writer (enabled with --vt-trace)
     vt_trace: Option<BufWriter<std::fs::File>>,
+    /// Tail of an incomplete UTF-8 sequence left over from the previous
+    /// `feed_bytes` call. PTY reads arrive in arbitrary-sized chunks, so a
+    /// multi-byte character can be split across two reads; its leading bytes
+    /// are held here until the continuation bytes arrive. At most 3 bytes.
+    utf8_pending: Vec<u8>,
     /// PTY handle (Windows only)
     #[cfg(windows)]
     pty: Option<Arc<ConPty>>,
@@ -62,6 +67,7 @@ impl Session {
             state: TerminalState::new(cols, rows),
             parser: VtParser::new(),
             vt_trace: None,
+            utf8_pending: Vec::new(),
             #[cfg(windows)]
             pty: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -288,6 +294,19 @@ impl Session {
             let _ = w.flush();
         }
 
+        // A previous chunk may have ended mid UTF-8 sequence (PTY reads are
+        // chunked at arbitrary byte boundaries); prepend the held-over lead
+        // bytes so the character is decoded whole instead of being dropped.
+        if self.utf8_pending.is_empty() {
+            self.decode_and_feed(bytes);
+        } else {
+            let mut joined = std::mem::take(&mut self.utf8_pending);
+            joined.extend_from_slice(bytes);
+            self.decode_and_feed(&joined);
+        }
+    }
+
+    fn decode_and_feed(&mut self, bytes: &[u8]) {
         let mut i = 0;
         while i < bytes.len() {
             let b = bytes[i];
@@ -315,9 +334,10 @@ impl Session {
                 };
 
             if i + seq_len > bytes.len() {
-                // Truncated sequence at end of buffer — skip leading byte.
-                i += 1;
-                continue;
+                // Truncated sequence at the end of this chunk — hold the
+                // lead bytes until the continuation arrives in the next read.
+                self.utf8_pending.extend_from_slice(&bytes[i..]);
+                break;
             }
 
             match std::str::from_utf8(&bytes[i..i + seq_len]) {
@@ -485,5 +505,493 @@ impl SessionManager {
     /// Get session count
     pub fn count(&self) -> usize {
         self.sessions.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen_text(session: &Session, row: usize) -> String {
+        session.state.active_screen().rows[row]
+            .cells
+            .iter()
+            .map(|c| c.grapheme.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn utf8_char_split_across_read_chunks_is_not_dropped() {
+        // PTY reads arrive in arbitrary-sized chunks (4 KiB reader buffer), so
+        // a 3-byte kana can be split anywhere. Every split position of the
+        // stream must decode to the same screen content.
+        let text = "じゅげむ ごこうのすりきれ";
+        let bytes = text.as_bytes();
+
+        for split in 1..bytes.len() {
+            let mut session = Session::new(0, 80, 4);
+            session.feed_bytes(&bytes[..split]);
+            session.feed_bytes(&bytes[split..]);
+
+            let rendered = screen_text(&session, 0);
+            assert_eq!(
+                rendered.trim_end(),
+                text,
+                "characters dropped when the stream is split at byte {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf8_char_split_into_single_byte_chunks_is_not_dropped() {
+        // Worst case: every byte arrives in its own read.
+        let text = "パイポパイポ";
+        let mut session = Session::new(0, 80, 4);
+        for b in text.as_bytes() {
+            session.feed_bytes(std::slice::from_ref(b));
+        }
+        assert_eq!(screen_text(&session, 0).trim_end(), text);
+    }
+
+    #[cfg(windows)]
+    fn repro_wrap_text(text: &str, width: usize) -> Vec<String> {
+        use unicode_width::UnicodeWidthChar;
+        let mut lines = Vec::new();
+        let mut cur = String::new();
+        let mut w = 0usize;
+        for ch in text.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if w + cw > width {
+                lines.push(std::mem::take(&mut cur));
+                w = 0;
+                if ch == ' ' {
+                    continue;
+                }
+            }
+            cur.push(ch);
+            w += cw;
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+        lines
+    }
+
+    /// Ink-style frame: erase the previous block (CUU+EL per line) and
+    /// rewrite the re-wrapped block, one line per row, 2-col indent.
+    #[cfg(windows)]
+    fn repro_ink_frame(lines: &[String], prev_lines: usize, styled: bool) -> Vec<u8> {
+        let mut f = Vec::new();
+        for _ in 0..prev_lines {
+            f.extend_from_slice(b"\x1b[1A\x1b[2K");
+        }
+        f.extend_from_slice(b"\r");
+        for l in lines {
+            if styled {
+                f.extend_from_slice(b"\x1b[38;2;190;190;190m");
+            }
+            f.extend_from_slice(b"  ");
+            f.extend_from_slice(l.as_bytes());
+            if styled {
+                f.extend_from_slice(b"\x1b[39m");
+            }
+            f.extend_from_slice(b"\r\n");
+        }
+        f
+    }
+
+    /// Run a ConPTY child that types the given frame files, capture ConPTY's
+    /// re-encoded output stream (with real read-chunk boundaries).
+    #[cfg(windows)]
+    fn repro_run_conpty(
+        dir: &std::path::Path,
+        tag: &str,
+        frames: &[Vec<u8>],
+        delay_between_frames: bool,
+        cols: u16,
+        rows: u16,
+    ) -> Vec<Vec<u8>> {
+        let mut script = String::from("@echo off\r\nchcp 65001 >nul\r\n");
+        for (i, frame) in frames.iter().enumerate() {
+            let p = dir.join(format!("{}_{:03}.vt", tag, i));
+            std::fs::write(&p, frame).expect("write frame");
+            // `>CON` forces the output to the process's attached console (the
+            // ConPTY): under `cargo test` the child inherits the test
+            // harness's piped stdout, which would bypass the ConPTY entirely.
+            script.push_str(&format!("type \"{}\" >CON\r\n", p.display()));
+            if delay_between_frames {
+                script.push_str("ping -n 2 127.0.0.1 >nul\r\n");
+            }
+        }
+        let script_path = dir.join(format!("{}.cmd", tag));
+        std::fs::write(&script_path, script.as_bytes()).expect("write script");
+
+        let pty = crate::core::pty::ConPty::new(
+            cols,
+            rows,
+            Some(&format!("cmd.exe /c \"{}\"", script_path.display())),
+        )
+        .expect("spawn conpty");
+
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        let mut buf = [0u8; 4096];
+        let start = std::time::Instant::now();
+        let mut quiet_after_exit = 0;
+        loop {
+            match pty.read(&mut buf) {
+                Ok(0) => {
+                    if !pty.is_running() {
+                        quiet_after_exit += 1;
+                        if quiet_after_exit > 30 {
+                            break;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Ok(n) => {
+                    quiet_after_exit = 0;
+                    chunks.push(buf[..n].to_vec());
+                }
+                Err(_) => break,
+            }
+            if start.elapsed().as_secs() > 60 {
+                break;
+            }
+        }
+
+        let captured: Vec<u8> = chunks.iter().flatten().copied().collect();
+        let cap_path = dir.join(format!("captured_{}.bin", tag));
+        std::fs::write(&cap_path, &captured).expect("write capture");
+        println!(
+            "[{}] captured {} bytes in {} chunks -> {}",
+            tag,
+            captured.len(),
+            chunks.len(),
+            cap_path.display()
+        );
+        chunks
+    }
+
+    /// Dump the grid: '·' marks a never-written/erased cell (empty grapheme),
+    /// a real space means a space was written there.
+    #[cfg(windows)]
+    fn repro_dump_grid(session: &Session, rows: u16) -> Vec<String> {
+        let mut out = Vec::new();
+        for row in session.state.active_screen().rows.iter().take(rows as usize) {
+            let mut s = String::new();
+            for cell in &row.cells {
+                if cell.is_continuation() {
+                    continue;
+                }
+                if cell.grapheme.is_empty() {
+                    s.push('·');
+                } else {
+                    s.push_str(&cell.grapheme);
+                }
+            }
+            out.push(s);
+        }
+        out
+    }
+
+    const REPRO_TEXT: &str = "じゅげむ じゅげむ ごこうのすりきれ かいじゃりすいぎょの すいぎょうまつ うんらいまつ ふうらいまつ くうねるところに すむところ やぶらこうじの ぶらこうじ パイポパイポ パイポのシューリンガン シューリンガンのグーリンダイ グーリンダイのポンポコピーのポンポコナーの ちょうきゅうめいの ちょうすけ";
+
+    /// Diagnostic harness: drive a real ConPTY through an Ink-style streaming
+    /// repaint of a CJK paragraph (what Claude Code does while streaming
+    /// markdown) and replay ConPTY's re-encoded byte stream through the
+    /// session parser. Hunts the "blank spans inside CJK text" bug.
+    /// Run with: cargo test conpty_ink_repaint_cjk_repro -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_ink_repaint_cjk_repro() {
+        const COLS: u16 = 58;
+        const ROWS: u16 = 24;
+        const WRAP: usize = 54; // text columns after the 2-col indent
+
+        let dir = std::env::temp_dir().join("wtmux_conpty_repro");
+        std::fs::create_dir_all(&dir).expect("create repro dir");
+
+        let full_lines = repro_wrap_text(REPRO_TEXT, WRAP);
+        let chars: Vec<char> = REPRO_TEXT.chars().collect();
+
+        // Storm scenario: fine-grained streaming frames (a few chars at a
+        // time), written back-to-back with no pacing — ConPTY renders while
+        // the child is mid-write, so its diff optimizer emits partial-line
+        // updates against half-drawn states, like a live Claude Code session.
+        let step = 3usize;
+        let mut frames = Vec::new();
+        let mut prev_lines = 0usize;
+        let mut end = step;
+        loop {
+            let end_c = end.min(chars.len());
+            let prefix: String = chars[..end_c].iter().collect();
+            let lines = repro_wrap_text(&prefix, WRAP);
+            frames.push(repro_ink_frame(&lines, prev_lines, true));
+            prev_lines = lines.len();
+            if end_c == chars.len() {
+                break;
+            }
+            end += step;
+        }
+
+        let mut corrupted = 0usize;
+        for round in 0..5 {
+            let chunks = repro_run_conpty(&dir, &format!("storm{}", round), &frames, false, COLS, ROWS);
+
+            let mut session = Session::new(0, COLS, ROWS);
+            for c in &chunks {
+                session.feed_bytes(c);
+            }
+
+            let grid = repro_dump_grid(&session, ROWS);
+            // The final frame's block must appear intact somewhere on screen.
+            let missing: Vec<&String> = full_lines
+                .iter()
+                .filter(|l| !grid.iter().any(|g| g.contains(l.as_str())))
+                .collect();
+            if missing.is_empty() {
+                println!("[round {}] grid OK", round);
+            } else {
+                corrupted += 1;
+                println!("[round {}] CORRUPTED — {} expected lines missing:", round, missing.len());
+                for l in &missing {
+                    println!("  expected |{}|", l);
+                }
+                println!("--- grid ---");
+                for (i, g) in grid.iter().enumerate() {
+                    println!("{:2}|{}|", i, g);
+                }
+            }
+        }
+        println!("corrupted rounds: {}/5", corrupted);
+    }
+
+    /// Closed-loop render harness: ConPTY bytes → session grid → WmRenderer
+    /// output → a simulated host terminal. Compares the host terminal's final
+    /// cells against the session grid to catch corruption introduced by the
+    /// render path (dirty-row skipping, per-glyph re-anchoring, tail clearing).
+    /// Run with: cargo test conpty_render_closed_loop_repro -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_render_closed_loop_repro() {
+        const PANE_W: u16 = 60; // outer; Single border → inner 58x20
+        const PANE_H: u16 = 22;
+        const INNER_W: u16 = 58;
+        const INNER_H: u16 = 20;
+        const HOST_COLS: u16 = 120;
+        const HOST_ROWS: u16 = 40;
+        const WRAP: usize = 54;
+        const Y_OFFSET: u16 = 1; // tab bar height
+
+        let dir = std::env::temp_dir().join("wtmux_conpty_repro");
+        std::fs::create_dir_all(&dir).expect("create repro dir");
+
+        // Filler pushes the cursor near the bottom so the streamed block
+        // scrolls the pane while it grows — the scroll + dirty-row path is
+        // exactly what a live Claude Code session exercises.
+        let mut filler = Vec::new();
+        for i in 0..(INNER_H - 4) {
+            filler.extend_from_slice(format!("filler {:02} 埋め草テキストです\r\n", i).as_bytes());
+        }
+
+        let chars: Vec<char> = REPRO_TEXT.chars().collect();
+        let step = 3usize;
+        let mut frames = vec![filler];
+        let mut prev_lines = 0usize;
+        let mut end = step;
+        loop {
+            let end_c = end.min(chars.len());
+            let prefix: String = chars[..end_c].iter().collect();
+            let lines = repro_wrap_text(&prefix, WRAP);
+            frames.push(repro_ink_frame(&lines, prev_lines, true));
+            prev_lines = lines.len();
+            if end_c == chars.len() {
+                break;
+            }
+            end += step;
+        }
+
+        let full_lines = repro_wrap_text(REPRO_TEXT, WRAP);
+
+        for (variant, render_every) in [(0usize, 1usize), (1, 3)] {
+            let chunks = repro_run_conpty(
+                &dir,
+                &format!("loop{}", variant),
+                &frames,
+                false,
+                INNER_W,
+                INNER_H,
+            );
+
+            let mut pane = crate::wm::pane::Pane::new(1, PANE_W, PANE_H);
+            pane.focused = true;
+            let renderer = crate::ui::wm_renderer::WmRenderer::new();
+            // The simulated host terminal is a Session so the renderer's
+            // output goes through the same UTF-8 decode path as real PTY data.
+            let mut host = Session::new(9, HOST_COLS, HOST_ROWS);
+
+            let mut render_count = 0usize;
+            let render_dir = dir.clone();
+            let mut render = |pane: &mut crate::wm::pane::Pane, host: &mut Session| {
+                let screen = pane.session.state.active_screen();
+                if screen.full_redraw || screen.has_dirty_lines() {
+                    let mut out: Vec<u8> = Vec::new();
+                    renderer
+                        .render_pane(&mut out, pane, Y_OFFSET, false)
+                        .expect("render_pane");
+                    pane.session.state.active_screen_mut().clear_dirty();
+                    host.feed_bytes(&out);
+                    std::fs::write(
+                        render_dir.join(format!("render_v{}_{:03}.bin", variant, render_count)),
+                        &out,
+                    )
+                    .expect("write render dump");
+                    render_count += 1;
+                }
+            };
+
+            for (ci, chunk) in chunks.iter().enumerate() {
+                pane.session.feed_bytes(chunk);
+                if (ci + 1) % render_every == 0 {
+                    render(&mut pane, &mut host);
+                }
+            }
+            // Final render pass, like the event loop draining pending output.
+            render(&mut pane, &mut host);
+
+            // Compare the host terminal's pane region against the session grid.
+            let (inner_x, inner_y) = pane.inner_pos();
+            let sess_rows = &pane.session.state.active_screen().rows;
+            let mut mismatches = 0usize;
+            for row_idx in 0..INNER_H as usize {
+                let mut sess_text = String::new();
+                for cell in &sess_rows[row_idx].cells {
+                    if cell.is_continuation() {
+                        continue;
+                    }
+                    sess_text.push_str(cell.display_char());
+                }
+                let host_row = &host.state.active_screen().rows
+                    [(Y_OFFSET + inner_y) as usize + row_idx];
+                let mut host_text = String::new();
+                let start = inner_x as usize;
+                let end = start + INNER_W as usize;
+                for (col, cell) in host_row.cells.iter().enumerate() {
+                    if cell.is_continuation() {
+                        continue;
+                    }
+                    let w = cell.width.max(1) as usize;
+                    if col >= start && col + w <= end {
+                        host_text.push_str(cell.display_char());
+                    }
+                }
+                if sess_text.trim_end() != host_text.trim_end() {
+                    mismatches += 1;
+                    println!("[variant {}] row {:2} MISMATCH", variant, row_idx);
+                    println!("  session |{}|", sess_text.trim_end());
+                    println!("  host    |{}|", host_text.trim_end());
+                }
+            }
+            let sess_all: String = (0..INNER_H as usize)
+                .map(|r| {
+                    sess_rows[r]
+                        .cells
+                        .iter()
+                        .filter(|c| !c.is_continuation())
+                        .map(|c| c.display_char())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let missing: Vec<&String> = full_lines
+                .iter()
+                .filter(|l| !sess_all.contains(l.as_str()))
+                .collect();
+            println!(
+                "[variant {}] mismatched rows: {}, session grid missing lines: {}",
+                variant,
+                mismatches,
+                missing.len()
+            );
+        }
+    }
+
+    /// Replay wtmux's own render output (the render_v0_*.bin dumps produced by
+    /// conpty_render_closed_loop_repro) through a REAL ConPTY/conhost hop and
+    /// parse what conhost re-encodes — this is exactly what a host terminal
+    /// like WezTerm receives when wtmux runs inside it. Verifies conhost's
+    /// wide-char handling doesn't reintroduce stray spaces.
+    /// Run after conpty_render_closed_loop_repro with:
+    /// cargo test conpty_host_hop_replay -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_host_hop_replay() {
+        const HOST_COLS: u16 = 120;
+        const HOST_ROWS: u16 = 40;
+
+        let dir = std::env::temp_dir().join("wtmux_conpty_repro");
+        let mut frames = Vec::new();
+        for i in 0..64 {
+            let p = dir.join(format!("render_v0_{:03}.bin", i));
+            match std::fs::read(&p) {
+                Ok(b) => frames.push(b),
+                Err(_) => break,
+            }
+        }
+        assert!(
+            !frames.is_empty(),
+            "run conpty_render_closed_loop_repro first to produce render dumps"
+        );
+
+        let chunks = repro_run_conpty(&dir, "hosthop", &frames, true, HOST_COLS, HOST_ROWS);
+
+        let mut host = Session::new(0, HOST_COLS, HOST_ROWS);
+        for c in &chunks {
+            host.feed_bytes(c);
+        }
+
+        println!("--- host-terminal grid after conhost hop ---");
+        for (i, row) in host.state.active_screen().rows.iter().enumerate().take(24) {
+            let mut s = String::new();
+            for cell in &row.cells {
+                if cell.is_continuation() {
+                    continue;
+                }
+                if cell.grapheme.is_empty() {
+                    s.push('·');
+                } else {
+                    s.push_str(&cell.grapheme);
+                }
+            }
+            println!("{:2}|{}|", i, s.trim_end());
+        }
+
+        let all: String = host
+            .state
+            .active_screen()
+            .rows
+            .iter()
+            .map(|r| {
+                r.cells
+                    .iter()
+                    .filter(|c| !c.is_continuation())
+                    .map(|c| c.display_char())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for needle in [
+            "じゅげむ じゅげむ ごこうのすりきれ かいじゃりすいぎょ",
+            "グーリンダイのポンポコピーのポンポコナーの ちょうきゅ",
+        ] {
+            assert!(
+                all.contains(needle),
+                "text corrupted across the conhost hop: {needle} not found"
+            );
+        }
+        println!("host hop OK — no stray spaces after conhost re-encoding");
     }
 }

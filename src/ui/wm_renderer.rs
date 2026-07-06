@@ -388,9 +388,13 @@ impl WmRenderer {
             let screen_y = y_offset + inner_y + row_idx as u16;
             
             execute!(stdout, MoveTo(inner_x, screen_y))?;
-            
+
+            // Erase before painting so overpainting shifted wide glyphs can't
+            // bisect a double-width char in the host buffer (see render_pane).
+            write!(stdout, "\x1b[0m\x1b[{}X", inner_w)?;
+
             if let Some(line) = screen.get_line_at_absolute(abs_row) {
-                let render_row = RenderRow::new(line, render_w);
+                let render_row = RenderRow::with_origin(line, render_w, inner_x, screen_y);
                 self.render_cells(stdout, render_row, render_w, |cell_idx, cell| {
                     let cell_col = cell_idx as u16;
                     if copy_mode.is_current_match(abs_row, cell_col) {
@@ -404,8 +408,6 @@ impl WmRenderer {
                         }
                     }
                 })?;
-            } else {
-                self.clear_row(stdout, inner_w as usize)?;
             }
         }
 
@@ -893,7 +895,7 @@ impl WmRenderer {
     }
 
     /// Render a single pane
-    fn render_pane<W: Write>(&self, stdout: &mut W, pane: &Pane, y_offset: u16, force_full: bool) -> io::Result<()> {
+    pub(crate) fn render_pane<W: Write>(&self, stdout: &mut W, pane: &Pane, y_offset: u16, force_full: bool) -> io::Result<()> {
         let screen = pane.session.state.active_screen();
         let (inner_x, inner_y) = pane.inner_pos();
         let (inner_w, inner_h) = pane.inner_size();
@@ -902,11 +904,6 @@ impl WmRenderer {
 
         // Whether to render all rows or only dirty ones
         let full_redraw = force_full || screen.full_redraw;
-
-        // Draw border if needed
-        if pane.border != BorderStyle::None {
-            self.render_border(stdout, pane, y_offset)?;
-        }
 
         // Render content as a regular left-to-right line stream and let the host
         // terminal handle glyph shaping / width. This avoids bespoke per-cell
@@ -923,20 +920,32 @@ impl WmRenderer {
             let row_y = y_offset + inner_y + row_idx as u16;
             execute!(stdout, MoveTo(inner_x, row_y))?;
 
+            // Erase the row span before painting (ECH keeps the cursor put
+            // and stays inside the pane, unlike EL). Overpainting wide glyphs
+            // whose columns shifted since the last frame would otherwise
+            // transiently bisect double-width characters in the host's
+            // buffer — and ConPTY/conhost resolves every bisection by
+            // padding with a space, which is how stray blanks ended up
+            // inside repainted CJK text.
+            write!(stdout, "\x1b[0m\x1b[{}X", inner_w)?;
+
             let row = match screen.get_row_at(row_idx) {
                 Some(r) => r,
-                None => {
-                    self.clear_row(stdout, inner_w as usize)?;
-                    continue;
-                }
+                None => continue,
             };
 
-            let render_row = RenderRow::new(&row.cells, render_width);
+            let render_row = RenderRow::with_origin(&row.cells, render_width, inner_x, row_y);
             self.render_cells(stdout, render_row, inner_w as usize, |col_idx, cell| RenderRowStyle::Cell {
                 attrs: cell.attrs.clone(),
                 selected: has_selection
                     && pane.session.state.is_selected(col_idx as u16, row_idx as u16),
             })?;
+        }
+
+        // Draw the border after the content so that any residual overflow
+        // from host/our width disagreements gets painted over.
+        if pane.border != BorderStyle::None {
+            self.render_border(stdout, pane, y_offset)?;
         }
 
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
@@ -954,11 +963,18 @@ impl WmRenderer {
         W: Write,
         F: FnMut(usize, &crate::core::term::Cell) -> RenderRowStyle,
     {
+        let origin = row.origin();
         let rendered_width = render_row_stream(stdout, row, |col_idx, cell| style_for(col_idx, cell), |stdout, style| {
             self.apply_render_row_style(stdout, style)
         })?;
 
         if rendered_width < clear_width {
+            // Re-anchor before padding: if the host rendered a grapheme wider
+            // or narrower than our accounting, the cursor has drifted and the
+            // tail would be cleared at the wrong columns.
+            if let Some((x, y)) = origin {
+                execute!(stdout, MoveTo(x + rendered_width as u16, y))?;
+            }
             self.clear_row_tail(stdout, clear_width - rendered_width)?;
         }
 
@@ -985,10 +1001,6 @@ impl WmRenderer {
                 SetForegroundColor(CtColor::Black)
             ),
         }
-    }
-
-    fn clear_row<W: Write>(&self, stdout: &mut W, width: usize) -> io::Result<()> {
-        self.clear_row_tail(stdout, width)
     }
 
     fn clear_row_tail<W: Write>(&self, stdout: &mut W, width: usize) -> io::Result<()> {

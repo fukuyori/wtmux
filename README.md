@@ -4,17 +4,17 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.7.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.7.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.7.0 Highlights
+## 1.7.1 Highlights
 
-- Faster rendering: per-cell string allocations removed from the SGR hot path, and scrolling only redraws the rows that changed.
-- Lower idle CPU usage: the event loop relaxes its polling interval while idle; key input still responds immediately.
-- Command history now appends to its file instead of rewriting all entries on every command.
-- Hardened against hostile escape sequences: window titles are sanitized before rendering, OSC strings are length-capped, and oversized CSI parameters can no longer stall the parser.
-- Win32 handles are no longer leaked when spawning a pane's shell fails.
+- Fixed stray spaces and blank spans appearing inside CJK text when a TUI app (e.g. Claude Code) re-renders while streaming: repainted rows are now erased before painting, so the host terminal's ConPTY can no longer pad bisected double-width characters with spaces.
+- Fixed multi-byte characters being dropped when a UTF-8 sequence was split across PTY reads.
+- Wide characters landing on the last column now wrap to the next line instead of being dropped, and partial erases can no longer split a double-width pair.
+- Fixed the kitty keyboard pop sequence (`CSI < u`) printing a stray `u`.
+- Shift+Tab is now forwarded to applications as `ESC[Z`.
 
 ## Features
 

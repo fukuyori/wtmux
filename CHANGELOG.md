@@ -1,3 +1,49 @@
+## [1.7.1] - 2026-07-06
+
+### Fixed
+
+- **Stray spaces / blank spans appearing inside CJK text**:
+  repainted rows are now erased (`ECH`) before being painted. wtmux's render
+  output passes through the host terminal's ConPTY/conhost, which pads any
+  bisected double-width character with a space — so overpainting wide glyphs
+  whose columns had shifted since the previous frame (e.g. CJK text being
+  re-wrapped while a TUI app like Claude Code streams output) corrupted the
+  host's copy of the screen even though wtmux's own grid was correct.
+
+- **Wide-character overwrite handling in the terminal state**:
+  writing a wide char whose second cell lands on the lead cell of another
+  wide char no longer leaves that char's continuation cell orphaned, and
+  overwriting an orphaned continuation cell no longer blanks an unrelated
+  neighboring cell (which could erase the wide char written just before it).
+
+- **Multi-byte characters split across PTY reads were dropped**:
+  PTY reads arrive in arbitrary-sized chunks, so a UTF-8 sequence can be cut
+  at any byte; the leading bytes are now held until the continuation bytes
+  arrive instead of being discarded.
+
+- **Wide char landing on the last column was silently dropped**:
+  it now wraps to the next line, matching how real terminals avoid splitting
+  a double-width glyph across the right margin.
+
+- **Partial erases could split a double-width pair**:
+  EL/ECH/ICH/DCH and partial line erases now repair orphaned wide-char
+  halves so the row's column accounting always matches the visible glyphs.
+
+- **Kitty keyboard pop sequence printed a stray `u`**:
+  the `<` private-prefix byte in `CSI < u` is now consumed as part of the
+  sequence instead of aborting the parse and leaking the final byte.
+
+- **Shift+Tab was not forwarded to applications**:
+  BackTab is now sent as `ESC[Z`.
+
+### Changed
+
+- **Per-glyph cursor re-anchoring for non-ASCII runs**:
+  rows are painted with the cursor re-anchored at each wide or multi-byte
+  glyph, so any width disagreement with the host terminal is bounded to a
+  single cell and can no longer accumulate across a row or bleed into a
+  neighboring pane. Plain ASCII runs are still batched into single writes.
+
 ## [1.7.0] - 2026-07-03
 
 ### Changed

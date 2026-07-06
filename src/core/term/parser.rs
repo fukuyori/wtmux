@@ -344,7 +344,12 @@ impl VtParser {
                 self.params.push(0);
                 self.state = ParserState::CsiParam;
             }
-            b'?' | b'>' | b'!' | b'=' => {
+            // Private / parameter-prefix bytes.
+            // ECMA-48 private markers are 0x3C..=0x3F (`< = > ?`); `!` (0x21) is
+            // also used as a prefix by some sequences (e.g. DECSTR `CSI ! p`).
+            // Missing `<` caused Kitty keyboard "pop" (`CSI < u`) to drop to
+            // Ground and print the trailing `u`.
+            b'<' | b'=' | b'>' | b'?' | b'!' => {
                 self.intermediates.push(byte);
             }
             0x20..=0x2F => {
@@ -537,6 +542,9 @@ impl VtParser {
                             r.cells.insert(col, super::state::Cell::default());
                         }
                     }
+                    // Inserting mid wide-char (or pushing its continuation
+                    // off the row end) splits the pair.
+                    r.repair_wide_pairs();
                 }
                 screen.mark_dirty(row);
                 None
@@ -557,6 +565,8 @@ impl VtParser {
                             r.cells.push(super::state::Cell::default());
                         }
                     }
+                    // Deleting either half of a wide char orphans the other.
+                    r.repair_wide_pairs();
                 }
                 screen.mark_dirty(row);
                 None
@@ -576,6 +586,8 @@ impl VtParser {
                     for cell in r.cells.get_mut(col..end).unwrap_or(&mut []) {
                         cell.clear(&attrs);
                     }
+                    // Erasing only one half of a wide char orphans the other.
+                    r.repair_wide_pairs();
                 }
                 screen.mark_dirty(row);
                 None
@@ -1107,6 +1119,24 @@ mod tests {
             parser.feed(b'x', &mut state);
         }
         assert!(parser.osc_string.len() <= MAX_OSC_LEN);
+    }
+
+    #[test]
+    fn kitty_keyboard_pop_does_not_leak_trailing_u() {
+        // Kitty keyboard protocol pop: CSI < u  (private prefix '<').
+        // The '<' prefix must be consumed as part of the CSI sequence, not
+        // dropped — otherwise the final 'u' leaks and is printed to the screen.
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        for byte in b"\x1b[<u" {
+            parser.feed(*byte, &mut state);
+        }
+
+        // Nothing should have been written to the screen.
+        let first_cell = &state.active_screen().rows[0].cells[0];
+        assert!(first_cell.grapheme.is_empty(), "unexpected char leaked: {:?}", first_cell.grapheme);
+        assert_eq!(state.active_cursor().col, 0);
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub mod keymapper;
 pub mod input;
 mod cursor;
 mod frame;
-mod row_stream;
+pub(crate) mod row_stream;
 pub mod renderer;
 pub mod wm_renderer;
 pub mod context_menu;

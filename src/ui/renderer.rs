@@ -392,7 +392,7 @@ impl Renderer {
                 None => continue,
             };
 
-            let render_row = RenderRow::new(&row.cells, num_cols);
+            let render_row = RenderRow::with_origin(&row.cells, num_cols, 0, row_idx as u16);
             self.render_line_stream(stdout, render_row, |col_idx, cell| {
                 (
                     cell.attrs.clone(),
@@ -432,7 +432,7 @@ impl Renderer {
             // Move to line start and clear to end of line
             execute!(stdout, MoveTo(0, row_idx as u16))?;
             write!(stdout, "\x1b[K")?; // Clear to end of line
-            let render_row = RenderRow::new(&row.cells, num_cols);
+            let render_row = RenderRow::with_origin(&row.cells, num_cols, 0, row_idx as u16);
             self.render_line_stream(stdout, render_row, |col_idx, cell| {
                 (
                     cell.attrs.clone(),

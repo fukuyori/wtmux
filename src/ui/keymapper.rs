@@ -78,6 +78,9 @@ impl KeyMapper {
                 }
             }
 
+            // Shift+Tab (delivered as BackTab by crossterm and the Windows input path)
+            KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
+
             // Escape
             KeyCode::Esc => Some(vec![0x1B]),
 
