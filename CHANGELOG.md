@@ -1,3 +1,12 @@
+## [1.7.2] - 2026-07-07
+
+### Fixed
+
+- **Pane borders could inherit TUI highlight attributes**:
+  pane border rendering now resets color and text attributes before drawing,
+  so Vim mode changes and other full-screen TUI repaints no longer leave split
+  borders with the application's background or reverse/highlight state.
+
 ## [1.7.1] - 2026-07-06
 
 ### Fixed

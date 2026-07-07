@@ -1016,6 +1016,8 @@ impl WmRenderer {
         let cs = &self.color_scheme;
         let chars = BorderChars::single();
         
+        execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
+
         // Border color based on focus
         if pane.focused {
             execute!(stdout, SetForegroundColor(cs.pane_border_active.to_crossterm()))?;
@@ -1073,7 +1075,7 @@ impl WmRenderer {
             write!(stdout, "{}", chars.bottom_right)?;
         }
 
-        execute!(stdout, ResetColor)?;
+        execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
         Ok(())
     }
 
@@ -1287,7 +1289,8 @@ impl Drop for WmRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::{char_width, str_display_width, truncate_to_display_width};
+    use super::{char_width, str_display_width, truncate_to_display_width, WmRenderer};
+    use crate::wm::Pane;
 
     #[test]
     fn display_width_counts_cjk_as_two_cells() {
@@ -1303,4 +1306,24 @@ mod tests {
         assert_eq!(truncate_to_display_width("abc", 2), "ab");
     }
 
+    #[test]
+    fn render_border_resets_inherited_sgr_before_drawing() {
+        let renderer = WmRenderer::new();
+        let mut pane = Pane::new(1, 12, 4);
+        pane.focused = true;
+
+        let mut out = Vec::new();
+        renderer
+            .render_border(&mut out, &pane, 0)
+            .expect("render border");
+
+        let output = String::from_utf8(out).expect("utf8");
+        let border_start = output.find('┌').expect("top-left border");
+        let before_border = &output[..border_start];
+
+        assert!(
+            before_border.contains("\x1b[0m"),
+            "border rendering must reset inherited app colors and attributes before drawing"
+        );
+    }
 }

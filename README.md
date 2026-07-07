@@ -4,17 +4,13 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.7.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.7.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.7.1 Highlights
+## 1.7.2 Highlights
 
-- Fixed stray spaces and blank spans appearing inside CJK text when a TUI app (e.g. Claude Code) re-renders while streaming: repainted rows are now erased before painting, so the host terminal's ConPTY can no longer pad bisected double-width characters with spaces.
-- Fixed multi-byte characters being dropped when a UTF-8 sequence was split across PTY reads.
-- Wide characters landing on the last column now wrap to the next line instead of being dropped, and partial erases can no longer split a double-width pair.
-- Fixed the kitty keyboard pop sequence (`CSI < u`) printing a stray `u`.
-- Shift+Tab is now forwarded to applications as `ESC[Z`.
+- Fixed pane borders inheriting background colors or reverse/highlight attributes from full-screen TUI applications such as Vim after mode changes.
 
 ## Features
 
