@@ -8,14 +8,14 @@
   IgnorableNamespaces="uap uap3 desktop rescap">
 
   <Identity
-    Name="wtmux"
-    Publisher="CN=wtmux"
-    Version="1.7.2.0"
+    Name="J-LIS.wtmux"
+    Publisher="CN=5EF2DE34-8C4A-42F6-9955-D951EB8F20B7"
+    Version="1.7.3.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>wtmux</DisplayName>
-    <PublisherDisplayName>wtmux</PublisherDisplayName>
+    <PublisherDisplayName>SPUMONI.ORG</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Windows Terminal Multiplexer - A tmux-like terminal multiplexer for Windows</Description>
   </Properties>

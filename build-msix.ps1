@@ -23,7 +23,8 @@ $ErrorActionPreference = "Stop"
 # Configuration
 $AppName = "wtmux"
 $Version = ""
-$Publisher = "CN=wtmux"
+$Revision = "0"
+$Publisher = "CN=5EF2DE34-8C4A-42F6-9955-D951EB8F20B7"
 
 # Paths
 $ProjectRoot = $PSScriptRoot
@@ -36,7 +37,7 @@ $AssetsDir = Join-Path $PackageDir "Assets"
 # Get version from Cargo.toml
 $cargoToml = Get-Content (Join-Path $ProjectRoot "Cargo.toml") -Raw
 if ($cargoToml -match 'version\s*=\s*"([0-9.]+)"') {
-    $Version = "$($matches[1]).0"
+    $Version = "$($matches[1]).$Revision"
 } else {
     Write-Error "Could not determine version from Cargo.toml"
     exit 1
