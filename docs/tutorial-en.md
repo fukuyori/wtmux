@@ -106,10 +106,21 @@ You can also click `[+]` in the tab bar to create a new tab with the mouse.
 | Click `[+]` in the tab bar | Create new tab |
 | `Ctrl+B, n` | Next tab |
 | `Ctrl+B, p` | Previous tab |
+| `Ctrl+B, w` | Show the window selector |
 | `Ctrl+B, 0-9` | Select tab by number |
 | `Ctrl+B, ,` | Rename tab |
 | `Ctrl+B, &` | Close current tab |
 | `Ctrl+B, l` | Toggle to last used tab |
+
+The window selector lists every tab with its pane count and tmux-style
+flags (`*` current, `-` last), and previews the selected tab live below the
+list. Move with `Up`/`Down` or `j`/`k`, jump with `1`-`9`, press `Enter` to
+switch, press `x` to kill the selected item (confirm with `y`), and press
+`Esc` or `q` to close the selector. Tabs expand into a tree: `Right`/`l`
+lists a tab's panes as child rows, `Left`/`h` folds them; selecting a pane
+row previews it, and `Enter` switches to the tab with that pane focused.
+With the mouse, scroll to move the selection, click a row to switch to it,
+or click outside the popup to close it.
 
 ### Pane Operations
 

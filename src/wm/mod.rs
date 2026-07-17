@@ -25,4 +25,5 @@ pub mod manager;
 
 pub use pane::{Pane, PaneId, BorderStyle};
 pub use layout::SplitDirection;
-pub use manager::WindowManager;
+pub use manager::{WindowInfo, WindowManager};
+pub use tab::{Tab, TabId};

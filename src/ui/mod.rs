@@ -19,9 +19,11 @@ mod frame;
 pub(crate) mod row_stream;
 pub mod renderer;
 pub mod wm_renderer;
+pub mod window_selector;
 pub mod context_menu;
 
 pub use keymapper::*;
 pub use renderer::*;
 pub use wm_renderer::WmRenderer;
+pub use window_selector::{TreeEntry, WindowSelector};
 pub use context_menu::{ContextMenu, ContextMenuAction};

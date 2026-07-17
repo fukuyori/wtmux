@@ -30,6 +30,7 @@
 //! |-----|--------|
 //! | c | New tab |
 //! | n/p | Next/Previous tab |
+//! | w | Select a window from the window list |
 //! | " | Split horizontal |
 //! | % | Split vertical |
 //! | x | Close pane |
@@ -55,7 +56,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::core::session::Session;
-use crate::ui::{input, KeyMapper, Renderer, ContextMenu, ContextMenuAction};
+use crate::ui::{input, KeyMapper, Renderer, ContextMenu, ContextMenuAction, TreeEntry, WindowSelector};
 use crate::wm::{WindowManager, SplitDirection};
 use crate::history::HistorySelector;
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
@@ -926,6 +927,9 @@ fn run_wm_main_loop(
     let mut theme_selector_visible = false;
     let mut theme_selector_index: usize = 0;
     let theme_list = ColorScheme::list();
+
+    // Window selector state (tmux Ctrl+B, w)
+    let mut window_selector = WindowSelector::new();
     
     // Pane numbers display state
     let mut pane_numbers_visible = false;
@@ -960,7 +964,15 @@ fn run_wm_main_loop(
         if let Some((cols, rows)) = pending_resize {
             if last_resize_time.elapsed() >= resize_debounce {
                 wm.resize(cols, rows);
-                renderer.render_with_selector(wm, selector.as_ref())?;
+                if window_selector.visible {
+                    renderer.render_with_window_selector(wm, &window_selector)?;
+                } else if theme_selector_visible {
+                    renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                } else if pane_numbers_visible {
+                    renderer.render_with_pane_numbers(wm)?;
+                } else {
+                    renderer.render_with_selector(wm, selector.as_ref())?;
+                }
                 wm.clear_all_dirty();
                 pending_resize = None;
             }
@@ -994,7 +1006,9 @@ fn run_wm_main_loop(
             // In copy mode, rename mode, or context menu, only render on key events
             // (rendering happens in the key handler below)
         } else if needs_render {
-            if theme_selector_visible {
+            if window_selector.visible {
+                renderer.render_with_window_selector(wm, &window_selector)?;
+            } else if theme_selector_visible {
                 renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
             } else if pane_numbers_visible {
                 renderer.render_with_pane_numbers(wm)?;
@@ -1217,6 +1231,98 @@ fn run_wm_main_loop(
                         }
                         pane_numbers_visible = false;
                         renderer.render(wm)?;
+                        continue;
+                    }
+
+                    // Handle window selector mode
+                    if window_selector.visible {
+                        let windows = wm.window_info();
+                        if window_selector.kill_confirm {
+                            // Waiting for kill confirmation (y/N)
+                            if matches!(key_event.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                                match window_selector.selected_entry(&windows) {
+                                    Some(TreeEntry::Window { window }) => {
+                                        wm.close_tab_at(window);
+                                    }
+                                    Some(TreeEntry::Pane { window, pane }) => {
+                                        wm.close_pane_at(window, pane);
+                                    }
+                                    None => {}
+                                }
+                            }
+                            window_selector.kill_confirm = false;
+                        } else {
+                            let entry_count = window_selector.entries(&windows).len();
+                            match key_event.code {
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    window_selector.close();
+                                    wm.force_full_redraw();
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    window_selector.move_up(entry_count);
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    window_selector.move_down(entry_count);
+                                }
+                                KeyCode::Home => {
+                                    window_selector.selected = 0;
+                                }
+                                KeyCode::End => {
+                                    window_selector.selected = entry_count.saturating_sub(1);
+                                }
+                                // Expand / collapse the tree (tmux: Right/Left)
+                                KeyCode::Right | KeyCode::Char('l') => {
+                                    window_selector.expand(&windows);
+                                }
+                                KeyCode::Left | KeyCode::Char('h') => {
+                                    window_selector.collapse(&windows);
+                                }
+                                // Jump to a window by its display number (1-9)
+                                KeyCode::Char(c) if c.is_ascii_digit() => {
+                                    let num = c.to_digit(10).unwrap_or(0) as usize;
+                                    window_selector.jump_to_window(&windows, num);
+                                }
+                                // Kill the selected window or pane (tmux: x)
+                                KeyCode::Char('x') => {
+                                    match window_selector.selected_entry(&windows) {
+                                        Some(TreeEntry::Window { .. }) if windows.len() > 1 => {
+                                            window_selector.kill_confirm = true;
+                                        }
+                                        Some(TreeEntry::Pane { window, .. })
+                                            if windows[window].panes.len() > 1
+                                                || windows.len() > 1 =>
+                                        {
+                                            window_selector.kill_confirm = true;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    match window_selector.selected_entry(&windows) {
+                                        Some(TreeEntry::Window { window }) => {
+                                            wm.select_tab_at(window);
+                                        }
+                                        Some(TreeEntry::Pane { window, pane }) => {
+                                            wm.focus_pane_at(window, pane);
+                                        }
+                                        None => {}
+                                    }
+                                    reset_cursor_shape();
+                                    window_selector.close();
+                                    wm.force_full_redraw();
+                                }
+                                _ => {}
+                            }
+                        }
+                        if window_selector.visible {
+                            // The window list may have changed (kill); re-clamp
+                            let entry_count =
+                                window_selector.entries(&wm.window_info()).len();
+                            window_selector.clamp(entry_count);
+                            renderer.render_with_window_selector(wm, &window_selector)?;
+                        } else {
+                            renderer.render(wm)?;
+                        }
                         continue;
                     }
 
@@ -1448,6 +1554,13 @@ fn run_wm_main_loop(
                                 renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
                                 continue;
                             }
+                            // Window selector (tmux: w)
+                            KeyCode::Char('w') => {
+                                window_selector.open(wm);
+                                wm.prefix_mode = false;
+                                renderer.render_with_window_selector(wm, &window_selector)?;
+                                continue;
+                            }
                             // Resize pane (tmux: + / -)
                             KeyCode::Char('+') | KeyCode::Char('=') => {
                                 Some(AppAction::ResizePane { grow: true })
@@ -1561,6 +1674,79 @@ fn run_wm_main_loop(
 
                 Event::Mouse(mouse_event) => {
                     use crossterm::event::{MouseEventKind, MouseButton};
+
+                    // Window selector mouse handling. Plain mouse movement must
+                    // not dismiss the popup (any-event tracking reports every
+                    // motion); wheel moves the selection, left click chooses a
+                    // row, and clicking outside the popup closes it.
+                    if window_selector.visible {
+                        let windows = wm.window_info();
+                        let entries = window_selector.entries(&windows);
+                        match mouse_event.kind {
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                window_selector.kill_confirm = false;
+                                if mouse_event.kind == MouseEventKind::ScrollUp {
+                                    window_selector.move_up(entries.len());
+                                } else {
+                                    window_selector.move_down(entries.len());
+                                }
+                                renderer.render_with_window_selector(wm, &window_selector)?;
+                            }
+                            MouseEventKind::Down(button) => {
+                                window_selector.kill_confirm = false;
+                                let layout = renderer.window_selector_layout(
+                                    wm,
+                                    entries.len(),
+                                    window_selector.selected,
+                                );
+                                let clicked_row = layout.as_ref().and_then(|l| {
+                                    l.list_row_at(
+                                        entries.len(),
+                                        mouse_event.column,
+                                        mouse_event.row,
+                                    )
+                                });
+                                let inside = layout
+                                    .as_ref()
+                                    .is_some_and(|l| l.contains(mouse_event.column, mouse_event.row));
+
+                                if button == MouseButton::Left {
+                                    if let Some(index) = clicked_row {
+                                        match entries.get(index) {
+                                            Some(TreeEntry::Window { window }) => {
+                                                wm.select_tab_at(*window);
+                                            }
+                                            Some(TreeEntry::Pane { window, pane }) => {
+                                                wm.focus_pane_at(*window, *pane);
+                                            }
+                                            None => {}
+                                        }
+                                        reset_cursor_shape();
+                                        window_selector.close();
+                                        wm.force_full_redraw();
+                                        renderer.render(wm)?;
+                                    } else if !inside {
+                                        // Click outside the popup closes it
+                                        window_selector.close();
+                                        wm.force_full_redraw();
+                                        renderer.render(wm)?;
+                                    } else {
+                                        renderer.render_with_window_selector(
+                                            wm,
+                                            &window_selector,
+                                        )?;
+                                    }
+                                } else {
+                                    window_selector.close();
+                                    wm.force_full_redraw();
+                                    renderer.render(wm)?;
+                                }
+                            }
+                            // Moved / Drag / Up: keep the selector open
+                            _ => {}
+                        }
+                        continue;
+                    }
                     
                     // Close snippet selector on mouse click outside
                     if selector_is_visible(&selector) {
@@ -1730,6 +1916,7 @@ fn run_wm_main_loop(
                     rename_mode = false;
                     rename_buffer.clear();
                     theme_selector_visible = false;
+                    window_selector.close();
                     pane_numbers_visible = false;
                     wm.prefix_mode = false;
                     wm.scroll_to_bottom();

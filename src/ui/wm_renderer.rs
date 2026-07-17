@@ -77,6 +77,7 @@ use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
 use super::cursor::CursorPresenter;
 use super::frame::{with_cursor_hidden, with_frame, with_hidden_cursor_frame};
+use super::window_selector::{TreeEntry, WindowSelector};
 
 /// Border characters
 #[allow(dead_code)]
@@ -109,6 +110,45 @@ impl BorderChars {
             t_right: '├',
             cross: '┼',
         }
+    }
+}
+
+/// Geometry of the window selector overlay (tmux `choose-window` style).
+///
+/// Produced by [`WmRenderer::window_selector_layout`]; rendering and mouse
+/// hit-testing both derive from it so they can never disagree.
+pub struct WindowSelectorLayout {
+    start_x: usize,
+    start_y: usize,
+    box_width: usize,
+    box_height: usize,
+    list_h: usize,
+    preview_h: usize,
+    first_visible: usize,
+}
+
+impl WindowSelectorLayout {
+    /// Zero-based window index of the list row at a screen position.
+    pub fn list_row_at(&self, window_count: usize, column: u16, row: u16) -> Option<usize> {
+        let (col, row) = (column as usize, row as usize);
+        if col < self.start_x || col >= self.start_x + self.box_width {
+            return None;
+        }
+        let list_top = self.start_y + 1;
+        if row < list_top || row >= list_top + self.list_h {
+            return None;
+        }
+        let index = self.first_visible + (row - list_top);
+        (index < window_count).then_some(index)
+    }
+
+    /// Whether a screen position falls inside the overlay box.
+    pub fn contains(&self, column: u16, row: u16) -> bool {
+        let (col, row) = (column as usize, row as usize);
+        col >= self.start_x
+            && col < self.start_x + self.box_width
+            && row >= self.start_y
+            && row < self.start_y + self.box_height
     }
 }
 
@@ -639,6 +679,404 @@ impl WmRenderer {
 
         execute!(stdout, ResetColor)?;
 
+        Ok(())
+    }
+
+    /// Render with the tmux-style window selector overlay.
+    pub fn render_with_window_selector(
+        &mut self,
+        wm: &WindowManager,
+        selector: &WindowSelector,
+    ) -> io::Result<()> {
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+
+        if !self.initialized {
+            self.init()?;
+        }
+
+        let result = with_hidden_cursor_frame(&mut out, |out| {
+            self.render_tab_bar(out, wm)?;
+            self.render_panes(out, wm)?;
+            self.render_status_bar(out, wm)?;
+            self.render_window_selector(out, wm, selector)?;
+            Ok(())
+        });
+        self.invalidate_cursor_cache();
+        result
+    }
+
+    /// Compute the window selector overlay geometry, or None when the
+    /// terminal is too small to show it. Shared by rendering and mouse
+    /// hit-testing so the two can never disagree.
+    pub fn window_selector_layout(
+        &self,
+        wm: &WindowManager,
+        entry_count: usize,
+        selected: usize,
+    ) -> Option<WindowSelectorLayout> {
+        if entry_count == 0 || wm.width < 20 || wm.height < 8 {
+            return None;
+        }
+        let selected = selected.min(entry_count - 1);
+
+        // Overlay fills the content area (below tab bar, above status bar)
+        // with a one-cell margin, tmux choose-tree style: window list on
+        // top, live preview of the selected window below.
+        let content_top = wm.tab_bar_height as usize;
+        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+        let box_width = (wm.width as usize).saturating_sub(4);
+        let mut box_height = content_height.saturating_sub(2);
+        if box_width < 16 || box_height < 5 {
+            return None;
+        }
+
+        // Chrome rows: top border, separator(s), help line, bottom border.
+        // With preview:    top + list + preview-sep + preview + sep + help + bottom
+        // Without preview: top + list + sep + help + bottom
+        const MIN_PREVIEW: usize = 3;
+        let (list_h, preview_h) = if box_height >= 5 + 1 + MIN_PREVIEW {
+            let max_list = box_height - 5 - MIN_PREVIEW;
+            let list_h = entry_count.min(max_list).max(1);
+            (list_h, box_height - 5 - list_h)
+        } else {
+            box_height = (entry_count + 4).min(box_height);
+            (box_height - 4, 0)
+        };
+        let first_visible = selected
+            .saturating_add(1)
+            .saturating_sub(list_h)
+            .min(entry_count.saturating_sub(list_h));
+        let start_x = (wm.width as usize - box_width) / 2;
+        let start_y = content_top + (content_height - box_height) / 2;
+
+        Some(WindowSelectorLayout {
+            start_x,
+            start_y,
+            box_width,
+            box_height,
+            list_h,
+            preview_h,
+            first_visible,
+        })
+    }
+
+    fn render_window_selector<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        selector: &WindowSelector,
+    ) -> io::Result<()> {
+        let windows = wm.window_info();
+        let entries = selector.entries(&windows);
+        let Some(layout) =
+            self.window_selector_layout(wm, entries.len(), selector.selected)
+        else {
+            return Ok(());
+        };
+        let WindowSelectorLayout {
+            start_x,
+            start_y,
+            box_width,
+            box_height: _,
+            list_h,
+            preview_h,
+            first_visible,
+        } = layout;
+
+        let cs = &self.color_scheme;
+        let selected = selector.selected.min(entries.len() - 1);
+
+        let selector_colors = |stdout: &mut W| {
+            execute!(
+                stdout,
+                SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                SetForegroundColor(cs.selector_fg.to_crossterm())
+            )
+        };
+        selector_colors(stdout)?;
+
+        // Top border with title
+        let title = format!("Windows [{}, w]", wm.prefix_key.display_name());
+        let title = truncate_to_display_width(&title, box_width.saturating_sub(5));
+        let title_width = str_display_width(&title);
+        execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
+        write!(stdout, "┌─ {} ", title)?;
+        for _ in 0..box_width.saturating_sub(title_width + 5) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┐")?;
+
+        // Tree rows: windows, with pane children under expanded windows
+        for (row, entry) in entries
+            .iter()
+            .enumerate()
+            .skip(first_visible)
+            .take(list_h)
+        {
+            let y = start_y + 1 + row - first_visible;
+            execute!(stdout, MoveTo(start_x as u16, y as u16))?;
+            write!(stdout, "│")?;
+
+            if row == selected {
+                execute!(
+                    stdout,
+                    SetBackgroundColor(cs.selector_selected_bg.to_crossterm()),
+                    SetForegroundColor(cs.selector_selected_fg.to_crossterm())
+                )?;
+            }
+
+            let (prefix, name, flag, full_suffix, compact_suffix) = match *entry {
+                TreeEntry::Window { window } => {
+                    let info = &windows[window];
+                    let mark = if selector.is_expanded(info.id) { '-' } else { '+' };
+                    let flag = if info.is_active {
+                        '*'
+                    } else if info.is_last {
+                        '-'
+                    } else {
+                        ' '
+                    };
+                    let pane_count = info.panes.len();
+                    (
+                        format!(" {} {:>2}: ", mark, info.number),
+                        info.name.clone(),
+                        flag,
+                        format!(
+                            " ({} pane{})",
+                            pane_count,
+                            if pane_count == 1 { "" } else { "s" }
+                        ),
+                        format!(" ({})", pane_count),
+                    )
+                }
+                TreeEntry::Pane { window, pane } => {
+                    let pane_info = &windows[window].panes[pane];
+                    let branch = if pane + 1 == windows[window].panes.len() {
+                        "└─"
+                    } else {
+                        "├─"
+                    };
+                    let flag = if pane_info.is_active { '*' } else { ' ' };
+                    (
+                        format!("      {} {}: ", branch, pane_info.number),
+                        pane_info.title.clone(),
+                        flag,
+                        String::new(),
+                        String::new(),
+                    )
+                }
+            };
+
+            let fixed = str_display_width(&prefix) + 3; // borders + flag
+            let suffix = if fixed + str_display_width(&full_suffix) + 1 < box_width {
+                full_suffix
+            } else if fixed + str_display_width(&compact_suffix) + 1 < box_width {
+                compact_suffix
+            } else {
+                String::new()
+            };
+            let content_width =
+                box_width.saturating_sub(fixed + str_display_width(&suffix));
+            let display_name = truncate_to_display_width(&name, content_width);
+
+            write!(stdout, "{}{}{}{}", prefix, display_name, flag, suffix)?;
+            let used = str_display_width(&prefix)
+                + str_display_width(&display_name)
+                + 1
+                + str_display_width(&suffix);
+            write!(
+                stdout,
+                "{:padding$}",
+                "",
+                padding = box_width.saturating_sub(used + 2)
+            )?;
+
+            selector_colors(stdout)?;
+            write!(stdout, "│")?;
+        }
+
+        let mut separator_y = start_y + 1 + list_h;
+
+        // Preview of the selected window or pane
+        if preview_h > 0 {
+            let preview_title = match entries[selected] {
+                TreeEntry::Window { window } => format!(
+                    "Preview: {}: {}",
+                    windows[window].number, windows[window].name
+                ),
+                TreeEntry::Pane { window, pane } => format!(
+                    "Preview: {}: {} - pane {}",
+                    windows[window].number,
+                    windows[window].name,
+                    windows[window].panes[pane].number
+                ),
+            };
+            let preview_title =
+                truncate_to_display_width(&preview_title, box_width.saturating_sub(5));
+            let preview_title_width = str_display_width(&preview_title);
+            execute!(stdout, MoveTo(start_x as u16, separator_y as u16))?;
+            write!(stdout, "├─ {} ", preview_title)?;
+            for _ in 0..box_width.saturating_sub(preview_title_width + 5) {
+                write!(stdout, "─")?;
+            }
+            write!(stdout, "┤")?;
+
+            // Clear the preview body first, then paint the content clipped
+            // to it.
+            for row in 0..preview_h {
+                let y = separator_y + 1 + row;
+                execute!(stdout, MoveTo(start_x as u16, y as u16))?;
+                write!(
+                    stdout,
+                    "│{:width$}│",
+                    "",
+                    width = box_width.saturating_sub(2)
+                )?;
+            }
+            let (px, py) = (start_x + 1, separator_y + 1);
+            let pw = box_width.saturating_sub(2);
+            match entries[selected] {
+                TreeEntry::Window { window } => {
+                    if let Some(tab) = wm.tab_at(window) {
+                        self.render_window_preview(stdout, tab, px, py, pw, preview_h)?;
+                    }
+                }
+                TreeEntry::Pane { window, pane } => {
+                    if let Some(pane) = wm
+                        .tab_at(window)
+                        .and_then(|tab| tab.pane_order.get(pane).map(|id| (tab, id)))
+                        .and_then(|(tab, id)| tab.panes.get(id))
+                    {
+                        self.render_pane_region(stdout, pane, px, py, pw, preview_h)?;
+                    }
+                }
+            }
+            execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
+            selector_colors(stdout)?;
+
+            separator_y += 1 + preview_h;
+        }
+
+        // Bottom separator, help line, bottom border
+        execute!(stdout, MoveTo(start_x as u16, separator_y as u16))?;
+        write!(stdout, "├")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┤")?;
+
+        let help = if selector.kill_confirm {
+            match entries[selected] {
+                TreeEntry::Window { window } => format!(
+                    "Kill window {}: {}? (y/N)",
+                    windows[window].number, windows[window].name
+                ),
+                TreeEntry::Pane { window, pane } => format!(
+                    "Kill pane {} of window {}: {}? (y/N)",
+                    windows[window].panes[pane].number,
+                    windows[window].number,
+                    windows[window].name
+                ),
+            }
+        } else {
+            "j/k:Move h/l:Fold 1-9:Jump Enter:Select x:Kill q/Esc:Close".to_string()
+        };
+        let help = truncate_to_display_width(&help, box_width.saturating_sub(3));
+        let help_width = str_display_width(&help);
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
+        write!(stdout, "│ {}", help)?;
+        write!(
+            stdout,
+            "{:padding$}│",
+            "",
+            padding = box_width.saturating_sub(help_width + 3)
+        )?;
+
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 2) as u16))?;
+        write!(stdout, "└")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┘")?;
+
+        execute!(stdout, ResetColor)?;
+        Ok(())
+    }
+
+    /// Paint a live preview of a window's panes clipped to the given region.
+    ///
+    /// Pane geometry is laid out for the full content area, so panes are
+    /// cropped at the right/bottom edges of the preview; the gaps left by
+    /// pane borders show through as the selector background.
+    fn render_window_preview<W: Write>(
+        &self,
+        stdout: &mut W,
+        tab: &crate::wm::Tab,
+        px: usize,
+        py: usize,
+        pw: usize,
+        ph: usize,
+    ) -> io::Result<()> {
+        let panes: Vec<&Pane> = if let Some(zoomed_id) = tab.zoomed_pane_id() {
+            tab.panes.get(&zoomed_id).into_iter().collect()
+        } else {
+            tab.panes.values().collect()
+        };
+
+        for pane in panes {
+            let (inner_x, inner_y) = pane.inner_pos();
+            let (inner_x, inner_y) = (inner_x as usize, inner_y as usize);
+            if inner_x >= pw || inner_y >= ph {
+                continue;
+            }
+            self.render_pane_region(
+                stdout,
+                pane,
+                px + inner_x,
+                py + inner_y,
+                pw - inner_x,
+                ph - inner_y,
+            )?;
+        }
+
+        execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
+        Ok(())
+    }
+
+    /// Paint the top-left of a pane's screen at a destination position,
+    /// cropped to the given bounds.
+    fn render_pane_region<W: Write>(
+        &self,
+        stdout: &mut W,
+        pane: &Pane,
+        dest_x: usize,
+        dest_y: usize,
+        max_w: usize,
+        max_h: usize,
+    ) -> io::Result<()> {
+        let (inner_w, inner_h) = pane.inner_size();
+        let visible_w = (inner_w as usize).min(max_w);
+        let visible_h = (inner_h as usize).min(max_h);
+        let screen = pane.session.state.active_screen();
+        let render_width = (pane.session.state.cols as usize).min(visible_w);
+
+        for row_idx in 0..visible_h {
+            let x = dest_x as u16;
+            let y = (dest_y + row_idx) as u16;
+            let row = match screen.get_row_at(row_idx) {
+                Some(r) => r,
+                None => continue,
+            };
+            execute!(stdout, MoveTo(x, y))?;
+            let render_row = RenderRow::with_origin(&row.cells, render_width, x, y);
+            self.render_cells(stdout, render_row, visible_w, |_, cell| {
+                RenderRowStyle::Cell {
+                    attrs: cell.attrs.clone(),
+                    selected: false,
+                }
+            })?;
+        }
         Ok(())
     }
 
@@ -1304,6 +1742,152 @@ mod tests {
         assert_eq!(truncate_to_display_width("abc日本語", 5), "abc日");
         assert_eq!(truncate_to_display_width("日本語abc", 4), "日本");
         assert_eq!(truncate_to_display_width("abc", 2), "ab");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_selector_overlay_lays_out_list_and_preview() {
+        use crate::config::PrefixKey;
+        use crate::core::session::Session;
+        use crate::ui::window_selector::WindowSelector;
+        use crate::wm::WindowManager;
+
+        // Replay emitted bytes through a simulated host terminal so the
+        // assertions run against what the user's terminal grid would show.
+        fn replay(out: &[u8]) -> Vec<String> {
+            let mut host = Session::new(9, 80, 24);
+            host.feed_bytes(out);
+            host.state
+                .active_screen()
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells
+                        .iter()
+                        .filter(|c| !c.is_continuation())
+                        .map(|c| if c.grapheme.is_empty() { " " } else { c.grapheme.as_str() })
+                        .collect()
+                })
+                .collect()
+        }
+
+        let mut wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
+        wm.new_tab();
+        let renderer = WmRenderer::new();
+        let mut selector = WindowSelector::new();
+        selector.open(&wm);
+
+        let mut out = Vec::new();
+        renderer
+            .render_window_selector(&mut out, &wm, &selector)
+            .expect("render window selector");
+        let grid = replay(&out);
+
+        let has_line = |needle: &str| grid.iter().any(|l| l.contains(needle));
+        assert!(has_line("Windows [Ctrl+B, w]"), "title missing:\n{}", grid.join("\n"));
+        assert!(has_line("+  1: 1:main- (1 pane)"), "last-window row missing:\n{}", grid.join("\n"));
+        assert!(has_line("+  2: 2:shell* (1 pane)"), "active-window row missing:\n{}", grid.join("\n"));
+        assert!(has_line("Preview: 2: 2:shell"), "preview separator missing:\n{}", grid.join("\n"));
+        assert!(has_line("Enter:Select"), "help line missing:\n{}", grid.join("\n"));
+
+        // Every overlay row must keep the box edges aligned.
+        let left = grid
+            .iter()
+            .find(|l| l.contains('┌'))
+            .and_then(|l| l.find('┌'))
+            .expect("top border");
+        let width = grid.iter().find(|l| l.contains('┌')).unwrap().trim_end().chars().count();
+        for line in grid.iter().filter(|l| l.contains('│') || l.contains('├')) {
+            assert_eq!(
+                line.trim_end().chars().count(),
+                width,
+                "misaligned overlay row:\n{}",
+                grid.join("\n")
+            );
+        }
+        assert!(left > 0);
+
+        // Expanding the selected window lists its panes as child rows, and
+        // selecting a pane row previews that pane.
+        let windows = wm.window_info();
+        selector.expand(&windows);
+        selector.selected += 1; // the pane row under window 2
+        let mut out = Vec::new();
+        renderer
+            .render_window_selector(&mut out, &wm, &selector)
+            .expect("render expanded selector");
+        let tree_grid = replay(&out);
+        assert!(
+            tree_grid.iter().any(|l| l.contains("-  2: 2:shell* (1 pane)")),
+            "expanded-window marker missing:\n{}",
+            tree_grid.join("\n")
+        );
+        assert!(
+            tree_grid.iter().any(|l| l.contains("└─ 1: Pane 1*")),
+            "pane child row missing:\n{}",
+            tree_grid.join("\n")
+        );
+        assert!(
+            tree_grid.iter().any(|l| l.contains("Preview: 2: 2:shell - pane 1")),
+            "pane preview title missing:\n{}",
+            tree_grid.join("\n")
+        );
+
+        // Kill confirmation replaces the help line (window and pane rows).
+        selector.kill_confirm = true;
+        let mut out = Vec::new();
+        renderer
+            .render_window_selector(&mut out, &wm, &selector)
+            .expect("render pane kill confirm");
+        let confirm_grid = replay(&out);
+        assert!(
+            confirm_grid
+                .iter()
+                .any(|l| l.contains("Kill pane 1 of window 2: 2:shell? (y/N)")),
+            "pane kill confirmation missing:\n{}",
+            confirm_grid.join("\n")
+        );
+
+        selector.selected = 0;
+        let mut out = Vec::new();
+        renderer
+            .render_window_selector(&mut out, &wm, &selector)
+            .expect("render window kill confirm");
+        let confirm_grid = replay(&out);
+        assert!(
+            confirm_grid.iter().any(|l| l.contains("Kill window 1: 1:main? (y/N)")),
+            "window kill confirmation missing:\n{}",
+            confirm_grid.join("\n")
+        );
+    }
+
+    #[test]
+    fn window_selector_layout_maps_mouse_positions_to_list_rows() {
+        use crate::config::PrefixKey;
+        use crate::wm::WindowManager;
+
+        let wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
+        let renderer = WmRenderer::new();
+        let layout = renderer
+            .window_selector_layout(&wm, 2, 0)
+            .expect("layout for 80x24");
+
+        // 80x24, tab bar 1, status bar 1 → box at x 2..78, y 2..22 with the
+        // two list rows directly under the top border.
+        assert_eq!(layout.list_row_at(2, 2, 3), Some(0));
+        assert_eq!(layout.list_row_at(2, 40, 4), Some(1));
+        assert_eq!(layout.list_row_at(2, 40, 5), None); // preview separator
+        assert_eq!(layout.list_row_at(2, 40, 2), None); // top border
+        assert_eq!(layout.list_row_at(2, 1, 3), None); // left of the box
+
+        assert!(layout.contains(2, 2));
+        assert!(layout.contains(77, 21));
+        assert!(!layout.contains(78, 21));
+        assert!(!layout.contains(40, 1));
+
+        // Too-small terminals produce no layout (selector is not drawn)
+        let tiny = WindowManager::new(15, 6, None, None, PrefixKey { char: 'b' }, true);
+        assert!(renderer.window_selector_layout(&tiny, 2, 0).is_none());
     }
 
     #[test]

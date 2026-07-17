@@ -33,6 +33,34 @@ use super::layout::{SplitDirection, SplitResizeTarget};
 
 use crate::config::PrefixKey;
 
+/// A pane entry within a window, for the window selector tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfo {
+    /// 1-based display number within the window
+    pub number: usize,
+    /// Pane title
+    pub title: String,
+    /// Whether this is the window's focused pane
+    pub is_active: bool,
+}
+
+/// A window (tab) entry for the window selector, in display order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowInfo {
+    /// Tab id (stable across list-order changes)
+    pub id: TabId,
+    /// 1-based display number
+    pub number: usize,
+    /// Window name
+    pub name: String,
+    /// Whether this is the current window (tmux flag `*`)
+    pub is_active: bool,
+    /// Whether this was the previously active window (tmux flag `-`)
+    pub is_last: bool,
+    /// The window's panes in display order
+    pub panes: Vec<PaneInfo>,
+}
+
 /// The central manager for all tabs and pane operations.
 ///
 /// `WindowManager` is the top-level component that coordinates:
@@ -153,6 +181,7 @@ impl WindowManager {
         
         self.tabs.insert(tab_id, tab);
         self.tab_order.push(tab_id);
+        self.last_active_tab = Some(self.active_tab);
         self.active_tab = tab_id;
         
         tab_id
@@ -194,9 +223,33 @@ impl WindowManager {
 
     /// Switch to tab by number (1-indexed)
     pub fn goto_tab(&mut self, num: usize) {
-        if num > 0 && num <= self.tab_order.len() {
-            self.active_tab = self.tab_order[num - 1];
+        if num > 0 {
+            self.select_tab_at(num - 1);
         }
+    }
+
+    /// Return the zero-based position of the active tab in display order.
+    pub fn active_tab_index(&self) -> usize {
+        self.tab_order
+            .iter()
+            .position(|&id| id == self.active_tab)
+            .unwrap_or(0)
+    }
+
+    /// Switch to a tab by its zero-based position in display order.
+    ///
+    /// Returns true when the active tab changed.
+    pub fn select_tab_at(&mut self, index: usize) -> bool {
+        let Some(&tab_id) = self.tab_order.get(index) else {
+            return false;
+        };
+        if tab_id == self.active_tab {
+            return false;
+        }
+
+        self.last_active_tab = Some(self.active_tab);
+        self.active_tab = tab_id;
+        true
     }
 
     /// Get the active tab
@@ -457,6 +510,111 @@ impl WindowManager {
             let tab = self.tabs.get(&id)?;
             Some((id, tab.name.clone(), id == self.active_tab))
         }).collect()
+    }
+
+    /// Get window information in display order for the window selector.
+    pub fn window_info(&self) -> Vec<WindowInfo> {
+        self.tab_order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &id)| {
+                let tab = self.tabs.get(&id)?;
+                let panes = tab
+                    .pane_order
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(pane_index, &pane_id)| {
+                        let pane = tab.panes.get(&pane_id)?;
+                        Some(PaneInfo {
+                            number: pane_index + 1,
+                            title: pane.display_title(),
+                            is_active: pane_id == tab.focused_pane,
+                        })
+                    })
+                    .collect();
+                Some(WindowInfo {
+                    id,
+                    number: index + 1,
+                    name: tab.name.clone(),
+                    is_active: id == self.active_tab,
+                    is_last: self.last_active_tab == Some(id) && id != self.active_tab,
+                    panes,
+                })
+            })
+            .collect()
+    }
+
+    /// Switch to the window at a display-order position and focus the pane
+    /// at the given display-order position within it.
+    pub fn focus_pane_at(&mut self, window_index: usize, pane_index: usize) -> bool {
+        let Some(&tab_id) = self.tab_order.get(window_index) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(&tab_id) else {
+            return false;
+        };
+        let Some(&pane_id) = tab.pane_order.get(pane_index) else {
+            return false;
+        };
+
+        tab.focus_pane(pane_id);
+        if tab_id != self.active_tab {
+            self.last_active_tab = Some(self.active_tab);
+            self.active_tab = tab_id;
+        }
+        true
+    }
+
+    /// Close the pane at a display-order position within the window at the
+    /// given display-order position. Closing a window's last pane closes the
+    /// window itself (keeping at least one window open).
+    pub fn close_pane_at(&mut self, window_index: usize, pane_index: usize) -> bool {
+        let Some(&tab_id) = self.tab_order.get(window_index) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(&tab_id) else {
+            return false;
+        };
+        if tab.panes.len() <= 1 {
+            return self.close_tab_at(window_index);
+        }
+        let Some(&pane_id) = tab.pane_order.get(pane_index) else {
+            return false;
+        };
+        tab.close_pane_by_id(pane_id)
+    }
+
+    /// Get the tab at a zero-based display-order position (for previews).
+    pub fn tab_at(&self, index: usize) -> Option<&Tab> {
+        let id = self.tab_order.get(index)?;
+        self.tabs.get(id)
+    }
+
+    /// Close the tab at a zero-based display-order position.
+    ///
+    /// Keeps at least one tab open. Returns true when a tab was removed.
+    pub fn close_tab_at(&mut self, index: usize) -> bool {
+        if self.tabs.len() <= 1 {
+            return false; // Keep at least one tab
+        }
+        let Some(&tab_id) = self.tab_order.get(index) else {
+            return false;
+        };
+
+        self.tabs.remove(&tab_id);
+        self.tab_order.retain(|&id| id != tab_id);
+
+        if self.last_active_tab == Some(tab_id) {
+            self.last_active_tab = None;
+        }
+        if self.active_tab == tab_id {
+            let new_index = index.min(self.tab_order.len().saturating_sub(1));
+            if let Some(&new_active) = self.tab_order.get(new_index) {
+                self.active_tab = new_active;
+            }
+        }
+
+        true
     }
 
     /// Get status info for rendering status bar
@@ -1065,5 +1223,96 @@ mod tests {
 
         assert!(wm.process_output());
         assert!(wm.tabs.is_empty());
+    }
+
+    #[test]
+    fn window_info_follows_tab_order_and_marks_active_window() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+
+        assert_eq!(
+            wm.window_info(),
+            vec![
+                WindowInfo {
+                    id: 1,
+                    number: 1,
+                    name: "1:main".to_string(),
+                    is_active: false,
+                    is_last: true,
+                    panes: vec![PaneInfo {
+                        number: 1,
+                        title: "Pane 1".to_string(),
+                        is_active: true,
+                    }],
+                },
+                WindowInfo {
+                    id: 2,
+                    number: 2,
+                    name: "2:shell".to_string(),
+                    is_active: true,
+                    is_last: false,
+                    panes: vec![PaneInfo {
+                        number: 1,
+                        title: "Pane 1".to_string(),
+                        is_active: true,
+                    }],
+                },
+            ]
+        );
+        assert_eq!(wm.active_tab_index(), 1);
+    }
+
+    #[test]
+    fn pane_level_actions_fall_back_to_window_level_for_single_pane_windows() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+        assert_eq!(wm.active_tab_index(), 1);
+
+        // Focusing a pane in another window switches to that window
+        assert!(wm.focus_pane_at(0, 0));
+        assert_eq!(wm.active_tab_index(), 0);
+        assert!(!wm.focus_pane_at(0, 5));
+        assert!(!wm.focus_pane_at(9, 0));
+
+        // Closing a window's only pane closes the window itself
+        assert!(wm.close_pane_at(1, 0));
+        assert_eq!(wm.window_info().len(), 1);
+        // ...but never the last remaining window
+        assert!(!wm.close_pane_at(0, 0));
+    }
+
+    #[test]
+    fn close_tab_at_removes_window_and_keeps_a_valid_active_tab() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+        wm.new_tab();
+        assert_eq!(wm.active_tab_index(), 2);
+
+        // Closing a non-active window keeps the active window selected
+        assert!(wm.close_tab_at(0));
+        assert_eq!(wm.window_info().len(), 2);
+        assert_eq!(wm.active_tab_index(), 1);
+
+        // Closing the active window moves to the nearest remaining one
+        assert!(wm.close_tab_at(1));
+        assert_eq!(wm.window_info().len(), 1);
+        assert_eq!(wm.active_tab_index(), 0);
+
+        // The last window cannot be closed
+        assert!(!wm.close_tab_at(0));
+        assert!(!wm.close_tab_at(99));
+    }
+
+    #[test]
+    fn select_tab_at_switches_window_and_tracks_last_window() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+
+        assert!(wm.select_tab_at(0));
+        assert_eq!(wm.active_tab_index(), 0);
+
+        wm.last_tab();
+        assert_eq!(wm.active_tab_index(), 1);
+        assert!(!wm.select_tab_at(99));
     }
 }

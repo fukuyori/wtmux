@@ -124,36 +124,41 @@ impl Tab {
 
     /// Close the focused pane
     pub fn close_pane(&mut self) -> bool {
-        if self.panes.len() <= 1 {
+        self.close_pane_by_id(self.focused_pane)
+    }
+
+    /// Close a specific pane
+    pub fn close_pane_by_id(&mut self, pane_id: PaneId) -> bool {
+        if self.panes.len() <= 1 || !self.panes.contains_key(&pane_id) {
             return false; // Can't close the last pane
         }
-        
-        let pane_id = self.focused_pane;
-        
+
         // Unzoom if zoomed pane was closed
         if self.zoomed_pane == Some(pane_id) {
             self.zoomed_pane = None;
         }
-        
+
         // Remove from layout
         if let Some(new_layout) = self.layout.remove(pane_id) {
             self.layout = new_layout;
         } else {
             return false;
         }
-        
+
         // Remove pane
         self.panes.remove(&pane_id);
         self.pane_order.retain(|&id| id != pane_id);
-        
-        // Focus another pane
-        if let Some(&new_focus) = self.panes.keys().next() {
-            self.focus_pane(new_focus);
+
+        // Focus another pane if the closed one was focused
+        if self.focused_pane == pane_id {
+            if let Some(&new_focus) = self.pane_order.first() {
+                self.focus_pane(new_focus);
+            }
         }
-        
+
         // Reflow handles all geometry and border changes
         self.reflow(ReflowReason::Close);
-        
+
         true
     }
 

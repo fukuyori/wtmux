@@ -1,3 +1,22 @@
+## [1.8.0] - 2026-07-17
+
+### Added
+
+- **tmux-style window selector**:
+  `Ctrl+B, w` now opens a full-screen window chooser like tmux's
+  `choose-tree`. The list shows each window's number, name, pane count, and
+  tmux-style flags (`*` current, `-` last), with a live preview of the
+  selected window's panes below the list. Windows expand into a tree:
+  `Right`/`l` shows a window's panes as child rows (`-`/`+` marks
+  expanded/collapsed), `Left`/`h` folds them again. Selecting a pane row
+  previews just that pane, `Enter` on it switches to the window and focuses
+  that pane, and `x` kills it. On window rows, move with the arrow keys or
+  `j`/`k`, jump with `1`-`9`, switch with `Enter`, and kill with `x` (both
+  kills ask `y/N` for confirmation); close the chooser with `Esc` or `q`.
+  The mouse works too: scroll to move the selection, click a row to switch
+  to it, or click outside the popup to close it; moving the mouse does not
+  dismiss the chooser.
+
 ## [1.7.2] - 2026-07-07
 
 ### Fixed

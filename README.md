@@ -157,8 +157,19 @@ The tables below show the default keybindings.
 | `Ctrl+B, n` | Next window |
 | `Ctrl+B, p` | Previous window |
 | `Ctrl+B, l` | Toggle last window |
+| `Ctrl+B, w` | Show the window selector |
 | `Ctrl+B, 0-9` | Select window by number |
 | `Ctrl+B, ,` | Rename window |
+
+The window selector shows every window with its pane count and tmux-style
+flags (`*` current, `-` last), plus a live preview of the selected window.
+Use `Up`/`Down` or `j`/`k` to move, `1`-`9` to jump to a window by number,
+`Enter` to switch, `x` to kill the selected item (confirm with `y`), and
+`Esc` or `q` to close the list. Windows expand into a tree: `Right`/`l`
+lists a window's panes as child rows, `Left`/`h` folds them; selecting a
+pane row previews it, and `Enter` switches to the window with that pane
+focused. The mouse works too: scroll to move the selection, click a row to
+switch to it, or click outside the popup to close it.
 
 ### Panes
 
