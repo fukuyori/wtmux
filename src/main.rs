@@ -56,11 +56,12 @@ use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::core::session::Session;
-use crate::ui::{input, KeyMapper, Renderer, ContextMenu, ContextMenuAction, TreeEntry, WindowSelector};
+use crate::core::term::width::{char_width, str_display_width};
+use crate::ui::{
+    input, ContextMenuAction, KeyMapper, Renderer, TreeEntry, UiMode, WmAppState,
+};
 use crate::wm::{WindowManager, SplitDirection};
-use crate::history::HistorySelector;
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
-use crate::copymode::CopyMode;
 
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -501,16 +502,6 @@ fn reset_cursor_shape() {
     let _ = execute!(stdout, SetCursorStyle::SteadyBlock);
 }
 
-#[cfg(windows)]
-fn selector_is_visible(selector: &Option<HistorySelector>) -> bool {
-    selector.as_ref().map(|s| s.visible).unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn get_or_create_selector(selector: &mut Option<HistorySelector>) -> &mut HistorySelector {
-    selector.get_or_insert_with(HistorySelector::new)
-}
-
 /// Get encoding name
 fn get_encoding_name(codepage: Option<u32>) -> &'static str {
     match codepage {
@@ -920,31 +911,10 @@ fn run_wm_main_loop(
     let active_poll = Duration::from_millis(10);
     let idle_poll = Duration::from_millis(50);
     let mut idle_ticks: u32 = 0;
-    let mut selector: Option<HistorySelector> = None;
     let mut status_publisher = tmux_compat::StatusPublisher::default();
-    
-    // Theme selector state
-    let mut theme_selector_visible = false;
-    let mut theme_selector_index: usize = 0;
     let theme_list = ColorScheme::list();
-
-    // Window selector state (tmux Ctrl+B, w)
-    let mut window_selector = WindowSelector::new();
-    
-    // Pane numbers display state
-    let mut pane_numbers_visible = false;
-    let mut pane_numbers_timer = std::time::Instant::now();
+    let mut ui = WmAppState::new();
     let pane_numbers_duration = Duration::from_secs(2);
-    
-    // Copy mode state
-    let mut copy_mode = CopyMode::new();
-    
-    // Window rename mode state
-    let mut rename_mode = false;
-    let mut rename_buffer = String::new();
-    
-    // Context menu state
-    let mut context_menu = ContextMenu::new();
 
     // Resize debounce: buffer rapid resize events and apply after 30ms of calm.
     // Windows fires one resize event per pixel during drag; without debouncing,
@@ -964,23 +934,20 @@ fn run_wm_main_loop(
         if let Some((cols, rows)) = pending_resize {
             if last_resize_time.elapsed() >= resize_debounce {
                 wm.resize(cols, rows);
-                if window_selector.visible {
-                    renderer.render_with_window_selector(wm, &window_selector)?;
-                } else if theme_selector_visible {
-                    renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
-                } else if pane_numbers_visible {
-                    renderer.render_with_pane_numbers(wm)?;
-                } else {
-                    renderer.render_with_selector(wm, selector.as_ref())?;
-                }
+                ui.render(renderer, wm, &theme_list)?;
                 wm.clear_all_dirty();
                 pending_resize = None;
             }
         }
 
         // Check pane numbers timeout
-        if pane_numbers_visible && pane_numbers_timer.elapsed() >= pane_numbers_duration {
-            pane_numbers_visible = false;
+        if ui.mode == UiMode::PaneNumbers
+            && ui.pane_numbers_started.elapsed() >= pane_numbers_duration
+        {
+            ui.close_mode();
+            wm.force_full_redraw();
+            renderer.render(wm)?;
+            wm.clear_all_dirty();
         }
 
         // Process output and closed panes/tabs.
@@ -1002,19 +969,11 @@ fn run_wm_main_loop(
         }
         
         // Render based on current mode
-        if copy_mode.active || rename_mode || context_menu.visible {
+        if ui.defers_background_render() {
             // In copy mode, rename mode, or context menu, only render on key events
             // (rendering happens in the key handler below)
         } else if needs_render {
-            if window_selector.visible {
-                renderer.render_with_window_selector(wm, &window_selector)?;
-            } else if theme_selector_visible {
-                renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
-            } else if pane_numbers_visible {
-                renderer.render_with_pane_numbers(wm)?;
-            } else {
-                renderer.render_with_selector(wm, selector.as_ref())?;
-            }
+            ui.render(renderer, wm, &theme_list)?;
             // Clear dirty state after rendering so the next frame only redraws
             // rows that have genuinely changed.
             wm.clear_all_dirty();
@@ -1031,25 +990,26 @@ fn run_wm_main_loop(
                     }
                     
                     // Handle context menu keyboard navigation
-                    if context_menu.visible {
+                    if ui.mode == UiMode::ContextMenu {
                         match key_event.code {
                             KeyCode::Esc => {
-                                context_menu.hide();
+                                ui.close_mode();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
-                                context_menu.up();
-                                renderer.render_with_context_menu(wm, &context_menu)?;
+                                ui.context_menu.up();
+                                ui.render(renderer, wm, &theme_list)?;
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
-                                context_menu.down();
-                                renderer.render_with_context_menu(wm, &context_menu)?;
+                                ui.context_menu.down();
+                                ui.render(renderer, wm, &theme_list)?;
                             }
                             KeyCode::Enter | KeyCode::Char(' ') => {
-                                let action: AppAction = context_menu.selected_action().into();
+                                let action: AppAction =
+                                    ui.context_menu.selected_action().into();
                                 apply_app_action(wm, action);
-                                context_menu.hide();
+                                ui.close_mode();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
                             }
@@ -1059,25 +1019,25 @@ fn run_wm_main_loop(
                     }
                     
                     // Handle copy mode
-                    if copy_mode.active {
+                    if ui.mode == UiMode::CopyMode {
                         let mut needs_full_redraw = false;
-                        let old_scroll = copy_mode.scroll_offset;
+                        let old_scroll = ui.copy_mode.scroll_offset;
                         
-                        if copy_mode.search_mode {
+                        if ui.copy_mode.search_mode {
                             // Search input mode
                             needs_full_redraw = true;
                             match key_event.code {
                                 KeyCode::Esc => {
-                                    copy_mode.cancel_search();
+                                    ui.copy_mode.cancel_search();
                                 }
                                 KeyCode::Enter => {
-                                    copy_mode.execute_search(wm);
+                                    ui.copy_mode.execute_search(wm);
                                 }
                                 KeyCode::Backspace => {
-                                    copy_mode.search_backspace();
+                                    ui.copy_mode.search_backspace();
                                 }
                                 KeyCode::Char(c) => {
-                                    copy_mode.search_input(c);
+                                    ui.copy_mode.search_input(c);
                                 }
                                 _ => {}
                             }
@@ -1086,88 +1046,88 @@ fn run_wm_main_loop(
                             match key_event.code {
                                 // Exit copy mode
                                 KeyCode::Esc | KeyCode::Char('q') => {
-                                    copy_mode.exit();
+                                    ui.close_mode();
                                     renderer.render(wm)?;
                                     continue;
                                 }
                                 // Movement - vim style (cursor only update unless scroll changes)
                                 KeyCode::Char('h') | KeyCode::Left => {
-                                    copy_mode.cursor_left(wm);
+                                    ui.copy_mode.cursor_left(wm);
                                 }
                                 KeyCode::Char('j') | KeyCode::Down => {
-                                    copy_mode.cursor_down(wm);
+                                    ui.copy_mode.cursor_down(wm);
                                 }
                                 KeyCode::Char('k') | KeyCode::Up => {
-                                    copy_mode.cursor_up(wm);
+                                    ui.copy_mode.cursor_up(wm);
                                 }
                                 KeyCode::Char('l') | KeyCode::Right => {
-                                    copy_mode.cursor_right(wm);
+                                    ui.copy_mode.cursor_right(wm);
                                 }
                                 // Line navigation
                                 KeyCode::Char('0') => {
-                                    copy_mode.line_start();
+                                    ui.copy_mode.line_start();
                                 }
                                 KeyCode::Char('$') => {
-                                    copy_mode.line_end(wm);
+                                    ui.copy_mode.line_end(wm);
                                 }
                                 // Page navigation - needs full redraw
                                 KeyCode::PageUp | KeyCode::Char('b') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    copy_mode.page_up(wm);
+                                    ui.copy_mode.page_up(wm);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::PageDown | KeyCode::Char('f') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    copy_mode.page_down(wm);
+                                    ui.copy_mode.page_down(wm);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('u') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    copy_mode.half_page_up(wm);
+                                    ui.copy_mode.half_page_up(wm);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('d') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    copy_mode.half_page_down(wm);
+                                    ui.copy_mode.half_page_down(wm);
                                     needs_full_redraw = true;
                                 }
                                 // Go to top/bottom - needs full redraw
                                 KeyCode::Char('g') => {
-                                    copy_mode.goto_top(wm);
+                                    ui.copy_mode.goto_top(wm);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('G') => {
-                                    copy_mode.goto_bottom(wm);
+                                    ui.copy_mode.goto_bottom(wm);
                                     needs_full_redraw = true;
                                 }
                                 // Selection - needs full redraw
                                 KeyCode::Char(' ') | KeyCode::Char('v') => {
-                                    copy_mode.toggle_selection();
+                                    ui.copy_mode.toggle_selection();
                                     needs_full_redraw = true;
                                 }
                                 // Copy
                                 KeyCode::Enter | KeyCode::Char('y') => {
-                                    if let Some(text) = copy_mode.copy_selection(wm) {
+                                    if let Some(text) = ui.copy_mode.copy_selection(wm) {
                                         // Copy to clipboard
                                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                             let _ = clipboard.set_text(text);
                                         }
-                                        copy_mode.exit();
+                                        ui.close_mode();
                                         renderer.render(wm)?;
                                         continue;
                                     }
                                 }
                                 // Search - needs full redraw
                                 KeyCode::Char('/') => {
-                                    copy_mode.enter_search(true);
+                                    ui.copy_mode.enter_search(true);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('?') => {
-                                    copy_mode.enter_search(false);
+                                    ui.copy_mode.enter_search(false);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('n') => {
-                                    copy_mode.find_next_match(false);
+                                    ui.copy_mode.find_next_match(false);
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('N') => {
-                                    copy_mode.find_prev_match();
+                                    ui.copy_mode.find_prev_match();
                                     needs_full_redraw = true;
                                 }
                                 _ => {}
@@ -1175,53 +1135,51 @@ fn run_wm_main_loop(
                         }
                         
                         // Check if scroll changed
-                        if copy_mode.scroll_offset != old_scroll {
+                        if ui.copy_mode.scroll_offset != old_scroll {
                             needs_full_redraw = true;
                         }
                         
                         // Render
-                        if needs_full_redraw || copy_mode.selection_start.is_some() {
-                            renderer.render_with_copy_mode(wm, &copy_mode)?;
+                        if needs_full_redraw || ui.copy_mode.selection_start.is_some() {
+                            ui.render(renderer, wm, &theme_list)?;
                         } else {
-                            renderer.render_copy_mode_cursor_only(wm, &copy_mode)?;
+                            renderer.render_copy_mode_cursor_only(wm, &ui.copy_mode)?;
                         }
                         continue;
                     }
                     
                     // Handle rename mode
-                    if rename_mode {
+                    if ui.mode == UiMode::Rename {
                         match key_event.code {
                             KeyCode::Esc => {
-                                rename_mode = false;
-                                rename_buffer.clear();
+                                ui.close_mode();
                                 renderer.render(wm)?;
                                 continue;
                             }
                             KeyCode::Enter => {
-                                if !rename_buffer.is_empty() {
-                                    wm.rename_active_tab(&rename_buffer);
+                                if !ui.rename_buffer.is_empty() {
+                                    wm.rename_active_tab(&ui.rename_buffer);
                                 }
-                                rename_mode = false;
-                                rename_buffer.clear();
+                                ui.close_mode();
                                 renderer.render(wm)?;
                                 continue;
                             }
                             KeyCode::Backspace => {
-                                rename_buffer.pop();
+                                ui.rename_buffer.pop();
                             }
-                            KeyCode::Char(c) => {
-                                if rename_buffer.len() < 30 {
-                                    rename_buffer.push(c);
-                                }
+                            KeyCode::Char(c)
+                                if str_display_width(&ui.rename_buffer) + char_width(c) <= 30 =>
+                            {
+                                ui.rename_buffer.push(c);
                             }
                             _ => {}
                         }
-                        renderer.render_with_rename(wm, &rename_buffer)?;
+                        ui.render(renderer, wm, &theme_list)?;
                         continue;
                     }
                     
                     // Handle pane numbers mode - select pane by number
-                    if pane_numbers_visible {
+                    if ui.mode == UiMode::PaneNumbers {
                         if let KeyCode::Char(c) = key_event.code {
                             if c.is_ascii_digit() {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
@@ -1229,18 +1187,18 @@ fn run_wm_main_loop(
                                 reset_cursor_shape();
                             }
                         }
-                        pane_numbers_visible = false;
+                        ui.close_mode();
                         renderer.render(wm)?;
                         continue;
                     }
 
                     // Handle window selector mode
-                    if window_selector.visible {
+                    if ui.mode == UiMode::WindowSelector {
                         let windows = wm.window_info();
-                        if window_selector.kill_confirm {
+                        if ui.window_selector.kill_confirm {
                             // Waiting for kill confirmation (y/N)
                             if matches!(key_event.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
-                                match window_selector.selected_entry(&windows) {
+                                match ui.window_selector.selected_entry(&windows) {
                                     Some(TreeEntry::Window { window }) => {
                                         wm.close_tab_at(window);
                                     }
@@ -1250,55 +1208,56 @@ fn run_wm_main_loop(
                                     None => {}
                                 }
                             }
-                            window_selector.kill_confirm = false;
+                            ui.window_selector.kill_confirm = false;
                         } else {
-                            let entry_count = window_selector.entries(&windows).len();
+                            let entry_count = ui.window_selector.entries(&windows).len();
                             match key_event.code {
                                 KeyCode::Esc | KeyCode::Char('q') => {
-                                    window_selector.close();
+                                    ui.close_mode();
                                     wm.force_full_redraw();
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
-                                    window_selector.move_up(entry_count);
+                                    ui.window_selector.move_up(entry_count);
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
-                                    window_selector.move_down(entry_count);
+                                    ui.window_selector.move_down(entry_count);
                                 }
                                 KeyCode::Home => {
-                                    window_selector.selected = 0;
+                                    ui.window_selector.selected = 0;
                                 }
                                 KeyCode::End => {
-                                    window_selector.selected = entry_count.saturating_sub(1);
+                                    ui.window_selector.selected =
+                                        entry_count.saturating_sub(1);
                                 }
                                 // Expand / collapse the tree (tmux: Right/Left)
                                 KeyCode::Right | KeyCode::Char('l') => {
-                                    window_selector.expand(&windows);
+                                    ui.window_selector.expand(&windows);
                                 }
                                 KeyCode::Left | KeyCode::Char('h') => {
-                                    window_selector.collapse(&windows);
+                                    ui.window_selector.collapse(&windows);
                                 }
                                 // Jump to a window by its display number (1-9)
                                 KeyCode::Char(c) if c.is_ascii_digit() => {
                                     let num = c.to_digit(10).unwrap_or(0) as usize;
-                                    window_selector.jump_to_window(&windows, num);
+                                    ui.window_selector.jump_to_window(&windows, num);
                                 }
                                 // Kill the selected window or pane (tmux: x)
                                 KeyCode::Char('x') => {
-                                    match window_selector.selected_entry(&windows) {
+                                    match ui.window_selector.selected_entry(&windows) {
                                         Some(TreeEntry::Window { .. }) if windows.len() > 1 => {
-                                            window_selector.kill_confirm = true;
+                                            ui.window_selector.kill_confirm = true;
                                         }
                                         Some(TreeEntry::Pane { window, .. })
                                             if windows[window].panes.len() > 1
                                                 || windows.len() > 1 =>
                                         {
-                                            window_selector.kill_confirm = true;
+                                            ui.window_selector.kill_confirm = true;
                                         }
                                         _ => {}
                                     }
                                 }
                                 KeyCode::Enter => {
-                                    match window_selector.selected_entry(&windows) {
+                                    match ui.window_selector.selected_entry(&windows) {
                                         Some(TreeEntry::Window { window }) => {
                                             wm.select_tab_at(window);
                                         }
@@ -1308,18 +1267,18 @@ fn run_wm_main_loop(
                                         None => {}
                                     }
                                     reset_cursor_shape();
-                                    window_selector.close();
+                                    ui.close_mode();
                                     wm.force_full_redraw();
                                 }
                                 _ => {}
                             }
                         }
-                        if window_selector.visible {
+                        if ui.mode == UiMode::WindowSelector {
                             // The window list may have changed (kill); re-clamp
                             let entry_count =
-                                window_selector.entries(&wm.window_info()).len();
-                            window_selector.clamp(entry_count);
-                            renderer.render_with_window_selector(wm, &window_selector)?;
+                                ui.window_selector.entries(&wm.window_info()).len();
+                            ui.window_selector.clamp(entry_count);
+                            ui.render(renderer, wm, &theme_list)?;
                         } else {
                             renderer.render(wm)?;
                         }
@@ -1327,42 +1286,42 @@ fn run_wm_main_loop(
                     }
 
                     // Handle theme selector mode
-                    if theme_selector_visible {
+                    if ui.mode == UiMode::ThemeSelector {
                         match key_event.code {
                             KeyCode::Esc => {
-                                theme_selector_visible = false;
+                                ui.close_mode();
                                 wm.force_full_redraw();
                             }
                             KeyCode::Up => {
-                                if theme_selector_index > 0 {
-                                    theme_selector_index -= 1;
+                                if ui.theme_selector_index > 0 {
+                                    ui.theme_selector_index -= 1;
                                 }
                             }
                             KeyCode::Down => {
-                                if theme_selector_index + 1 < theme_list.len() {
-                                    theme_selector_index += 1;
+                                if ui.theme_selector_index + 1 < theme_list.len() {
+                                    ui.theme_selector_index += 1;
                                 }
                             }
                             KeyCode::Enter => {
-                                let scheme_name = theme_list[theme_selector_index];
+                                let scheme_name = theme_list[ui.theme_selector_index];
                                 renderer.set_color_scheme(ColorScheme::by_name(scheme_name));
-                                theme_selector_visible = false;
+                                ui.close_mode();
                                 wm.force_full_redraw();
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
                                 if num >= 1 && num <= theme_list.len() {
-                                    theme_selector_index = num - 1;
-                                    let scheme_name = theme_list[theme_selector_index];
+                                    ui.theme_selector_index = num - 1;
+                                    let scheme_name = theme_list[ui.theme_selector_index];
                                     renderer.set_color_scheme(ColorScheme::by_name(scheme_name));
-                                    theme_selector_visible = false;
+                                    ui.close_mode();
                                     wm.force_full_redraw();
                                 }
                             }
                             _ => {}
                         }
-                        if theme_selector_visible {
-                            renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                        if ui.mode == UiMode::ThemeSelector {
+                            ui.render(renderer, wm, &theme_list)?;
                         } else {
                             renderer.render(wm)?;
                         }
@@ -1370,63 +1329,76 @@ fn run_wm_main_loop(
                     }
 
                     // Handle selector mode
-                    if selector_is_visible(&selector) {
-                        let selector = get_or_create_selector(&mut selector);
-                        match key_event.code {
-                            KeyCode::Esc => {
-                                selector.hide();
-                                wm.force_full_redraw();
-                            }
-                            KeyCode::Enter => {
-                                if let Some(command) = selector.confirm() {
-                                    if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                        // Shift+Enter: append with && (run if previous succeeds)
-                                        let append_cmd = format!(" && {}", command);
-                                        let _ = wm.write(append_cmd.as_bytes());
-                                    } else if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                        // Ctrl+Enter: append with & (background/parallel)
-                                        let append_cmd = format!(" & {}", command);
-                                        let _ = wm.write(append_cmd.as_bytes());
-                                    } else {
-                                        // Enter: replace current input with history command
-                                        wm.clear_current_input();
-                                        let _ = wm.write(command.as_bytes());
-                                    }
+                    if ui.mode == UiMode::HistorySelector {
+                        {
+                            let selector = ui.history_selector_mut();
+                            match key_event.code {
+                                KeyCode::Esc => {
+                                    selector.hide();
+                                    wm.force_full_redraw();
                                 }
-                            }
-                            KeyCode::Up => {
-                                selector.select_up();
-                            }
-                            KeyCode::Down => {
-                                selector.select_down();
-                            }
-                            KeyCode::Backspace => {
-                                selector.backspace();
-                            }
-                            KeyCode::Delete => {
-                                selector.delete_selected();
-                            }
-                            KeyCode::Char(c) => {
-                                // Number selection only when query is empty
-                                if selector.query.is_empty() && c.is_ascii_digit() {
-                                    if let Some(num) = c.to_digit(10) {
-                                        if num >= 1 && num <= 9 {
-                                            if let Some(command) = selector.select_number(num as usize) {
-                                                // Clear current input and insert
-                                                wm.clear_current_input();
-                                                let _ = wm.write(command.as_bytes());
-                                            }
-                                            renderer.render_with_selector(wm, Some(&*selector))?;
-                                            continue;
+                                KeyCode::Enter => {
+                                    if let Some(command) = selector.confirm() {
+                                        if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                            // Shift+Enter: append with && (run if previous succeeds)
+                                            let append_cmd = format!(" && {}", command);
+                                            let _ = wm.write(append_cmd.as_bytes());
+                                        } else if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                                            // Ctrl+Enter: append with & (background/parallel)
+                                            let append_cmd = format!(" & {}", command);
+                                            let _ = wm.write(append_cmd.as_bytes());
+                                        } else {
+                                            // Enter: replace current input with history command
+                                            wm.clear_current_input();
+                                            let _ = wm.write(command.as_bytes());
                                         }
                                     }
                                 }
-                                // Add to search query
-                                selector.input_char(c);
+                                KeyCode::Up => {
+                                    selector.select_up();
+                                }
+                                KeyCode::Down => {
+                                    selector.select_down();
+                                }
+                                KeyCode::Backspace => {
+                                    selector.backspace();
+                                }
+                                KeyCode::Delete => {
+                                    selector.delete_selected();
+                                }
+                                KeyCode::Char(c) => {
+                                    // Number selection only when query is empty
+                                    if selector.query.is_empty() && c.is_ascii_digit() {
+                                        if let Some(num) = c.to_digit(10) {
+                                            if (1..=9).contains(&num) {
+                                                if let Some(command) =
+                                                    selector.select_number(num as usize)
+                                                {
+                                                    // Clear current input and insert
+                                                    wm.clear_current_input();
+                                                    let _ = wm.write(command.as_bytes());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Add to search query only while still visible.
+                                    if selector.visible {
+                                        selector.input_char(c);
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
-                        renderer.render_with_selector(wm, Some(&*selector))?;
+                        let selector_visible = ui
+                            .history_selector
+                            .as_ref()
+                            .is_some_and(|selector| selector.visible);
+                        if selector_visible {
+                            ui.render(renderer, wm, &theme_list)?;
+                        } else {
+                            ui.mode = UiMode::Normal;
+                            renderer.render(wm)?;
+                        }
                         continue;
                     }
 
@@ -1506,7 +1478,7 @@ fn run_wm_main_loop(
                                 }
                             }
                             // Select window by number (tmux: 0-9) - only when not showing pane numbers
-                            KeyCode::Char(c) if c.is_ascii_digit() && !pane_numbers_visible => {
+                            KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
                                 Some(AppAction::GotoTab(num))
                             }
@@ -1520,45 +1492,52 @@ fn run_wm_main_loop(
                             KeyCode::Char('z') => Some(AppAction::ToggleZoom),
                             // Rename window (tmux: ,)
                             KeyCode::Char(',') => {
-                                rename_mode = true;
-                                rename_buffer.clear();
+                                ui.close_mode();
+                                ui.mode = UiMode::Rename;
                                 if let Some(tab) = wm.active_tab() {
-                                    rename_buffer = tab.name.clone();
+                                    ui.rename_buffer = tab.name.clone();
                                 }
                                 wm.prefix_mode = false;
-                                renderer.render_with_rename(wm, &rename_buffer)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Next layout (tmux: Space)
                             KeyCode::Char(' ') => Some(AppAction::NextLayout),
                             // Copy mode (tmux: [)
                             KeyCode::Char('[') => {
-                                copy_mode.enter(wm);
+                                ui.close_mode();
+                                ui.copy_mode.enter(wm);
+                                ui.mode = UiMode::CopyMode;
                                 wm.prefix_mode = false;
-                                renderer.render_with_copy_mode(wm, &copy_mode)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Search mode (Ctrl+B, /)
                             KeyCode::Char('/') => {
-                                copy_mode.enter(wm);
-                                copy_mode.enter_search(true);
+                                ui.close_mode();
+                                ui.copy_mode.enter(wm);
+                                ui.copy_mode.enter_search(true);
+                                ui.mode = UiMode::CopyMode;
                                 wm.prefix_mode = false;
-                                renderer.render_with_copy_mode(wm, &copy_mode)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Theme/color scheme selector (Ctrl+B, t)
                             KeyCode::Char('t') => {
-                                theme_selector_visible = true;
-                                theme_selector_index = 0;
+                                ui.close_mode();
+                                ui.mode = UiMode::ThemeSelector;
+                                ui.theme_selector_index = 0;
                                 wm.prefix_mode = false;
-                                renderer.render_with_theme_selector(wm, &theme_list, theme_selector_index)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Window selector (tmux: w)
                             KeyCode::Char('w') => {
-                                window_selector.open(wm);
+                                ui.close_mode();
+                                ui.window_selector.open(wm);
+                                ui.mode = UiMode::WindowSelector;
                                 wm.prefix_mode = false;
-                                renderer.render_with_window_selector(wm, &window_selector)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Resize pane (tmux: + / -)
@@ -1572,10 +1551,11 @@ fn run_wm_main_loop(
                             KeyCode::Char('{') => Some(AppAction::SwapPanePrev),
                             // Display pane numbers (tmux: q)
                             KeyCode::Char('q') => {
-                                pane_numbers_visible = true;
-                                pane_numbers_timer = std::time::Instant::now();
+                                ui.close_mode();
+                                ui.mode = UiMode::PaneNumbers;
+                                ui.pane_numbers_started = std::time::Instant::now();
                                 wm.prefix_mode = false;
-                                renderer.render_with_pane_numbers(wm)?;
+                                ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
                             // Detach (tmux: d) - for now just show message
@@ -1597,20 +1577,22 @@ fn run_wm_main_loop(
                     }
 
                     // Check for prefix key (configurable, default: Ctrl+B)
-                    if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                        if key_event.code == KeyCode::Char(wm.prefix_key.char) {
-                            wm.prefix_mode = true;
-                            renderer.render(wm)?;
-                            continue;
-                        }
+                    if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        && key_event.code == KeyCode::Char(wm.prefix_key.char)
+                    {
+                        wm.prefix_mode = true;
+                        renderer.render(wm)?;
+                        continue;
                     }
 
                     if keybindings.history_selector.matches(&key_event)
                         && !wm.is_in_alternate_screen()
                     {
-                        let selector = get_or_create_selector(&mut selector);
+                        ui.close_mode();
+                        let selector = ui.history_selector_mut();
                         selector.show();
-                        renderer.render_with_selector(wm, Some(&*selector))?;
+                        ui.mode = UiMode::HistorySelector;
+                        ui.render(renderer, wm, &theme_list)?;
                         continue;
                     }
 
@@ -1653,7 +1635,7 @@ fn run_wm_main_loop(
                     if key_event.code == KeyCode::Enter && !wm.is_in_alternate_screen() {
                         if let Some(command) = wm.get_current_line() {
                             if !command.is_empty() {
-                                get_or_create_selector(&mut selector).add_to_history(command);
+                                ui.history_selector_mut().add_to_history(command);
                             }
                         }
                         // Reset keystroke buffer for next command
@@ -1679,25 +1661,25 @@ fn run_wm_main_loop(
                     // not dismiss the popup (any-event tracking reports every
                     // motion); wheel moves the selection, left click chooses a
                     // row, and clicking outside the popup closes it.
-                    if window_selector.visible {
+                    if ui.mode == UiMode::WindowSelector {
                         let windows = wm.window_info();
-                        let entries = window_selector.entries(&windows);
+                        let entries = ui.window_selector.entries(&windows);
                         match mouse_event.kind {
                             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                                window_selector.kill_confirm = false;
+                                ui.window_selector.kill_confirm = false;
                                 if mouse_event.kind == MouseEventKind::ScrollUp {
-                                    window_selector.move_up(entries.len());
+                                    ui.window_selector.move_up(entries.len());
                                 } else {
-                                    window_selector.move_down(entries.len());
+                                    ui.window_selector.move_down(entries.len());
                                 }
-                                renderer.render_with_window_selector(wm, &window_selector)?;
+                                ui.render(renderer, wm, &theme_list)?;
                             }
                             MouseEventKind::Down(button) => {
-                                window_selector.kill_confirm = false;
+                                ui.window_selector.kill_confirm = false;
                                 let layout = renderer.window_selector_layout(
                                     wm,
                                     entries.len(),
-                                    window_selector.selected,
+                                    ui.window_selector.selected,
                                 );
                                 let clicked_row = layout.as_ref().and_then(|l| {
                                     l.list_row_at(
@@ -1722,22 +1704,19 @@ fn run_wm_main_loop(
                                             None => {}
                                         }
                                         reset_cursor_shape();
-                                        window_selector.close();
+                                        ui.close_mode();
                                         wm.force_full_redraw();
                                         renderer.render(wm)?;
                                     } else if !inside {
                                         // Click outside the popup closes it
-                                        window_selector.close();
+                                        ui.close_mode();
                                         wm.force_full_redraw();
                                         renderer.render(wm)?;
                                     } else {
-                                        renderer.render_with_window_selector(
-                                            wm,
-                                            &window_selector,
-                                        )?;
+                                        ui.render(renderer, wm, &theme_list)?;
                                     }
                                 } else {
-                                    window_selector.close();
+                                    ui.close_mode();
                                     wm.force_full_redraw();
                                     renderer.render(wm)?;
                                 }
@@ -1749,41 +1728,55 @@ fn run_wm_main_loop(
                     }
                     
                     // Close snippet selector on mouse click outside
-                    if selector_is_visible(&selector) {
-                        if let Some(selector) = selector.as_mut() {
-                            selector.hide();
-                        }
+                    if ui.mode == UiMode::HistorySelector {
+                        ui.close_mode();
                         wm.force_full_redraw();
-                        renderer.render_with_selector(wm, selector.as_ref())?;
+                        renderer.render(wm)?;
                     }
                     
                     // Handle context menu interactions
-                    if context_menu.visible {
+                    if ui.mode == UiMode::ContextMenu {
                         match mouse_event.kind {
                             MouseEventKind::Down(MouseButton::Left) => {
-                                if let Some(action) = context_menu.handle_click(mouse_event.column, mouse_event.row) {
+                                if let Some(action) = ui
+                                    .context_menu
+                                    .handle_click(mouse_event.column, mouse_event.row)
+                                {
                                     apply_app_action(wm, action.into());
-                                    context_menu.hide();
+                                    ui.close_mode();
                                     renderer.render(wm)?;
                                 } else {
                                     // Clicked outside menu - close it
-                                    context_menu.hide();
+                                    ui.close_mode();
                                     renderer.render(wm)?;
                                 }
                             }
                             MouseEventKind::Down(MouseButton::Right) => {
                                 // Close menu on right click
-                                context_menu.hide();
+                                ui.close_mode();
                                 renderer.render(wm)?;
                             }
-                            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
-                                // Highlight item under cursor
-                                if context_menu.update_hover(mouse_event.column, mouse_event.row) {
-                                    renderer.render_context_menu_only(&context_menu)?;
-                                }
+                            MouseEventKind::Moved | MouseEventKind::Drag(_)
+                                if ui
+                                    .context_menu
+                                    .update_hover(mouse_event.column, mouse_event.row) =>
+                            {
+                                // Highlight item under cursor.
+                                renderer.render_context_menu_only(&ui.context_menu)?;
                             }
                             _ => {}
                         }
+                        continue;
+                    }
+
+                    // Other overlays are keyboard-driven. A mouse event
+                    // dismisses them as one state transition instead of
+                    // leaving hidden modal state active behind the scene.
+                    if ui.mode != UiMode::Normal {
+                        ui.close_mode();
+                        wm.prefix_mode = false;
+                        wm.force_full_redraw();
+                        renderer.render(wm)?;
                         continue;
                     }
 
@@ -1810,7 +1803,7 @@ fn run_wm_main_loop(
                             }
                             _ => {}
                         }
-                        renderer.render_with_selector(wm, selector.as_ref())?;
+                        renderer.render(wm)?;
                         continue;
                     }
                     
@@ -1862,11 +1855,11 @@ fn run_wm_main_loop(
                             if focus_changed {
                                 reset_cursor_shape();
                             }
-                            renderer.render_with_selector(wm, selector.as_ref())?;
+                            renderer.render(wm)?;
                         }
                         MouseEventKind::Drag(MouseButton::Left) => {
                             wm.handle_mouse_drag(mouse_event.column, mouse_event.row);
-                            renderer.render_with_selector(wm, selector.as_ref())?;
+                            renderer.render(wm)?;
                         }
                         MouseEventKind::Up(MouseButton::Left) => {
                             if let Some(text) = wm.handle_mouse_up() {
@@ -1878,22 +1871,23 @@ fn run_wm_main_loop(
                                     }
                                 }
                             }
-                            renderer.render_with_selector(wm, selector.as_ref())?;
+                            renderer.render(wm)?;
                         }
                         MouseEventKind::Down(MouseButton::Right) => {
                             // Show context menu
                             if let Some((pane_id, x, y)) = wm.handle_right_click(mouse_event.column, mouse_event.row) {
-                                context_menu.show(pane_id, x, y, wm.width, wm.height);
-                                renderer.render_with_context_menu(wm, &context_menu)?;
+                                ui.context_menu.show(pane_id, x, y, wm.width, wm.height);
+                                ui.mode = UiMode::ContextMenu;
+                                ui.render(renderer, wm, &theme_list)?;
                             }
                         }
                         MouseEventKind::ScrollUp => {
                             wm.handle_scroll(3);
-                            renderer.render_with_selector(wm, selector.as_ref())?;
+                            renderer.render(wm)?;
                         }
                         MouseEventKind::ScrollDown => {
                             wm.handle_scroll(-3);
-                            renderer.render_with_selector(wm, selector.as_ref())?;
+                            renderer.render(wm)?;
                         }
                         _ => {}
                     }
@@ -1906,18 +1900,7 @@ fn run_wm_main_loop(
                 }
 
                 Event::Paste(text) => {
-                    if selector_is_visible(&selector) {
-                        if let Some(selector) = selector.as_mut() {
-                            selector.hide();
-                        }
-                    }
-                    context_menu.hide();
-                    copy_mode.exit();
-                    rename_mode = false;
-                    rename_buffer.clear();
-                    theme_selector_visible = false;
-                    window_selector.close();
-                    pane_numbers_visible = false;
+                    ui.close_mode();
                     wm.prefix_mode = false;
                     wm.scroll_to_bottom();
                     let _ = wm.paste(&text);

@@ -22,61 +22,32 @@
 //!
 //! - Generation-based dirty tracking to minimize redraws
 //! - Partial updates for cursor movement and selection
-//! - Separate overlay rendering for context menus (avoids full redraw)
+//! - One synchronized scene frame for base content and modal overlays
 
 use std::io::{self, Write};
 use crossterm::{
-    cursor::{MoveTo, Show},
-    execute,
+    cursor::{Hide, MoveTo, Show},
+    execute, queue,
     style::{
         Attribute, Color as CtColor, ResetColor, SetAttribute,
         SetBackgroundColor, SetForegroundColor,
     },
     terminal::{self, Clear, ClearType},
 };
-use unicode_width::UnicodeWidthChar;
-
-/// Display width for a character, with Nerd Font / Powerline PUA fix.
-/// Mirrors the same function in `core::term::state`.
-#[inline]
-fn char_width(ch: char) -> usize {
-    let cp = ch as u32;
-    if (0xE000..=0xF8FF).contains(&cp)
-        || (0xF0000..=0xFFFFF).contains(&cp)
-        || (0x100000..=0x10FFFF).contains(&cp)
-    {
-        return 1;
-    }
-    ch.width().unwrap_or(1)
-}
-
-#[inline]
-fn str_display_width(s: &str) -> usize {
-    s.chars().map(char_width).sum()
-}
-
-fn truncate_to_display_width(s: &str, max_width: usize) -> String {
-    let mut out = String::new();
-    let mut width = 0;
-    for ch in s.chars() {
-        let ch_width = char_width(ch);
-        if width + ch_width > max_width {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out
-}
 
 use crate::wm::{WindowManager, Pane, BorderStyle};
 use crate::core::term::{AttrFlags, CellAttrs, Color};
+use crate::core::term::width::{
+    char_width, str_display_width, truncate_tail_to_display_width,
+    truncate_to_display_width,
+};
 use crate::config::{ColorScheme, ParsedKeyBindings};
 use crate::copymode::CopyMode;
+use crate::history::HistorySelector;
 use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
 use super::cursor::CursorPresenter;
-use super::frame::{with_cursor_hidden, with_frame, with_hidden_cursor_frame};
+use super::frame::{with_cursor_hidden, with_frame};
 use super::window_selector::{TreeEntry, WindowSelector};
 
 /// Border characters
@@ -165,6 +136,23 @@ pub struct WmRenderer {
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
     /// with wrong cell widths.
     pub suppress_bold: bool,
+}
+
+/// Optional UI layer rendered over the window-manager scene.
+///
+/// A single overlay value keeps rendering priority explicit and guarantees
+/// that the base scene and its overlay are emitted in one synchronized frame.
+pub enum WmOverlay<'a> {
+    History(&'a HistorySelector),
+    PaneNumbers,
+    CopyMode(&'a CopyMode),
+    Rename(&'a str),
+    ThemeSelector {
+        themes: &'a [&'a str],
+        selected: usize,
+    },
+    WindowSelector(&'a WindowSelector),
+    ContextMenu(&'a ContextMenu),
 }
 
 #[derive(Clone, PartialEq)]
@@ -262,61 +250,78 @@ impl WmRenderer {
 
     /// Render the window manager state
     pub fn render(&mut self, wm: &WindowManager) -> io::Result<()> {
-        self.render_with_selector(wm, None)
+        self.render_scene(wm, None)
     }
 
     fn invalidate_cursor_cache(&mut self) {
         self.cursor.invalidate();
     }
 
-    /// Render with optional snippet selector
-    pub fn render_with_selector(&mut self, wm: &WindowManager, selector: Option<&crate::history::HistorySelector>) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = io::BufWriter::with_capacity(65536, stdout.lock());
-        let snippet_visible = selector.map(|s| s.visible).unwrap_or(false);
-
-        let result = with_frame(&mut out, |out| {
-            self.render_tab_bar(out, wm)?;
-            self.render_panes(out, wm)?;
-            self.render_status_bar(out, wm)?;
-
-            if let Some(sel) = selector {
-                if sel.visible {
-                    self.render_selector(out, wm, sel)?;
-                }
-            }
-
-            // Show cursor at focused pane's cursor position (unless snippet selector is visible)
-            if !snippet_visible {
-                self.cursor.show_focused_pane_cursor(out, wm)?;
-            }
-            Ok(())
-        });
-
-        if snippet_visible {
-            self.invalidate_cursor_cache();
-        }
-
-        result
-    }
-
-    /// Render with pane numbers overlay
-    pub fn render_with_pane_numbers(&mut self, wm: &WindowManager) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-
+    /// Render the base window-manager scene and one optional UI overlay.
+    pub fn render_scene(
+        &mut self,
+        wm: &WindowManager,
+        overlay: Option<WmOverlay<'_>>,
+    ) -> io::Result<()> {
         if !self.initialized {
             self.init()?;
         }
 
-        let result = with_hidden_cursor_frame(&mut out, |out| {
-            self.render_tab_bar(out, wm)?;
-            self.render_panes(out, wm)?;
-            self.render_status_bar(out, wm)?;
-            self.render_pane_numbers(out, wm)?;
+        let stdout = io::stdout();
+        let mut out = io::BufWriter::with_capacity(65536, stdout.lock());
+
+        let result = with_frame(&mut out, |out| {
+            // Keep the real cursor hidden while repainting; otherwise hosts
+            // that render mid-frame show it hopping through whichever pane is
+            // being redrawn. It is re-shown at its final position below, in
+            // the same buffered write.
+            queue!(out, Hide)?;
+            self.cursor.note_hidden();
+
+            if let Some(WmOverlay::CopyMode(copy_mode)) = overlay.as_ref() {
+                self.render_pane_with_copy_mode(out, wm, copy_mode)?;
+                self.render_copy_mode_status(out, wm, copy_mode)?;
+                self.position_copy_mode_cursor(out, wm, copy_mode)?;
+            } else {
+                self.render_tab_bar(out, wm)?;
+                self.render_panes(out, wm)?;
+                self.render_status_bar(out, wm)?;
+
+                match overlay.as_ref() {
+                    Some(WmOverlay::History(selector)) => {
+                        self.render_selector(out, wm, selector)?;
+                    }
+                    Some(WmOverlay::PaneNumbers) => {
+                        self.render_pane_numbers(out, wm)?;
+                    }
+                    Some(WmOverlay::Rename(buffer)) => {
+                        self.render_rename_popup(out, wm, buffer)?;
+                    }
+                    Some(WmOverlay::ThemeSelector { themes, selected }) => {
+                        self.render_theme_selector(out, wm, themes, *selected)?;
+                    }
+                    Some(WmOverlay::WindowSelector(selector)) => {
+                        self.render_window_selector(out, wm, selector)?;
+                    }
+                    Some(WmOverlay::ContextMenu(menu)) => {
+                        self.render_context_menu(out, menu)?;
+                    }
+                    Some(WmOverlay::CopyMode(_)) | None => {}
+                }
+            }
+
+            match overlay.as_ref() {
+                None => self.cursor.show_focused_pane_cursor(out, wm)?,
+                Some(WmOverlay::History(_)) => {}
+                Some(_) => queue!(out, Show)?,
+            }
             Ok(())
         });
-        self.invalidate_cursor_cache();
+
+        if overlay.is_some() {
+            self.invalidate_cursor_cache();
+        }
+
         result
     }
 
@@ -344,35 +349,6 @@ impl WmRenderer {
         Ok(())
     }
 
-    /// Render with copy mode overlay
-    pub fn render_with_copy_mode(&mut self, wm: &WindowManager, copy_mode: &CopyMode) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-
-        if !self.initialized {
-            self.init()?;
-        }
-
-        let result = with_hidden_cursor_frame(&mut out, |out| {
-            self.render_pane_with_copy_mode(out, wm, copy_mode)?;
-            self.render_copy_mode_status(out, wm, copy_mode)?;
-
-            // Position cursor at copy mode location
-            if let Some(tab) = wm.active_tab() {
-                if let Some(pane) = tab.focused_pane() {
-                    if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
-                        let (inner_x, inner_y) = pane.inner_pos();
-                        let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
-                        execute!(out, MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row))?;
-                    }
-                }
-            }
-            Ok(())
-        });
-        self.invalidate_cursor_cache();
-        result
-    }
-
     /// Fast update for copy mode - only update cursor and status
     pub fn render_copy_mode_cursor_only(&mut self, wm: &WindowManager, copy_mode: &CopyMode) -> io::Result<()> {
         let stdout = io::stdout();
@@ -380,21 +356,37 @@ impl WmRenderer {
 
         let result = with_cursor_hidden(&mut out, |out| {
             self.render_copy_mode_status(out, wm, copy_mode)?;
-
-            // Position cursor at copy mode location
-            if let Some(tab) = wm.active_tab() {
-                if let Some(pane) = tab.focused_pane() {
-                    if let Some(visible_row) = copy_mode.absolute_to_visible(copy_mode.cursor_row, wm) {
-                        let (inner_x, inner_y) = pane.inner_pos();
-                        let cursor_x = inner_x + copy_mode.cursor_col.min(pane.session.state.cols.saturating_sub(1));
-                        execute!(out, MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row))?;
-                    }
-                }
-            }
+            self.position_copy_mode_cursor(out, wm, copy_mode)?;
             Ok(())
         });
         self.invalidate_cursor_cache();
         result
+    }
+
+    fn position_copy_mode_cursor<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        copy_mode: &CopyMode,
+    ) -> io::Result<()> {
+        if let Some(tab) = wm.active_tab() {
+            if let Some(pane) = tab.focused_pane() {
+                if let Some(visible_row) =
+                    copy_mode.absolute_to_visible(copy_mode.cursor_row, wm)
+                {
+                    let (inner_x, inner_y) = pane.inner_pos();
+                    let cursor_x = inner_x
+                        + copy_mode
+                            .cursor_col
+                            .min(pane.session.state.cols.saturating_sub(1));
+                    execute!(
+                        stdout,
+                        MoveTo(cursor_x, wm.tab_bar_height + inner_y + visible_row)
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Render pane content in copy mode with selection/search highlighting
@@ -490,30 +482,13 @@ impl WmRenderer {
         Ok(())
     }
 
-    /// Render with rename input overlay
-    pub fn render_with_rename(&mut self, wm: &WindowManager, rename_buffer: &str) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-
-        if !self.initialized {
-            self.init()?;
-        }
-
-        let result = with_hidden_cursor_frame(&mut out, |out| {
-            self.render_tab_bar(out, wm)?;
-            self.render_panes(out, wm)?;
-            self.render_status_bar(out, wm)?;
-            self.render_rename_popup(out, wm, rename_buffer)?;
-            Ok(())
-        });
-        self.invalidate_cursor_cache();
-        result
-    }
-
     /// Render rename popup in center of screen
     fn render_rename_popup<W: Write>(&self, stdout: &mut W, wm: &WindowManager, rename_buffer: &str) -> io::Result<()> {
         let box_width = 40.min(wm.width.saturating_sub(4)) as usize;
         let box_height = 5;
+        if box_width < 8 || wm.height < box_height as u16 {
+            return Ok(());
+        }
         let start_x = ((wm.width as usize).saturating_sub(box_width)) / 2;
         let start_y = ((wm.height as usize).saturating_sub(box_height)) / 2;
 
@@ -538,12 +513,18 @@ impl WmRenderer {
 
         // Input line
         execute!(stdout, MoveTo(start_x as u16, (start_y + 2) as u16))?;
-        let input_display = if rename_buffer.len() > box_width - 6 {
-            &rename_buffer[rename_buffer.len() - (box_width - 6)..]
-        } else {
-            rename_buffer
-        };
-        write!(stdout, "│ {:<width$} │", format!("{}█", input_display), width = box_width - 4)?;
+        let input_display =
+            truncate_tail_to_display_width(rename_buffer, box_width.saturating_sub(5));
+        let padding = box_width
+            .saturating_sub(5)
+            .saturating_sub(str_display_width(&input_display));
+        write!(
+            stdout,
+            "│ {}█{:padding$} │",
+            input_display,
+            "",
+            padding = padding
+        )?;
 
         // Empty line
         execute!(stdout, MoveTo(start_x as u16, (start_y + 3) as u16))?;
@@ -565,26 +546,6 @@ impl WmRenderer {
 
         execute!(stdout, ResetColor)?;
         Ok(())
-    }
-
-    /// Render with theme selector overlay
-    pub fn render_with_theme_selector(&mut self, wm: &WindowManager, themes: &[&str], selected: usize) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-
-        if !self.initialized {
-            self.init()?;
-        }
-
-        let result = with_hidden_cursor_frame(&mut out, |out| {
-            self.render_tab_bar(out, wm)?;
-            self.render_panes(out, wm)?;
-            self.render_status_bar(out, wm)?;
-            self.render_theme_selector(out, wm, themes, selected)?;
-            Ok(())
-        });
-        self.invalidate_cursor_cache();
-        result
     }
 
     /// Render theme selector overlay
@@ -680,30 +641,6 @@ impl WmRenderer {
         execute!(stdout, ResetColor)?;
 
         Ok(())
-    }
-
-    /// Render with the tmux-style window selector overlay.
-    pub fn render_with_window_selector(
-        &mut self,
-        wm: &WindowManager,
-        selector: &WindowSelector,
-    ) -> io::Result<()> {
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-
-        if !self.initialized {
-            self.init()?;
-        }
-
-        let result = with_hidden_cursor_frame(&mut out, |out| {
-            self.render_tab_bar(out, wm)?;
-            self.render_panes(out, wm)?;
-            self.render_status_bar(out, wm)?;
-            self.render_window_selector(out, wm, selector)?;
-            Ok(())
-        });
-        self.invalidate_cursor_cache();
-        result
     }
 
     /// Compute the window selector overlay geometry, or None when the
@@ -1312,16 +1249,23 @@ impl WmRenderer {
         if tab.is_zoomed() {
             if let Some(zoomed_id) = tab.zoomed_pane_id() {
                 if let Some(pane) = tab.panes.get(&zoomed_id) {
-                    self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
+                    if needs_full_redraw || !pane.session.is_settling() {
+                        self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
+                    }
                 }
             }
         } else {
             for pane in tab.panes.values() {
                 let screen = pane.session.state.active_screen();
-                // Skip panes with no new content unless forced by layout change
+                // Skip panes with no new content unless forced by layout
+                // change. Panes settling after a resize are also skipped:
+                // ConPTY is replaying the whole buffer into them and painting
+                // the intermediate states would show old content scrolling
+                // past; their accumulated dirty lines are painted in one
+                // frame once the replay finishes.
                 let pane_needs_render = needs_full_redraw
-                    || screen.full_redraw
-                    || screen.has_dirty_lines();
+                    || ((screen.full_redraw || screen.has_dirty_lines())
+                        && !pane.session.is_settling());
 
                 if pane_needs_render {
                     self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
@@ -1620,23 +1564,6 @@ impl WmRenderer {
         self.apply_attrs_with_selection(stdout, attrs, false)
     }
 
-    /// Render with context menu overlay
-    pub fn render_with_context_menu(&mut self, wm: &mut WindowManager, menu: &ContextMenu) -> io::Result<()> {
-        // First render normally
-        self.render(wm)?;
-        
-        // Then overlay the menu if visible
-        if menu.visible {
-            let mut stdout = io::stdout().lock();
-            with_cursor_hidden(&mut stdout, |out| {
-                self.render_context_menu(out, menu)
-            })?;
-            self.invalidate_cursor_cache();
-        }
-        
-        Ok(())
-    }
-
     /// Render only the context menu (for hover updates without full redraw)
     pub fn render_context_menu_only(&mut self, menu: &ContextMenu) -> io::Result<()> {
         if menu.visible {
@@ -1742,6 +1669,24 @@ mod tests {
         assert_eq!(truncate_to_display_width("abc日本語", 5), "abc日");
         assert_eq!(truncate_to_display_width("日本語abc", 4), "日本");
         assert_eq!(truncate_to_display_width("abc", 2), "ab");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rename_popup_truncates_cjk_at_character_boundaries() {
+        use crate::config::PrefixKey;
+        use crate::wm::WindowManager;
+
+        let wm = WindowManager::new(24, 10, None, None, PrefixKey { char: 'b' }, true);
+        let renderer = WmRenderer::new();
+        let mut out = Vec::new();
+
+        renderer
+            .render_rename_popup(&mut out, &wm, "とても長いウィンドウ名")
+            .expect("render rename popup");
+
+        let output = String::from_utf8(out).expect("valid UTF-8 output");
+        assert!(output.contains("いウィンドウ名█"));
     }
 
     #[cfg(windows)]

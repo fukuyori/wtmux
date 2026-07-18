@@ -1,3 +1,32 @@
+## [1.8.1] - 2026-07-18
+
+### Fixed
+
+- **Old buffer content scrolled past when a pane was resized**:
+  ConPTY replays the pane's entire text buffer after every resize
+  (split, close, zoom, window resize), and each arriving chunk used to be
+  rendered immediately, so the history visibly streamed from the top.
+  The replay is now parsed off-screen and rendering resumes with a single
+  frame of the final state once the stream has been quiet for 60 ms
+  (hard cap 400 ms so continuously-printing shells are never frozen).
+- **Cursor flickered while other panes were producing output**:
+  render frames are now buffered and flushed in a single write, and the
+  cursor is hidden during repaint and re-shown at its final position within
+  the same frame. Previously each drawing command was flushed separately,
+  letting the host terminal show the cursor hopping through whichever pane
+  was being redrawn.
+- **CJK window names could be split or exceed the rename popup limit**:
+  window-name input and truncation now use terminal-cell width, so wide
+  characters are kept intact and the 30-cell limit is applied consistently.
+
+### Changed
+
+- **Unified overlay state and rendering**:
+  mutually exclusive UI modes now share one application-state model, and
+  context menus, rename prompts, pane numbers, command history, and the
+  window selector are composed through one renderer entry point. This keeps
+  modal transitions and one-frame redraws consistent.
+
 ## [1.8.0] - 2026-07-17
 
 ### Added

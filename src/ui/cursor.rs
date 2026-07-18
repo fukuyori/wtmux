@@ -19,6 +19,12 @@ impl CursorPresenter {
         self.last_shape = None;
     }
 
+    /// Record that the cursor was just hidden by the caller (e.g. at the start
+    /// of a render frame), so the next show request actually re-sends Show.
+    pub(crate) fn note_hidden(&mut self) {
+        self.last_visible = Some(false);
+    }
+
     pub(crate) fn show_focused_pane_cursor<W: Write>(
         &mut self,
         out: &mut W,

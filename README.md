@@ -4,13 +4,15 @@ A tmux-like terminal multiplexer for Windows, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.7.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.8.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.7.2 Highlights
+## 1.8.1 Highlights
 
-- Fixed pane borders inheriting background colors or reverse/highlight attributes from full-screen TUI applications such as Vim after mode changes.
+- Pane resize, split, close, zoom, and host-window resize now show the final ConPTY buffer state in one frame instead of visibly replaying old content.
+- Full render frames are written atomically, preventing the host cursor from flickering or hopping between panes during repaint.
+- Overlay state and rendering are now unified, and CJK window names are truncated by terminal-cell width without splitting wide characters.
 
 ## Features
 

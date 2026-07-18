@@ -3,9 +3,9 @@
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
 use super::resize::{host_resize_screen, reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
+use super::width::char_width;
 use bitflags::bitflags;
 use std::collections::VecDeque;
-use unicode_width::UnicodeWidthChar;
 
 /// Terminal state holding all screen data
 pub struct TerminalState {
@@ -44,29 +44,6 @@ pub struct Selection {
     pub end: (u16, usize),
     /// Whether selection is active (mouse button held)
     pub active: bool,
-}
-
-/// Determine the display width of a character for terminal cell layout.
-///
-/// `unicode_width` returns `None` (→ 0) for Private Use Area characters
-/// (U+E000–U+F8FF, U+F0000–U+FFFFF) which include all Nerd Font glyphs
-/// and Powerline symbols.  Windows Terminal treats these as width 1, so
-/// we do the same to keep cell accounting in sync with the host terminal.
-///
-/// Soft Nerd Font "wide" glyphs (some icon sets) are rendered as width 2
-/// by certain terminals, but Windows Terminal defaults to width 1 for all
-/// PUA characters unless the profile has `"experimental.rendering.forceFullRepaint"`
-/// or similar flags set.  Width-1 is therefore the safest default.
-fn char_display_width(ch: char) -> u16 {
-    let cp = ch as u32;
-    // Private Use Area — always treat as width 1
-    if (0xE000..=0xF8FF).contains(&cp)
-        || (0xF0000..=0xFFFFF).contains(&cp)
-        || (0x100000..=0x10FFFF).contains(&cp)
-    {
-        return 1;
-    }
-    ch.width().unwrap_or(1) as u16
 }
 
 impl TerminalState {
@@ -202,7 +179,7 @@ impl TerminalState {
 
     /// Put a character at the current cursor position
     pub fn put_char(&mut self, ch: char) {
-        let width = char_display_width(ch);
+        let width = char_width(ch) as u16;
 
         if width == 0 {
             // Combining character - append to previous cell

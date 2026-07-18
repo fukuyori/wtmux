@@ -14,6 +14,7 @@
 
 pub mod keymapper;
 pub mod input;
+pub(crate) mod app_state;
 mod cursor;
 mod frame;
 pub(crate) mod row_stream;
@@ -23,7 +24,8 @@ pub mod window_selector;
 pub mod context_menu;
 
 pub use keymapper::*;
+pub(crate) use app_state::{UiMode, WmAppState};
 pub use renderer::*;
-pub use wm_renderer::WmRenderer;
+pub use wm_renderer::{WmOverlay, WmRenderer};
 pub use window_selector::{TreeEntry, WindowSelector};
 pub use context_menu::{ContextMenu, ContextMenuAction};

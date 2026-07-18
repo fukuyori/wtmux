@@ -485,6 +485,12 @@ impl WindowManager {
     pub fn clear_all_dirty(&mut self) {
         for tab in self.tabs.values_mut() {
             for pane in tab.panes.values_mut() {
+                // A settling pane was skipped by the renderer; keep its dirty
+                // lines so the deferred paint after the resize replay still
+                // covers everything that changed.
+                if pane.session.is_settling() {
+                    continue;
+                }
                 pane.session.state.active_screen_mut().clear_dirty();
             }
         }

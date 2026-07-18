@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 use super::pty::{ConPty, PtyError};
 use super::term::resize::DEFAULT_SESSION_RESIZE_POLICY;
@@ -24,6 +26,33 @@ pub enum SessionEvent {
     Error(String),
     /// Title changed
     TitleChanged(String),
+}
+
+/// After a resize the shell has been quiet for this long, the ConPTY
+/// buffer replay is considered finished and rendering resumes.
+#[cfg(windows)]
+const RESIZE_SETTLE_QUIET: Duration = Duration::from_millis(60);
+
+/// Hard cap on render suppression after a resize, so a shell that streams
+/// output continuously (e.g. `ping -t`) cannot keep the pane frozen.
+#[cfg(windows)]
+const RESIZE_SETTLE_MAX: Duration = Duration::from_millis(400);
+
+/// Tracks the ConPTY buffer replay that follows `ResizePseudoConsole`.
+///
+/// conhost re-emits the pane's entire text buffer after a resize. Rendering
+/// each arriving chunk makes the old content visibly scroll past from the
+/// top of the buffer. While this state is present, output is still parsed
+/// into the grid but renders are suppressed; once the replay goes quiet the
+/// final state is painted in one frame.
+#[cfg(windows)]
+struct ResizeSettle {
+    /// When the resize was issued (for the hard cap)
+    started: Instant,
+    /// When the last output chunk arrived (for quiescence detection)
+    last_output: Instant,
+    /// Whether any output arrived during the settle window
+    pending: bool,
 }
 
 /// A shell session
@@ -53,6 +82,9 @@ pub struct Session {
     /// Channel to receive PTY output
     #[cfg(windows)]
     output_rx: Option<Receiver<Vec<u8>>>,
+    /// In-progress ConPTY buffer replay after a resize (renders suppressed)
+    #[cfg(windows)]
+    resize_settle: Option<ResizeSettle>,
 }
 
 // ConPty needs to be Send + Sync for Arc
@@ -75,6 +107,8 @@ impl Session {
             reader_thread: None,
             #[cfg(windows)]
             output_rx: None,
+            #[cfg(windows)]
+            resize_settle: None,
         }
     }
 
@@ -204,6 +238,7 @@ impl Session {
         }
 
         if self.output_rx.is_none() {
+            self.resize_settle = None;
             return Ok(false);
         }
 
@@ -227,6 +262,27 @@ impl Session {
                     break;
                 }
             }
+        }
+
+        // While the post-resize buffer replay is in flight, keep parsing but
+        // hold back the "render needed" signal until the stream goes quiet
+        // (or the hard cap expires), then release one render with the final
+        // state. Dirty-line tracking accumulates across the window, so that
+        // single render repaints everything the replay touched.
+        if let Some(settle) = &mut self.resize_settle {
+            let now = Instant::now();
+            if processed {
+                settle.last_output = now;
+                settle.pending = true;
+            }
+            let quiet = now.duration_since(settle.last_output) >= RESIZE_SETTLE_QUIET;
+            let expired = now.duration_since(settle.started) >= RESIZE_SETTLE_MAX;
+            if quiet || expired {
+                let render = settle.pending;
+                self.resize_settle = None;
+                return Ok(render || processed);
+            }
+            return Ok(false);
         }
 
         Ok(processed)
@@ -377,7 +433,19 @@ impl Session {
         // Let ConPTY / the host terminal recalculate wrapping first, then
         // update our local state using the selected resize policy.
         if let Some(pty) = &self.pty {
+            let size_changed = cols != self.state.cols || rows != self.state.rows;
             pty.resize_pty(cols, rows)?;
+            // conhost replays the whole buffer after a real size change;
+            // suppress renders until it settles so only the final state is
+            // painted. Same-size calls (layout recomputes) don't replay.
+            if size_changed {
+                let now = Instant::now();
+                self.resize_settle = Some(ResizeSettle {
+                    started: now,
+                    last_output: now,
+                    pending: false,
+                });
+            }
         }
 
         self.state
@@ -391,6 +459,18 @@ impl Session {
         self.state
             .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
         Ok(())
+    }
+
+    /// Whether the post-resize ConPTY buffer replay is still in flight.
+    /// The renderer skips incremental paints of this session while true.
+    #[cfg(windows)]
+    pub fn is_settling(&self) -> bool {
+        self.resize_settle.is_some()
+    }
+
+    #[cfg(not(windows))]
+    pub fn is_settling(&self) -> bool {
+        false
     }
 
     /// Get the terminal title
@@ -518,6 +598,66 @@ mod tests {
             .iter()
             .map(|c| c.grapheme.as_str())
             .collect()
+    }
+
+    /// While a resize-settle window is open, arriving output is parsed but
+    /// process_output must not signal a render; once the stream has been
+    /// quiet past the threshold, the deferred render is released exactly once.
+    #[cfg(windows)]
+    #[test]
+    fn resize_settle_suppresses_renders_until_replay_goes_quiet() {
+        let mut session = Session::new(1, 80, 24);
+        let (tx, rx) = mpsc::channel();
+        session.output_rx = Some(rx);
+
+        let now = Instant::now();
+        session.resize_settle = Some(ResizeSettle {
+            started: now,
+            last_output: now,
+            pending: false,
+        });
+
+        tx.send(b"replayed buffer chunk".to_vec()).unwrap();
+        assert!(
+            !session.process_output().unwrap(),
+            "render must be suppressed while the replay is in flight"
+        );
+        assert!(session.is_settling());
+        assert_eq!(
+            screen_text(&session, 0).trim_end(),
+            "replayed buffer chunk",
+            "output must still be parsed into the grid during the settle window"
+        );
+
+        // Pretend the stream has been quiet past the threshold.
+        if let Some(settle) = &mut session.resize_settle {
+            settle.last_output = now - RESIZE_SETTLE_QUIET;
+        }
+        assert!(
+            session.process_output().unwrap(),
+            "the deferred render must be released once the replay goes quiet"
+        );
+        assert!(!session.is_settling());
+    }
+
+    /// A settle window with no replay output at all must close quietly
+    /// without forcing a render.
+    #[cfg(windows)]
+    #[test]
+    fn resize_settle_with_no_output_closes_without_render() {
+        let mut session = Session::new(1, 80, 24);
+        let (_tx, rx) = mpsc::channel();
+        session.output_rx = Some(rx);
+
+        let past = Instant::now() - Duration::from_millis(100);
+        session.resize_settle = Some(ResizeSettle {
+            started: past,
+            last_output: past,
+            pending: false,
+        });
+
+        assert!(!session.process_output().unwrap());
+        assert!(!session.is_settling());
     }
 
     #[test]

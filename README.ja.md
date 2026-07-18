@@ -4,13 +4,15 @@ Windows用のtmuxライクなターミナルマルチプレクサ（Rust製）
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.7.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-1.8.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 1.7.2 の主な変更
+## 1.8.1 の主な変更
 
-- Vim などの全画面 TUI アプリでモード変更した後、ペイン枠が背景色や反転/ハイライト属性を引き継いで不自然に強調表示される問題を修正しました。
+- ペインのリサイズ、分割、クローズ、ズーム、ホストウィンドウのサイズ変更時に、ConPTY の古い内容が順に流れて見える問題を修正し、最終状態を1フレームで表示するようにしました。
+- 描画フレーム全体をまとめて出力し、再描画中にホスト側のカーソルが点滅したりペイン間を移動して見えたりする問題を修正しました。
+- オーバーレイの状態管理と描画経路を統合し、日本語などの全角文字を含むウィンドウ名を文字の途中で分断せず、端末上の表示幅に合わせて省略するようにしました。
 
 ## 特徴
 
