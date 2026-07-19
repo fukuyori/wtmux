@@ -4,14 +4,15 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.0.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.0.1 Highlights
+## 2.0.2 Highlights
 
-- **herdr-style agent states**: every pane is classified as WORKING / BLOCKED / DONE / IDLE. Bells and permission prompts (`[y/n]`, "Do you want …") mark a pane BLOCKED; a plain shell prompt counts as IDLE, so ordinary shells no longer raise false alerts.
-- **Agent dashboard**: `Prefix + g` opens a live overlay listing every pane with its state — `Enter` jumps to the selected pane. The status bar shows a summary like `2W 1B 1D`.
+- **Signed & notarized macOS installer**: wtmux for macOS now ships as a Developer ID signed, notarized `.pkg` that installs to `/usr/local/bin/wtmux` and passes Gatekeeper offline.
+- **Fix**: overlays such as the agent dashboard (`Prefix + g`) no longer disappear when the mouse moves — only a click (or their usual keys) dismisses them.
+- From 2.0.1: **herdr-style agent states** (WORKING / BLOCKED / DONE / IDLE, no more false alerts from plain shells) and the **agent dashboard** (`Prefix + g`, status-bar summary like `2W 1B 1D`).
 - From 2.0.0: **macOS / Linux support** (POSIX pty backend, `$SHELL`, `~/.config/wtmux/config.toml`), pane activity monitoring with `Prefix + a` jump, and input broadcast with `Prefix + e` (`[SYNC]`).
 
 ## Features

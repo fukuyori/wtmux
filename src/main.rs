@@ -1866,11 +1866,16 @@ fn run_wm_main_loop(
                         continue;
                     }
                     
-                    // Close snippet selector on mouse click outside
+                    // Close snippet selector on mouse click outside.
+                    // Moved / Drag / Scroll must not dismiss it.
                     if ui.mode == UiMode::HistorySelector {
-                        ui.close_mode();
-                        wm.force_full_redraw();
-                        renderer.render(wm)?;
+                        if matches!(mouse_event.kind, MouseEventKind::Down(_)) {
+                            ui.close_mode();
+                            wm.force_full_redraw();
+                            renderer.render(wm)?;
+                        } else {
+                            continue;
+                        }
                     }
                     
                     // Handle context menu interactions
@@ -1908,14 +1913,18 @@ fn run_wm_main_loop(
                         continue;
                     }
 
-                    // Other overlays are keyboard-driven. A mouse event
+                    // Other overlays are keyboard-driven. A mouse click
                     // dismisses them as one state transition instead of
                     // leaving hidden modal state active behind the scene.
+                    // Moved / Drag / Scroll events are ignored so that
+                    // merely moving the pointer does not close the overlay.
                     if ui.mode != UiMode::Normal {
-                        ui.close_mode();
-                        wm.prefix_mode = false;
-                        wm.force_full_redraw();
-                        renderer.render(wm)?;
+                        if matches!(mouse_event.kind, MouseEventKind::Down(_)) {
+                            ui.close_mode();
+                            wm.prefix_mode = false;
+                            wm.force_full_redraw();
+                            renderer.render(wm)?;
+                        }
                         continue;
                     }
 

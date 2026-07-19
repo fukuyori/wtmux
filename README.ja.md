@@ -4,14 +4,15 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.0.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.0.1 の主な変更
+## 2.0.2 の主な変更
 
-- **herdr 風エージェント状態**: 各ペインを WORKING / BLOCKED / DONE / IDLE の4状態で分類します。ベルや許可プロンプト（`[y/n]`、`Do you want …` 等）で BLOCKED になり、通常のシェルプロンプトは IDLE 扱いになるため、シェルだけのペインで誤通知が出なくなりました。
-- **エージェントダッシュボード**: `Prefix + g` で全ペインの状態一覧をライブ表示するオーバーレイを開き、`Enter` で選択ペインへジャンプできます。ステータスバーにも `2W 1B 1D` のような集計が表示されます。
+- **署名・公証済み macOS インストーラ**: macOS 版は Developer ID で署名し Apple の公証を取得した `.pkg` で配布するようになりました。`/usr/local/bin/wtmux` にインストールされ、オフラインでも Gatekeeper を通過します。
+- **修正**: エージェントダッシュボード（`Prefix + g`）などのオーバーレイが、マウスを動かしただけで閉じてしまう問題を修正しました。クリック（または通常のキー操作）でのみ閉じます。
+- 2.0.1 より: **herdr 風エージェント状態**（WORKING / BLOCKED / DONE / IDLE、シェルだけのペインでの誤通知解消）と **エージェントダッシュボード**（`Prefix + g`、ステータスバーの `2W 1B 1D` 集計）。
 - 2.0.0 より: **macOS / Linux 対応**（POSIX pty バックエンド、`$SHELL`、`~/.config/wtmux/config.toml`）、`Prefix + a` の要注意ペインジャンプ、`Prefix + e` の入力ブロードキャスト（`[SYNC]`）。
 
 ## 特徴

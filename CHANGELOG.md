@@ -1,3 +1,22 @@
+## [2.0.2] - 2026-07-20
+
+### Added
+
+- **macOS release scripts**: `scripts/build-macos.sh` builds the release
+  binary (arm64 / x86_64 / universal) and an unsigned `.pkg`;
+  `scripts/sign-and-notarize-macos.sh` signs it with Developer ID
+  (hardened runtime), builds a signed `.pkg`, submits it for notarization
+  and staples the ticket. wtmux is now distributed for macOS as a signed,
+  notarized `.pkg` installing to `/usr/local/bin/wtmux`.
+
+### Fixed
+
+- **Overlays no longer close on mouse movement**: the agent dashboard
+  (`Prefix + g`) and the snippet selector were dismissed by any mouse
+  event, so merely moving the pointer closed them. They now stay open on
+  mouse move / drag / scroll and are dismissed only by an actual click
+  (or their usual keys).
+
 ## [2.0.1] - 2026-07-20
 
 ### Added
