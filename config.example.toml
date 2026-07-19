@@ -139,3 +139,19 @@ ligatures = true
 #   3. If Powerline glyphs are still broken, set suppress_bold = true.
 #
 # suppress_bold = false
+
+# ============================================================================
+# Pane activity monitor (agent multiplexing support)
+# ============================================================================
+# Watches every pane for output and bells so background agents (e.g. AI
+# coding agents) that finish or wait for input get flagged:
+#   - tab bar:  "!" = a pane needs attention, "*" = a pane is producing output
+#   - pane border turns yellow on the flagged pane
+#   - Prefix + a jumps to the next flagged pane
+#   - Prefix + e toggles input broadcast to all panes in the window ([SYNC])
+[activity]
+enabled = true
+
+# How long a background pane must stay quiet after producing output before
+# it is flagged as needing attention (milliseconds)
+quiet_threshold_ms = 2000

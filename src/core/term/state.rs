@@ -33,6 +33,10 @@ pub struct TerminalState {
     pub shell_integration: ShellIntegration,
     /// Keystroke tracker (fallback when shell integration is inactive)
     pub keystroke_tracker: KeystrokeTracker,
+    /// A BEL (or OSC 9 notification) arrived since this flag was last
+    /// cleared. Consumed by the pane activity monitor to flag panes whose
+    /// program (e.g. an AI agent) is asking for attention.
+    pub bell: bool,
 }
 
 /// Text selection
@@ -67,6 +71,7 @@ impl TerminalState {
             selection: None,
             shell_integration: ShellIntegration::default(),
             keystroke_tracker: KeystrokeTracker::default(),
+            bell: false,
         }
     }
 

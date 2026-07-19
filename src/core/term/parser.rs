@@ -169,7 +169,11 @@ impl VtParser {
                     self.enter_escape();
                     return None;
                 }
-                0x07 => return None, // BEL - ignore
+                0x07 => {
+                    // BEL: flag it for the pane activity monitor
+                    state.bell = true;
+                    return None;
+                }
                 0x08 => {
                     state.backspace();
                     return None;
@@ -852,6 +856,10 @@ impl VtParser {
                 "9" => {
                     if let Some(path) = osc9_9_to_path(text) {
                         state.current_path = path;
+                    } else {
+                        // Plain OSC 9 (iTerm2 / ConEmu style notification):
+                        // treat like a bell so the activity monitor flags it.
+                        state.bell = true;
                     }
                 }
                 // ── Shell Integration ─────────────────────────────────────

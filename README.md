@@ -1,18 +1,18 @@
 # wtmux
 
-A tmux-like terminal multiplexer for Windows, written in Rust.
+A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)](https://www.microsoft.com/windows)
-[![Version](https://img.shields.io/badge/version-1.8.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
+[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 1.8.1 Highlights
+## 2.0.0 Highlights
 
-- Pane resize, split, close, zoom, and host-window resize now show the final ConPTY buffer state in one frame instead of visibly replaying old content.
-- Full render frames are written atomically, preventing the host cursor from flickering or hopping between panes during repaint.
-- Overlay state and rendering are now unified, and CJK window names are truncated by terminal-cell width without splitting wide characters.
+- **macOS / Linux support**: a new POSIX pty backend brings the full feature set to macOS and Linux. The default shell is `$SHELL`, configuration lives in `~/.config/wtmux/config.toml`, and the system clipboard is used natively.
+- **Pane activity monitor**: background panes whose program stops producing output (or rings a bell / sends an OSC 9 notification) are flagged with `!` in the tab bar and a highlighted border — ideal for running multiple AI coding agents side by side. `Prefix + a` jumps to the next flagged pane.
+- **Input broadcast**: `Prefix + e` toggles sending input to every pane in the window (tmux `synchronize-panes`), shown as `[SYNC]` in the status bar.
 
 ## Features
 

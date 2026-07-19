@@ -67,6 +67,8 @@ pub struct Config {
     pub pane: PaneConfig,
     /// Font settings
     pub font: FontConfig,
+    /// Pane activity monitor settings (agent multiplexing support)
+    pub activity: ActivityConfig,
 }
 
 impl Default for Config {
@@ -82,6 +84,31 @@ impl Default for Config {
             status_bar: StatusBarConfig::default(),
             pane: PaneConfig::default(),
             font: FontConfig::default(),
+            activity: ActivityConfig::default(),
+        }
+    }
+}
+
+/// Pane activity monitor configuration.
+///
+/// Watches every pane for output and bells so that background agents
+/// (e.g. AI coding agents) that finish or wait for input get flagged in the
+/// tab bar and pane border.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActivityConfig {
+    /// Enable the activity monitor
+    pub enabled: bool,
+    /// How long a background pane must stay quiet after producing output
+    /// before it is flagged as needing attention (milliseconds)
+    pub quiet_threshold_ms: u64,
+}
+
+impl Default for ActivityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quiet_threshold_ms: 2000,
         }
     }
 }
@@ -522,21 +549,32 @@ mod tests {
 }
 
 /// Get wtmux data directory
-/// 
+///
 /// On Windows: `%LOCALAPPDATA%\wtmux` (e.g., `C:\Users\username\AppData\Local\wtmux`)
+/// On macOS / Linux: `$XDG_CONFIG_HOME/wtmux` or `~/.config/wtmux`
 /// Fallback: `~/.wtmux`
 pub fn get_data_dir() -> Option<PathBuf> {
-    // Try LOCALAPPDATA first (Windows standard)
+    #[cfg(windows)]
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
         let path = PathBuf::from(local_app_data).join("wtmux");
         return Some(path);
     }
-    
+
+    #[cfg(not(windows))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(xdg).join("wtmux"));
+        }
+        if let Some(home) = home_dir() {
+            return Some(home.join(".config").join("wtmux"));
+        }
+    }
+
     // Fallback to home directory
     if let Some(home) = home_dir() {
         return Some(home.join(".wtmux"));
     }
-    
+
     None
 }
 

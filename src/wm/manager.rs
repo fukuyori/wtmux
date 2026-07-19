@@ -113,6 +113,10 @@ pub struct WindowManager {
     mouse_selection_moved: bool,
     /// Active split boundary resize drag, if any.
     mouse_resize_drag: Option<SplitResizeTarget>,
+    /// Pane activity monitor (busy / attention tracking) enabled
+    pub activity_monitor: bool,
+    /// Quiet period after background output before a pane is flagged
+    pub quiet_threshold: std::time::Duration,
 }
 
 impl WindowManager {
@@ -153,6 +157,8 @@ impl WindowManager {
             prefix_key,
             mouse_selection_moved: false,
             mouse_resize_drag: None,
+            activity_monitor: true,
+            quiet_threshold: std::time::Duration::from_millis(2000),
         }
     }
 
@@ -439,8 +445,12 @@ impl WindowManager {
         let tabs_to_check: Vec<TabId> = self.tabs.keys().cloned().collect();
         
         for tab_id in tabs_to_check.iter() {
+            let is_active = *tab_id == self.active_tab;
             if let Some(tab) = self.tabs.get_mut(tab_id) {
-                if tab.process_output() {
+                if tab.process_output(is_active) {
+                    changed = true;
+                }
+                if self.activity_monitor && tab.update_activity(is_active, self.quiet_threshold) {
                     changed = true;
                 }
                 // Clean up dead panes
@@ -509,12 +519,34 @@ impl WindowManager {
     }
 
     /// Get tab info for rendering tab bar
-    pub fn tab_info(&self) -> Vec<(TabId, String, bool)> {
+    /// Tab bar entries: (id, display name, is_active, needs_attention).
+    ///
+    /// The display name carries the activity marker (`!` = a pane needs
+    /// attention, `*` = a pane is producing output) so that width-based hit
+    /// testing (`tab_at_position`) stays consistent with rendering.
+    pub fn tab_info(&self) -> Vec<(TabId, String, bool, bool)> {
         self.tab_order.iter().filter_map(|&id| {
             // Skip ids that are missing from the map rather than panicking if
             // tab_order and tabs ever get out of sync
             let tab = self.tabs.get(&id)?;
-            Some((id, tab.name.clone(), id == self.active_tab))
+            let attention = tab
+                .panes
+                .values()
+                .any(|pane| pane.activity.attention().is_some());
+            let busy = tab.panes.values().any(|pane| pane.activity.is_busy());
+            let marker = if attention {
+                "!"
+            } else if busy && id != self.active_tab {
+                "*"
+            } else {
+                ""
+            };
+            Some((
+                id,
+                format!("{}{}", tab.name, marker),
+                id == self.active_tab,
+                attention,
+            ))
         }).collect()
     }
 
@@ -629,14 +661,16 @@ impl WindowManager {
             let pane_count = tab.panes.len();
             let focused_id = tab.focused_pane;
             let zoom_indicator = if tab.is_zoomed() { " [Z]" } else { "" };
+            let sync_indicator = if tab.broadcast { " [SYNC]" } else { "" };
             format!(
-                "[{}] {}:{} | Pane {}/{}{}",
+                "[{}] {}:{} | Pane {}/{}{}{}",
                 self.active_tab,
                 tab.name,
                 focused_id,
                 focused_id,
                 pane_count,
-                zoom_indicator
+                zoom_indicator,
+                sync_indicator
             )
         } else {
             "No active tab".to_string()
@@ -649,7 +683,7 @@ impl WindowManager {
         let tabs = self.tab_info();
         let mut x: u16 = 0;
         
-        for (i, (id, name, _active)) in tabs.iter().enumerate() {
+        for (i, (id, name, _active, _attention)) in tabs.iter().enumerate() {
             // Tab format: " name " with separator "│"
             let tab_width = name.chars().count() as u16 + 2; // " name "
             
@@ -671,7 +705,7 @@ impl WindowManager {
         let tabs = self.tab_info();
         let mut x: u16 = 0;
 
-        for (i, (_id, name, _active)) in tabs.iter().enumerate() {
+        for (i, (_id, name, _active, _attention)) in tabs.iter().enumerate() {
             x = x.saturating_add(name.chars().count() as u16 + 2);
             if i + 1 < tabs.len() {
                 x = x.saturating_add(1);
@@ -907,36 +941,102 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Write to the focused pane
+    /// Write to the focused pane — or, with input broadcast enabled on the
+    /// active window, to every pane in it.
     pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
         if let Some(tab) = self.active_tab_mut() {
-            if let Some(pane) = tab.focused_pane_mut() {
+            if tab.broadcast {
+                // Dead panes are cleaned up elsewhere; don't let one failed
+                // write stop the broadcast to the remaining panes.
+                for pane in tab.panes.values_mut() {
+                    let _ = pane.session.write(data);
+                }
+            } else if let Some(pane) = tab.focused_pane_mut() {
                 pane.session.write(data).map_err(|e| e.to_string())?;
             }
         }
         Ok(())
     }
     
-    /// Paste text to the focused pane with bracketed paste support
+    /// Paste text to the focused pane with bracketed paste support.
+    /// With input broadcast enabled, pastes into every pane of the active
+    /// window, honoring each pane's own bracketed-paste mode.
     pub fn paste(&mut self, text: &str) -> Result<(), String> {
-        let use_bracketed = self.tabs.get(&self.active_tab)
-            .and_then(|tab| tab.focused_pane())
-            .map(|pane| pane.session.state.modes.bracketed_paste)
-            .unwrap_or(false);
-
         // Normalise all line endings to CR only.
         // Terminals interpret CR as Enter (one keypress).
         // CRLF would be two characters and some shells (PowerShell) treat
         // them as two separate newlines, causing double-submit.
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
 
-        let bytes = if use_bracketed {
-            format!("\x1b[200~{}\x1b[201~", normalized).into_bytes()
-        } else {
-            normalized.into_bytes()
+        let wrap = |bracketed: bool| {
+            if bracketed {
+                format!("\x1b[200~{}\x1b[201~", normalized).into_bytes()
+            } else {
+                normalized.clone().into_bytes()
+            }
         };
 
-        self.write(&bytes)
+        if let Some(tab) = self.active_tab_mut() {
+            if tab.broadcast {
+                for pane in tab.panes.values_mut() {
+                    let bytes = wrap(pane.session.state.modes.bracketed_paste);
+                    let _ = pane.session.write(&bytes);
+                }
+            } else if let Some(pane) = tab.focused_pane_mut() {
+                let bytes = wrap(pane.session.state.modes.bracketed_paste);
+                pane.session.write(&bytes).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Toggle input broadcast (synchronize-panes) on the active window.
+    /// Returns the new state.
+    pub fn toggle_broadcast(&mut self) -> bool {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.broadcast = !tab.broadcast;
+            tab.broadcast
+        } else {
+            false
+        }
+    }
+
+    /// Whether input broadcast is enabled on the active window.
+    pub fn broadcast_active(&self) -> bool {
+        self.active_tab().map(|tab| tab.broadcast).unwrap_or(false)
+    }
+
+    /// Focus the next pane (searching forward from the current focus, across
+    /// windows) that is flagged as needing attention. Returns true if focus
+    /// moved.
+    pub fn focus_next_attention(&mut self) -> bool {
+        // Flatten all panes into (window_index, pane_index) in display order
+        let mut flat: Vec<(usize, usize, bool)> = Vec::new();
+        let mut current = 0usize;
+        for (w, tab_id) in self.tab_order.iter().enumerate() {
+            let Some(tab) = self.tabs.get(tab_id) else {
+                continue;
+            };
+            for (p, pane_id) in tab.pane_order.iter().enumerate() {
+                let attention = tab
+                    .panes
+                    .get(pane_id)
+                    .is_some_and(|pane| pane.activity.attention().is_some());
+                if *tab_id == self.active_tab && *pane_id == tab.focused_pane {
+                    current = flat.len();
+                }
+                flat.push((w, p, attention));
+            }
+        }
+
+        // Search forward from the pane after the current one, wrapping around
+        for offset in 1..=flat.len() {
+            let (w, p, attention) = flat[(current + offset) % flat.len()];
+            if attention {
+                return self.focus_pane_at(w, p);
+            }
+        }
+        false
     }
 
     /// Paste from system clipboard to the focused pane
@@ -1320,5 +1420,63 @@ mod tests {
         wm.last_tab();
         assert_eq!(wm.active_tab_index(), 1);
         assert!(!wm.select_tab_at(99));
+    }
+
+    #[test]
+    fn toggle_broadcast_flips_per_window_and_shows_in_status() {
+        let mut wm = test_manager(80);
+
+        assert!(!wm.broadcast_active());
+        assert!(wm.toggle_broadcast());
+        assert!(wm.broadcast_active());
+        assert!(wm.status_info().contains("[SYNC]"));
+
+        // A new window starts with broadcast off; the first window keeps it
+        wm.new_tab();
+        assert!(!wm.broadcast_active());
+        assert!(!wm.status_info().contains("[SYNC]"));
+        wm.select_tab_at(0);
+        assert!(wm.broadcast_active());
+
+        assert!(!wm.toggle_broadcast());
+        assert!(!wm.broadcast_active());
+    }
+
+    #[test]
+    fn tab_info_marks_attention_windows() {
+        let mut wm = test_manager(80);
+        wm.new_tab(); // window 2 becomes active
+
+        // A bell arrives in the (now background) first window
+        let first_id = wm.tab_order[0];
+        let tab = wm.tabs.get_mut(&first_id).unwrap();
+        let focused = tab.focused_pane;
+        tab.panes.get_mut(&focused).unwrap().activity.note_bell(false);
+
+        let tabs = wm.tab_info();
+        assert_eq!(tabs[0].1, "1:main!");
+        assert!(tabs[0].3, "background window must be flagged");
+        assert!(!tabs[1].3);
+    }
+
+    #[test]
+    fn focus_next_attention_jumps_to_flagged_pane_across_windows() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+        wm.new_tab(); // three windows, third active
+
+        // Flag a pane in the first (background) window
+        let first_id = wm.tab_order[0];
+        let tab = wm.tabs.get_mut(&first_id).unwrap();
+        let focused = tab.focused_pane;
+        tab.panes.get_mut(&focused).unwrap().activity.note_bell(false);
+
+        assert!(wm.focus_next_attention());
+        assert_eq!(wm.active_tab_index(), 0);
+
+        // Focusing acknowledges the flag on the next activity tick
+        let tab = wm.tabs.get_mut(&first_id).unwrap();
+        assert!(tab.update_activity(true, std::time::Duration::from_secs(2)));
+        assert!(!wm.focus_next_attention(), "no flagged panes remain");
     }
 }

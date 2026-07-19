@@ -1,8 +1,9 @@
-//! wtmux — A tmux-like terminal multiplexer for Windows
+//! wtmux — A tmux-like terminal multiplexer for Windows, macOS and Linux
 //!
-//! wtmux provides tmux-style window/pane management using ConPTY on Windows.
-//! Features include multiple tabs, split panes, familiar keybindings, and
-//! accurate rendering of Nerd Font / Powerline prompts (oh-my-posh, Starship).
+//! wtmux provides tmux-style window/pane management using ConPTY on Windows
+//! and POSIX ptys on macOS / Linux. Features include multiple tabs, split
+//! panes, familiar keybindings, and accurate rendering of Nerd Font /
+//! Powerline prompts (oh-my-posh, Starship).
 //!
 //! # Features
 //!
@@ -63,7 +64,6 @@ use crate::ui::{
 use crate::wm::{WindowManager, SplitDirection};
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
 
-#[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum AppAction {
     Noop,
@@ -98,9 +98,10 @@ enum AppAction {
     SendPrefixToPane {
         byte: u8,
     },
+    ToggleBroadcast,
+    FocusNextAttention,
 }
 
-#[cfg(windows)]
 impl From<ContextMenuAction> for AppAction {
     fn from(action: ContextMenuAction) -> Self {
         match action {
@@ -166,7 +167,7 @@ fn print_help(wtmux_config: &WtmuxConfig) {
         .unwrap_or(PrefixKey { char: 'b' })
         .display_name();
 
-    eprintln!("wtmux {} - A tmux-like terminal multiplexer for Windows", VERSION);
+    eprintln!("wtmux {} - A tmux-like terminal multiplexer", VERSION);
     eprintln!();
     eprintln!("Usage: wtmux [OPTIONS]");
     eprintln!();
@@ -175,21 +176,29 @@ fn print_help(wtmux_config: &WtmuxConfig) {
     eprintln!("  -1, --simple          Simple single-pane mode");
     eprintln!();
     eprintln!("Shell options:");
-    eprintln!("  (default)             From config.toml or Command Prompt (cmd.exe)");
-    eprintln!("  -c, --cmd             Command Prompt (cmd.exe)");
-    eprintln!("  -p, --powershell      Windows PowerShell (powershell.exe)");
-    eprintln!("  -7, --pwsh            PowerShell 7 (pwsh.exe)");
-    eprintln!("  -w, --wsl             WSL (Windows Subsystem for Linux)");
+    if cfg!(windows) {
+        eprintln!("  (default)             From config.toml or Command Prompt (cmd.exe)");
+        eprintln!("  -c, --cmd             Command Prompt (cmd.exe)");
+        eprintln!("  -p, --powershell      Windows PowerShell (powershell.exe)");
+        eprintln!("  -7, --pwsh            PowerShell 7 (pwsh.exe)");
+        eprintln!("  -w, --wsl             WSL (Windows Subsystem for Linux)");
+    } else {
+        eprintln!("  (default)             From config.toml or $SHELL (/bin/sh fallback)");
+    }
     eprintln!("  -s, --shell <CMD>     Custom shell command");
     eprintln!();
-    eprintln!("Encoding options:");
-    eprintln!("  (default)             UTF-8 (CP65001)");
-    eprintln!("  --sjis                Shift-JIS mode (CP932)");
-    eprintln!();
+    if cfg!(windows) {
+        eprintln!("Encoding options:");
+        eprintln!("  (default)             UTF-8 (CP65001)");
+        eprintln!("  --sjis                Shift-JIS mode (CP932)");
+        eprintln!();
+    }
     eprintln!("Other options:");
-    eprintln!("  -n, --native          Run in native console window");
+    if cfg!(windows) {
+        eprintln!("  -n, --native          Run in native console window");
+    }
     eprintln!("  -d, --debug           Enable debug logging to file");
-    eprintln!("  --vt-trace            Trace raw PTY bytes to %LOCALAPPDATA%\\wtmux\\vt_trace.log");
+    eprintln!("  --vt-trace            Trace raw PTY bytes to <data dir>/vt_trace.log");
     eprintln!("  -P, --cwd-prompt-hook <on|off>");
     eprintln!("                         Set shell prompt hook cwd tracking");
     eprintln!("  --no-cwd-prompt-hook  Disable shell prompt hook cwd tracking");
@@ -222,6 +231,14 @@ fn print_help(wtmux_config: &WtmuxConfig) {
         format!("{}, Arrow", prefix_name)
     );
     eprintln!("  {:<22} Toggle pane zoom", format!("{}, z", prefix_name));
+    eprintln!(
+        "  {:<22} Toggle input broadcast to all panes",
+        format!("{}, e", prefix_name)
+    );
+    eprintln!(
+        "  {:<22} Jump to next pane needing attention",
+        format!("{}, a", prefix_name)
+    );
     eprintln!();
     eprintln!("Snippet selector (at command prompt, not in vim/apps):");
     eprintln!("  {:<22} Open snippet selector", history_selector);
@@ -233,11 +250,19 @@ fn print_help(wtmux_config: &WtmuxConfig) {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  wtmux                 Multi-pane mode (default)");
-    eprintln!("  wtmux -7 -u           PowerShell 7, UTF-8");
-    eprintln!("  wtmux -w              WSL");
+    if cfg!(windows) {
+        eprintln!("  wtmux -7 -u           PowerShell 7, UTF-8");
+        eprintln!("  wtmux -w              WSL");
+    } else {
+        eprintln!("  wtmux -s zsh          Zsh");
+    }
     eprintln!("  wtmux -1              Simple single-pane mode");
     eprintln!();
-    eprintln!("Configuration: %LOCALAPPDATA%\\wtmux\\config.toml");
+    if cfg!(windows) {
+        eprintln!("Configuration: %LOCALAPPDATA%\\wtmux\\config.toml");
+    } else {
+        eprintln!("Configuration: ~/.config/wtmux/config.toml");
+    }
     eprintln!();
     eprintln!("Color schemes: default, solarized-dark, solarized-light,");
     eprintln!("               monokai, nord, dracula, gruvbox-dark, tokyo-night");
@@ -265,19 +290,23 @@ fn parse_args() -> Result<Config, String> {
             "-1" | "--simple" => {
                 config.multipane = false;
             }
-            // Shell selection
+            // Shell selection (Windows shell shortcuts)
+            #[cfg(windows)]
             "-c" | "--cmd" => {
                 config.shell = Some("cmd.exe".to_string());
                 config.shell_from_cli = true;
             }
+            #[cfg(windows)]
             "-p" | "--powershell" => {
                 config.shell = Some("powershell.exe".to_string());
                 config.shell_from_cli = true;
             }
+            #[cfg(windows)]
             "-7" | "--pwsh" => {
                 config.shell = Some("pwsh.exe".to_string());
                 config.shell_from_cli = true;
             }
+            #[cfg(windows)]
             "-w" | "--wsl" => {
                 config.shell = Some("wsl.exe".to_string());
                 config.shell_from_cli = true;
@@ -408,6 +437,41 @@ fn is_windows_terminal() -> bool {
 }
 
 /// Detect the host terminal environment
+#[cfg(not(windows))]
+fn detect_terminal_env() -> String {
+    // TERM_PROGRAM is set by most macOS terminals and several cross-platform ones
+    if let Ok(program) = env::var("TERM_PROGRAM") {
+        let name = match program.as_str() {
+            "Apple_Terminal" => "Terminal.app",
+            "iTerm.app" => "iTerm2",
+            "WezTerm" => "WezTerm",
+            "vscode" => "VSCode Terminal",
+            "ghostty" => "Ghostty",
+            other => other,
+        };
+        return name.to_string();
+    }
+
+    if env::var("ALACRITTY_WINDOW_ID").is_ok() || env::var("ALACRITTY_SOCKET").is_ok() {
+        return "Alacritty".to_string();
+    }
+    if env::var("KITTY_WINDOW_ID").is_ok() {
+        return "kitty".to_string();
+    }
+    if env::var("KONSOLE_VERSION").is_ok() {
+        return "Konsole".to_string();
+    }
+    if env::var("GNOME_TERMINAL_SCREEN").is_ok() {
+        return "GNOME Terminal".to_string();
+    }
+    if env::var("TMUX").is_ok() {
+        return "tmux".to_string();
+    }
+
+    env::var("TERM").unwrap_or_else(|_| "Unknown".to_string())
+}
+
+/// Detect the host terminal environment
 #[cfg(windows)]
 fn detect_terminal_env() -> String {
     // Check Windows Terminal
@@ -449,6 +513,21 @@ fn detect_terminal_env() -> String {
     "Windows Console".to_string()
 }
 
+/// Default shell when neither the CLI nor config.toml specifies one
+#[cfg(windows)]
+fn default_shell() -> String {
+    "cmd.exe".to_string()
+}
+
+/// Default shell when neither the CLI nor config.toml specifies one
+#[cfg(not(windows))]
+fn default_shell() -> String {
+    env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_string())
+}
+
 /// Get shell name from command
 fn get_shell_name(shell_cmd: &str) -> &str {
     if shell_cmd.contains("pwsh") {
@@ -461,6 +540,10 @@ fn get_shell_name(shell_cmd: &str) -> &str {
         "Command Prompt"
     } else if shell_cmd.contains("bash") {
         "Bash"
+    } else if shell_cmd.contains("zsh") {
+        "Zsh"
+    } else if shell_cmd.contains("fish") {
+        "Fish"
     } else {
         shell_cmd
     }
@@ -628,9 +711,12 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    #[cfg(windows)]
     let wants_native = args.iter().any(|a| a == "-n" || a == "--native");
+    #[cfg(windows)]
     let no_relaunch = args.iter().any(|a| a == "--no-relaunch");
-    
+
+
     // If -n flag and running in Windows Terminal, relaunch in native console
     #[cfg(windows)]
     if wants_native && !no_relaunch && is_windows_terminal() {
@@ -687,25 +773,12 @@ fn main() -> anyhow::Result<()> {
     env::set_var("WTMUX", "1");
     env::set_var("WTMUX_VERSION", env!("CARGO_PKG_VERSION"));
 
-    // Check platform
-    #[cfg(not(windows))]
-    {
-        eprintln!("wtmux currently only supports Windows with ConPTY.");
-        eprintln!("Running in demo mode...");
-        run_demo()?;
-        return Ok(());
-    }
-
-    #[cfg(windows)]
-    {
-        run_terminal(config)?;
-    }
+    run_terminal(config)?;
 
     Ok(())
 }
 
-/// Run the terminal (Windows only)
-#[cfg(windows)]
+/// Run the terminal
 fn run_terminal(mut config: Config) -> anyhow::Result<()> {
     use crossterm::terminal;
     
@@ -719,9 +792,9 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
             config.shell = Some(shell.clone());
         }
     }
-    // Default to cmd.exe if still not set
+    // Default to the platform shell if still not set
     if config.shell.is_none() {
-        config.shell = Some("cmd.exe".to_string());
+        config.shell = Some(default_shell());
     }
     
     // Codepage from config file (CLI always overrides since it has default)
@@ -740,7 +813,7 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
 
     // Detect terminal environment
     let terminal_env = detect_terminal_env();
-    let shell_cmd_str = config.shell.clone().unwrap_or_else(|| "cmd.exe".to_string());
+    let shell_cmd_str = config.shell.clone().unwrap_or_else(default_shell);
     let shell_name = get_shell_name(&shell_cmd_str);
     let encoding_name = get_encoding_name(config.codepage);
     
@@ -750,8 +823,14 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
     info!("Encoding: {}", encoding_name);
     info!("Multi-pane mode: {}", config.multipane);
     
-    // Get terminal size
+    // Get terminal size. Some ptys (CI harnesses, expect) report 0x0;
+    // fall back to the classic 80x24 instead of panicking on empty grids.
     let (cols, rows) = Renderer::size()?;
+    let (cols, rows) = if cols == 0 || rows == 0 {
+        (80, 24)
+    } else {
+        (cols, rows)
+    };
     info!("Terminal size: {}x{}", cols, rows);
 
     if config.multipane {
@@ -810,7 +889,6 @@ fn run_terminal(mut config: Config) -> anyhow::Result<()> {
 }
 
 /// Run terminal in multi-pane mode
-#[cfg(windows)]
 fn run_terminal_wm(
     config: Config,
     cols: u16,
@@ -833,14 +911,19 @@ fn run_terminal_wm(
     
     // Create window manager
     let mut wm = WindowManager::new(
-        cols, 
-        rows, 
+        cols,
+        rows,
         config.shell.clone(),
         config.codepage,
         prefix_key,
         config.cwd_prompt_hook,
     );
-    
+
+    // Pane activity monitor settings
+    wm.activity_monitor = wtmux_config.activity.enabled;
+    wm.quiet_threshold = Duration::from_millis(wtmux_config.activity.quiet_threshold_ms);
+
+
     // Start initial session
     if let Err(e) = wm.start() {
         error!("Failed to start session: {}", e);
@@ -898,7 +981,6 @@ fn run_terminal_wm(
 }
 
 /// Main event loop for window manager
-#[cfg(windows)]
 fn run_wm_main_loop(
     wm: &mut WindowManager,
     renderer: &mut crate::ui::WmRenderer,
@@ -988,7 +1070,7 @@ fn run_wm_main_loop(
                     if key_event.kind != KeyEventKind::Press {
                         continue;
                     }
-                    
+
                     // Handle context menu keyboard navigation
                     if ui.mode == UiMode::ContextMenu {
                         match key_event.code {
@@ -1482,6 +1564,10 @@ fn run_wm_main_loop(
                                 let num = c.to_digit(10).unwrap_or(0) as usize;
                                 Some(AppAction::GotoTab(num))
                             }
+                            // Toggle input broadcast to all panes (tmux: synchronize-panes)
+                            KeyCode::Char('e') => Some(AppAction::ToggleBroadcast),
+                            // Jump to the next pane needing attention
+                            KeyCode::Char('a') => Some(AppAction::FocusNextAttention),
                             // Next pane (tmux: o)
                             KeyCode::Char('o') => Some(AppAction::FocusNextPane),
                             // Previous pane (tmux: ;)
@@ -1864,11 +1950,7 @@ fn run_wm_main_loop(
                         MouseEventKind::Up(MouseButton::Left) => {
                             if let Some(text) = wm.handle_mouse_up() {
                                 if !text.is_empty() {
-                                    // Copy to clipboard
-                                    #[cfg(windows)]
-                                    {
-                                        let _ = copy_to_clipboard_windows(&text);
-                                    }
+                                    let _ = copy_to_clipboard(&text);
                                 }
                             }
                             renderer.render(wm)?;
@@ -1914,7 +1996,6 @@ fn run_wm_main_loop(
     Ok(())
 }
 
-#[cfg(windows)]
 fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
     match action {
         AppAction::Noop => {}
@@ -1987,11 +2068,20 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
         AppAction::SendPrefixToPane { byte } => {
             let _ = wm.write(&[byte]);
         }
+        AppAction::ToggleBroadcast => {
+            let state = wm.toggle_broadcast();
+            info!("input broadcast toggled: {}", state);
+        }
+        AppAction::FocusNextAttention => {
+            if wm.focus_next_attention() {
+                wm.force_full_redraw();
+                reset_cursor_shape();
+            }
+        }
     }
 }
 
 /// Main event loop
-#[cfg(windows)]
 fn run_main_loop(
     session: &mut Session,
     renderer: &mut Renderer,
@@ -2104,10 +2194,7 @@ fn run_main_loop(
                     if keybindings.copy_selection.matches(&key_event) {
                         if let Some(text) = session.state.get_selected_text() {
                             if !text.is_empty() {
-                                #[cfg(windows)]
-                                {
-                                    let _ = copy_to_clipboard_windows(&text);
-                                }
+                                let _ = copy_to_clipboard(&text);
                             }
                         }
                         continue;
@@ -2221,12 +2308,9 @@ fn run_main_loop(
                                     let osc52 = format!("\x1b]52;c;{}\x07", b64);
                                     print!("{}", osc52);
                                     let _ = std::io::stdout().flush();
-                                    
-                                    // Also try Windows clipboard
-                                    #[cfg(windows)]
-                                    {
-                                        let _ = copy_to_clipboard_windows(&text);
-                                    }
+
+                                    // Also try the system clipboard
+                                    let _ = copy_to_clipboard(&text);
                                 }
                             }
                             // Keep selection visible
@@ -2364,6 +2448,20 @@ fn base64_encode(input: &str) -> String {
     result
 }
 
+/// Copy text to the system clipboard
+#[cfg(windows)]
+fn copy_to_clipboard(text: &str) -> Result<(), ()> {
+    copy_to_clipboard_windows(text)
+}
+
+/// Copy text to the system clipboard
+#[cfg(not(windows))]
+fn copy_to_clipboard(text: &str) -> Result<(), ()> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|_| ())
+}
+
 /// Copy text to Windows clipboard
 #[cfg(windows)]
 fn copy_to_clipboard_windows(text: &str) -> Result<(), ()> {
@@ -2405,38 +2503,3 @@ fn copy_to_clipboard_windows(text: &str) -> Result<(), ()> {
     Ok(())
 }
 
-/// Demo mode for non-Windows platforms
-#[cfg(not(windows))]
-fn run_demo() -> anyhow::Result<()> {
-    use crate::core::term::TerminalState;
-    use crate::ui::DebugRenderer;
-
-    println!("=== wtmux Demo Mode ===\n");
-
-    // Create a terminal state
-    let mut state = TerminalState::new(80, 24);
-
-    // Simulate some output
-    let demo_output = concat!(
-        "\x1b[32mWelcome to wtmux!\x1b[0m\r\n",
-        "\r\n",
-        "This is a \x1b[1mbold\x1b[0m and \x1b[4munderlined\x1b[0m text.\r\n",
-        "Colors: \x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m \x1b[34mBlue\x1b[0m\r\n",
-        "\r\n",
-        "日本語テスト: こんにちは世界！\r\n",
-        "\r\n",
-        "\x1b[7mInverse text\x1b[0m\r\n",
-        "\r\n",
-        "PS C:\\Users\\demo> \x1b[?25h",
-    );
-
-    // Create a session and feed the demo output
-    let mut session = Session::new(1, 80, 24);
-    session.feed_bytes(demo_output.as_bytes());
-
-    // Render to debug output
-    println!("{}", DebugRenderer::render(&session.state));
-
-    println!("\nDemo complete. Build on Windows to use ConPTY.");
-    Ok(())
-}

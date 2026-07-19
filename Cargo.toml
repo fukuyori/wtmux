@@ -1,9 +1,9 @@
 [package]
 name = "wtmux"
-version = "1.8.1"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.70"
-description = "A tmux-like terminal multiplexer for Windows"
+description = "A tmux-like terminal multiplexer for Windows, macOS and Linux"
 authors = ["wtmux contributors"]
 license = "MIT"
 repository = "https://github.com/fukuyori/wtmux"
@@ -37,6 +37,10 @@ bitflags = "2.4"
 
 # Clipboard
 arboard = "3.4"
+
+[target.'cfg(unix)'.dependencies]
+# POSIX pty (openpty, ioctl, signals)
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Windows API

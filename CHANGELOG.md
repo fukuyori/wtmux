@@ -1,3 +1,37 @@
+## [2.0.0] - 2026-07-19
+
+### Added
+
+- **macOS / Linux support**: wtmux now runs on macOS and Linux in addition
+  to Windows. A new POSIX pty backend (openpty + controlling terminal)
+  mirrors the ConPTY wrapper's API, so sessions, rendering, and input are
+  fully shared across platforms. On Unix the default shell is `$SHELL`
+  (falling back to `/bin/sh`), the config/data directory follows XDG
+  (`~/.config/wtmux`), the clipboard uses the native system clipboard, and
+  the host terminal (iTerm2, Ghostty, WezTerm, kitty, etc.) is detected for
+  the window title. Windows-only CLI flags (`-c`, `-p`, `-7`, `-w`,
+  `--sjis`, `-n`) are hidden on Unix.
+- **Pane activity monitor (agent multiplexing)**: every pane is watched for
+  output and bells so background agents (e.g. AI coding agents) that finish
+  or wait for input get flagged. A pane that produces output while
+  unfocused and then goes quiet — or rings BEL / sends an OSC 9
+  notification — is marked with `!` in the tab bar and a highlighted
+  border (`*` marks panes actively producing output). `Prefix + a` jumps
+  to the next flagged pane across windows; focusing a pane clears its flag.
+  Configurable via the new `[activity]` section (`enabled`,
+  `quiet_threshold_ms`).
+- **Input broadcast (synchronize-panes)**: `Prefix + e` toggles sending
+  keystrokes and pastes to every pane in the active window, shown as
+  `[SYNC]` in the status bar. Bracketed-paste mode is honored per pane.
+
+### Fixed
+
+- **Startup crash on 0-sized terminals**: ptys that report a 0x0 size
+  (CI harnesses, expect) no longer panic; wtmux falls back to 80x24.
+- **Status bar overflow on narrow terminals**: the status line is now
+  clipped to the terminal width by display cells instead of spilling past
+  the last column.
+
 ## [1.8.1] - 2026-07-18
 
 ### Fixed

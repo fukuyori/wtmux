@@ -1158,12 +1158,13 @@ dependencies = [
 
 [[package]]
 name = "wtmux"
-version = "1.8.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "arboard",
  "bitflags",
  "crossterm",
+ "libc",
  "serde",
  "thiserror",
  "toml 0.8.23",

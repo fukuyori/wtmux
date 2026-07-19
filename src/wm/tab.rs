@@ -44,6 +44,8 @@ pub struct Tab {
     current_layout: LayoutType,
     /// Layout generation (incremented on each reflow)
     pub layout_generation: u64,
+    /// Input broadcast (tmux synchronize-panes): keystrokes go to all panes
+    pub broadcast: bool,
 }
 
 impl Tab {
@@ -69,6 +71,7 @@ impl Tab {
             zoomed_pane: None,
             current_layout: LayoutType::Custom,
             layout_generation: 0,
+            broadcast: false,
         }
     }
 
@@ -280,15 +283,41 @@ impl Tab {
         None
     }
 
-    /// Process output for all panes
-    pub fn process_output(&mut self) -> bool {
+    /// Process output for all panes.
+    ///
+    /// `is_active_tab` tells the activity monitor whether this tab's focused
+    /// pane is actually visible and focused (panes in background tabs count
+    /// as unfocused).
+    pub fn process_output(&mut self, is_active_tab: bool) -> bool {
         let mut any_output = false;
         for pane in self.panes.values_mut() {
+            let focused = is_active_tab && pane.id == self.focused_pane;
             if pane.session.process_output().unwrap_or(false) {
                 any_output = true;
+                pane.activity.note_output(focused);
+            }
+            if pane.session.state.bell {
+                pane.session.state.bell = false;
+                pane.activity.note_bell(focused);
             }
         }
         any_output
+    }
+
+    /// Advance the activity monitor for all panes. Returns true when any
+    /// pane's displayed state (busy marker / attention flag) changed, so the
+    /// caller can trigger a render.
+    pub fn update_activity(&mut self, is_active_tab: bool, quiet_threshold: std::time::Duration) -> bool {
+        let mut changed = false;
+        for pane in self.panes.values_mut() {
+            let focused = is_active_tab && pane.id == self.focused_pane;
+            if pane.activity.tick(focused, quiet_threshold) {
+                // Repaint the pane so the border reflects the new state
+                pane.session.state.active_screen_mut().full_redraw = true;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Check if any pane is still running

@@ -1181,15 +1181,21 @@ impl WmRenderer {
 
         // Render tabs
         let tabs = wm.tab_info();
-        for (i, (_id, name, active)) in tabs.iter().enumerate() {
+        for (i, (_id, name, active, attention)) in tabs.iter().enumerate() {
             if *active {
-                execute!(stdout, 
-                    SetBackgroundColor(cs.tab_active_bg.to_crossterm()), 
+                execute!(stdout,
+                    SetBackgroundColor(cs.tab_active_bg.to_crossterm()),
                     SetForegroundColor(cs.tab_active_fg.to_crossterm())
                 )?;
+            } else if *attention {
+                // A pane in this tab needs attention (bell / agent went quiet)
+                execute!(stdout,
+                    SetBackgroundColor(cs.tab_inactive_bg.to_crossterm()),
+                    SetForegroundColor(CtColor::Yellow)
+                )?;
             } else {
-                execute!(stdout, 
-                    SetBackgroundColor(cs.tab_inactive_bg.to_crossterm()), 
+                execute!(stdout,
+                    SetBackgroundColor(cs.tab_inactive_bg.to_crossterm()),
                     SetForegroundColor(cs.tab_inactive_fg.to_crossterm())
                 )?;
             }
@@ -1400,12 +1406,15 @@ impl WmRenderer {
         
         execute!(stdout, ResetColor, SetAttribute(Attribute::Reset))?;
 
-        // Border color based on focus
-        if pane.focused {
-            execute!(stdout, SetForegroundColor(cs.pane_border_active.to_crossterm()))?;
+        // Border color: focus wins, then attention (agent waiting), then default
+        let border_fg = if pane.focused {
+            cs.pane_border_active.to_crossterm()
+        } else if pane.activity.attention().is_some() {
+            CtColor::Yellow
         } else {
-            execute!(stdout, SetForegroundColor(cs.pane_border.to_crossterm()))?;
-        }
+            cs.pane_border.to_crossterm()
+        };
+        execute!(stdout, SetForegroundColor(border_fg))?;
 
         // Top border
         execute!(stdout, MoveTo(pane.x, y_offset + pane.y))?;
@@ -1428,11 +1437,7 @@ impl WmRenderer {
             execute!(stdout, SetForegroundColor(cs.tab_active_fg.to_crossterm()))?;
         }
         write!(stdout, "{}", display_title)?;
-        if pane.focused {
-            execute!(stdout, SetForegroundColor(cs.pane_border_active.to_crossterm()))?;
-        } else {
-            execute!(stdout, SetForegroundColor(cs.pane_border.to_crossterm()))?;
-        }
+        execute!(stdout, SetForegroundColor(border_fg))?;
         
         for _ in 0..right_pad {
             write!(stdout, "{}", chars.horizontal)?;
@@ -1475,7 +1480,7 @@ impl WmRenderer {
         let status = wm.status_info();
         let prefix_name = wm.prefix_key.display_name();
         let shortcuts = if wm.prefix_mode {
-            r#"c:new x:kill ":split %:vsplit n/p:win o:pane z:zoom t:theme"#.to_string()
+            r#"c:new x:kill ":split %:vsplit n/p:win z:zoom e:sync a:alert t:theme"#.to_string()
         } else {
             format!("{}: prefix | {}: history", prefix_name, self.history_selector_shortcut)
         };
@@ -1483,8 +1488,12 @@ impl WmRenderer {
         let left_len = status.len();
         let right_len = shortcuts.len();
         let padding = (wm.width as usize).saturating_sub(left_len + right_len + 2);
-        
-        write!(stdout, " {}{:padding$}{} ", status, "", shortcuts, padding = padding)?;
+
+        // Clip to the terminal width — on narrow terminals the combined
+        // status + shortcuts would otherwise spill past the last column.
+        let line = format!(" {}{:padding$}{} ", status, "", shortcuts, padding = padding);
+        let line = truncate_to_display_width(&line, wm.width as usize);
+        write!(stdout, "{}", line)?;
         
         execute!(stdout, ResetColor)?;
         Ok(())

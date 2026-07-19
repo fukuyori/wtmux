@@ -10,7 +10,7 @@ use std::thread::{self, JoinHandle};
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 
-use super::pty::{ConPty, PtyError};
+use super::pty::{Pty, PtyError};
 use super::term::resize::DEFAULT_SESSION_RESIZE_POLICY;
 use super::term::{Response, TerminalState, VtParser};
 
@@ -71,25 +71,22 @@ pub struct Session {
     /// multi-byte character can be split across two reads; its leading bytes
     /// are held here until the continuation bytes arrive. At most 3 bytes.
     utf8_pending: Vec<u8>,
-    /// PTY handle (Windows only)
-    #[cfg(windows)]
-    pty: Option<Arc<ConPty>>,
+    /// PTY handle
+    pty: Option<Arc<Pty>>,
     /// Running flag
     running: Arc<AtomicBool>,
     /// Reader thread handle
-    #[cfg(windows)]
     reader_thread: Option<JoinHandle<()>>,
     /// Channel to receive PTY output
-    #[cfg(windows)]
     output_rx: Option<Receiver<Vec<u8>>>,
     /// In-progress ConPTY buffer replay after a resize (renders suppressed)
     #[cfg(windows)]
     resize_settle: Option<ResizeSettle>,
 }
 
-// ConPty needs to be Send + Sync for Arc
+// ConPty needs to be Send + Sync for Arc (the Unix pty is naturally both)
 #[cfg(windows)]
-unsafe impl Sync for ConPty {}
+unsafe impl Sync for Pty {}
 
 impl Session {
     /// Create a new session
@@ -100,12 +97,9 @@ impl Session {
             parser: VtParser::new(),
             vt_trace: None,
             utf8_pending: Vec::new(),
-            #[cfg(windows)]
             pty: None,
             running: Arc::new(AtomicBool::new(false)),
-            #[cfg(windows)]
             reader_thread: None,
-            #[cfg(windows)]
             output_rx: None,
             #[cfg(windows)]
             resize_settle: None,
@@ -125,20 +119,18 @@ impl Session {
     }
 
     /// Start the session with a shell command
-    #[cfg(windows)]
     #[allow(dead_code)]
     pub fn start(&mut self, command: Option<&str>) -> Result<(), PtyError> {
         self.start_with_codepage(command, None)
     }
 
     /// Start the session with a shell command and specific codepage
-    #[cfg(windows)]
+    #[allow(dead_code)]
     pub fn start_with_codepage(&mut self, command: Option<&str>, codepage: Option<u32>) -> Result<(), PtyError> {
         self.start_with_options(command, codepage, false)
     }
 
     /// Start the session with a shell command, codepage, and shell options.
-    #[cfg(windows)]
     pub fn start_with_options(
         &mut self,
         command: Option<&str>,
@@ -146,7 +138,7 @@ impl Session {
         cwd_prompt_hook: bool,
     ) -> Result<(), PtyError> {
         let (cols, rows) = (self.state.cols, self.state.rows);
-        let pty = Arc::new(ConPty::new_with_options(
+        let pty = Arc::new(Pty::new_with_options(
             cols,
             rows,
             command,
@@ -202,18 +194,12 @@ impl Session {
         Ok(())
     }
 
-    #[cfg(not(windows))]
-    pub fn start(&mut self, _command: Option<&str>) -> Result<(), String> {
-        Err("PTY is only supported on Windows".to_string())
-    }
-
     /// Check if session is running
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
 
     /// Write input to the PTY
-    #[cfg(windows)]
     pub fn write(&self, data: &[u8]) -> Result<usize, PtyError> {
         if let Some(pty) = &self.pty {
             pty.write(data)
@@ -222,13 +208,7 @@ impl Session {
         }
     }
 
-    #[cfg(not(windows))]
-    pub fn write(&self, _data: &[u8]) -> Result<usize, String> {
-        Err("PTY is only supported on Windows".to_string())
-    }
-
     /// Read and process output from PTY (non-blocking)
-    #[cfg(windows)]
     pub fn process_output(&mut self) -> Result<bool, PtyError> {
         // Check if PTY process is still running
         if let Some(pty) = &self.pty {
@@ -238,7 +218,10 @@ impl Session {
         }
 
         if self.output_rx.is_none() {
-            self.resize_settle = None;
+            #[cfg(windows)]
+            {
+                self.resize_settle = None;
+            }
             return Ok(false);
         }
 
@@ -269,6 +252,7 @@ impl Session {
         // (or the hard cap expires), then release one render with the final
         // state. Dirty-line tracking accumulates across the window, so that
         // single render repaints everything the replay touched.
+        #[cfg(windows)]
         if let Some(settle) = &mut self.resize_settle {
             let now = Instant::now();
             if processed {
@@ -286,11 +270,6 @@ impl Session {
         }
 
         Ok(processed)
-    }
-
-    #[cfg(not(windows))]
-    pub fn process_output(&mut self) -> Result<bool, String> {
-        Ok(false)
     }
 
     /// Feed raw bytes into the terminal.
@@ -421,23 +400,24 @@ impl Session {
     fn send_response(&self, response: Response) {
         let bytes = response.to_bytes();
 
-        #[cfg(windows)]
         if let Some(pty) = &self.pty {
             let _ = pty.write(&bytes);
         }
     }
 
     /// Resize the terminal
-    #[cfg(windows)]
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        // Let ConPTY / the host terminal recalculate wrapping first, then
+        // Let the PTY / the host terminal recalculate wrapping first, then
         // update our local state using the selected resize policy.
         if let Some(pty) = &self.pty {
+            #[cfg(windows)]
             let size_changed = cols != self.state.cols || rows != self.state.rows;
             pty.resize_pty(cols, rows)?;
             // conhost replays the whole buffer after a real size change;
             // suppress renders until it settles so only the final state is
             // painted. Same-size calls (layout recomputes) don't replay.
+            // Unix ptys don't replay, so no settle window is needed there.
+            #[cfg(windows)]
             if size_changed {
                 let now = Instant::now();
                 self.resize_settle = Some(ResizeSettle {
@@ -454,23 +434,17 @@ impl Session {
         Ok(())
     }
 
-    #[cfg(not(windows))]
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), String> {
-        self.state
-            .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
-        Ok(())
-    }
-
     /// Whether the post-resize ConPTY buffer replay is still in flight.
     /// The renderer skips incremental paints of this session while true.
-    #[cfg(windows)]
     pub fn is_settling(&self) -> bool {
-        self.resize_settle.is_some()
-    }
-
-    #[cfg(not(windows))]
-    pub fn is_settling(&self) -> bool {
-        false
+        #[cfg(windows)]
+        {
+            self.resize_settle.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     /// Get the terminal title
@@ -484,18 +458,15 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
 
-        #[cfg(windows)]
-        {
-            // Cancel any pending read operations to unblock the reader thread
-            if let Some(pty) = &self.pty {
-                pty.cancel_read();
-            }
+        // Cancel any pending read operations to unblock the reader thread
+        if let Some(pty) = &self.pty {
+            pty.cancel_read();
+        }
 
-            // Wait for reader thread to finish
-            if let Some(handle) = self.reader_thread.take() {
-                // Give it a moment to exit
-                let _ = handle.join();
-            }
+        // Wait for reader thread to finish
+        if let Some(handle) = self.reader_thread.take() {
+            // Give it a moment to exit
+            let _ = handle.join();
         }
     }
 }

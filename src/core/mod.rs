@@ -2,7 +2,7 @@
 //!
 //! This module contains the low-level terminal emulation logic:
 //!
-//! - **pty**: Windows ConPTY wrapper for pseudo-terminal operations
+//! - **pty**: Pseudo-terminal backends (ConPTY on Windows, POSIX pty on Unix)
 //! - **term**: VT100/VT220 terminal state and ANSI escape sequence parser
 //! - **session**: High-level session combining PTY + terminal state
 //!
@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! Session
-//! ├── ConPty (PTY I/O with shell process)
+//! ├── Pty (PTY I/O with shell process)
 //! └── TerminalState
 //!     ├── Screen (cell grid + attributes)
 //!     ├── Cursor (position + visibility)
