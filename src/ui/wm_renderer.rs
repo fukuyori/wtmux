@@ -48,6 +48,7 @@ use super::row_stream::{render_row_stream, RenderRow};
 use super::context_menu::ContextMenu;
 use super::cursor::CursorPresenter;
 use super::frame::{with_cursor_hidden, with_frame};
+use super::agent_dashboard::AgentDashboard;
 use super::window_selector::{TreeEntry, WindowSelector};
 
 /// Border characters
@@ -152,6 +153,7 @@ pub enum WmOverlay<'a> {
         selected: usize,
     },
     WindowSelector(&'a WindowSelector),
+    AgentDashboard(&'a AgentDashboard),
     ContextMenu(&'a ContextMenu),
 }
 
@@ -302,6 +304,9 @@ impl WmRenderer {
                     }
                     Some(WmOverlay::WindowSelector(selector)) => {
                         self.render_window_selector(out, wm, selector)?;
+                    }
+                    Some(WmOverlay::AgentDashboard(dashboard)) => {
+                        self.render_agent_dashboard(out, wm, dashboard)?;
                     }
                     Some(WmOverlay::ContextMenu(menu)) => {
                         self.render_context_menu(out, menu)?;
@@ -920,6 +925,137 @@ impl WmRenderer {
             "j/k:Move h/l:Fold 1-9:Jump Enter:Select x:Kill q/Esc:Close".to_string()
         };
         let help = truncate_to_display_width(&help, box_width.saturating_sub(3));
+        let help_width = str_display_width(&help);
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
+        write!(stdout, "│ {}", help)?;
+        write!(
+            stdout,
+            "{:padding$}│",
+            "",
+            padding = box_width.saturating_sub(help_width + 3)
+        )?;
+
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 2) as u16))?;
+        write!(stdout, "└")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┘")?;
+
+        execute!(stdout, ResetColor)?;
+        Ok(())
+    }
+
+    /// Render the agent dashboard overlay (herdr-style): every pane across
+    /// all windows with its agent state, refreshed live while open.
+    fn render_agent_dashboard<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        dashboard: &AgentDashboard,
+    ) -> io::Result<()> {
+        let entries = wm.agent_overview();
+        if entries.is_empty() || wm.width < 30 || wm.height < 8 {
+            return Ok(());
+        }
+        let selected = dashboard.selected.min(entries.len() - 1);
+
+        let cs = &self.color_scheme;
+        let content_top = wm.tab_bar_height as usize;
+        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+
+        let box_width = (wm.width as usize).saturating_sub(4).min(64);
+        // Chrome: top border, separator, help line, bottom border
+        let max_list = content_height.saturating_sub(2 + 4);
+        if box_width < 24 || max_list < 1 {
+            return Ok(());
+        }
+        let list_h = entries.len().min(max_list);
+        let box_height = list_h + 4;
+        let first_visible = selected
+            .saturating_add(1)
+            .saturating_sub(list_h)
+            .min(entries.len().saturating_sub(list_h));
+        let start_x = (wm.width as usize - box_width) / 2;
+        let start_y = content_top + (content_height - box_height) / 2;
+
+        let base_colors = |stdout: &mut W| {
+            execute!(
+                stdout,
+                SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                SetForegroundColor(cs.selector_fg.to_crossterm())
+            )
+        };
+        base_colors(stdout)?;
+
+        // Top border with title
+        let title = format!("Agents [{}, g]", wm.prefix_key.display_name());
+        let title = truncate_to_display_width(&title, box_width.saturating_sub(5));
+        let title_width = str_display_width(&title);
+        execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
+        write!(stdout, "┌─ {} ", title)?;
+        for _ in 0..box_width.saturating_sub(title_width + 5) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┐")?;
+
+        // One row per pane: "  1:main · 1: Pane 1        ! WORKING "
+        const STATE_COL: usize = 10; // "! BLOCKED " right-aligned block
+        for (row, entry) in entries.iter().enumerate().skip(first_visible).take(list_h) {
+            let y = start_y + 1 + row - first_visible;
+            execute!(stdout, MoveTo(start_x as u16, y as u16))?;
+            write!(stdout, "│")?;
+
+            let is_selected = row == selected;
+            if is_selected {
+                execute!(
+                    stdout,
+                    SetBackgroundColor(cs.selector_selected_bg.to_crossterm()),
+                    SetForegroundColor(cs.selector_selected_fg.to_crossterm())
+                )?;
+            }
+
+            let focus_flag = if entry.is_focused { '*' } else { ' ' };
+            let prefix = format!(" {} {}:{} · {}: ", focus_flag, entry.window_number, entry.window_name, entry.pane_number);
+            let name_width = box_width.saturating_sub(str_display_width(&prefix) + STATE_COL + 2);
+            let title = truncate_to_display_width(&entry.pane_title, name_width);
+            let used = str_display_width(&prefix) + str_display_width(&title);
+            write!(stdout, "{}{}", prefix, title)?;
+            write!(
+                stdout,
+                "{:padding$}",
+                "",
+                padding = box_width.saturating_sub(used + STATE_COL + 2)
+            )?;
+
+            // State cell, colored unless the row is selected
+            let attn = if entry.attention { '!' } else { ' ' };
+            if !is_selected {
+                let state_color = match entry.state {
+                    crate::wm::AgentState::Working => CtColor::Green,
+                    crate::wm::AgentState::Blocked => CtColor::Yellow,
+                    crate::wm::AgentState::Done => CtColor::Cyan,
+                    crate::wm::AgentState::Idle => CtColor::DarkGrey,
+                };
+                execute!(stdout, SetForegroundColor(state_color))?;
+            }
+            write!(stdout, "{} {:<8}", attn, entry.state.label())?;
+
+            base_colors(stdout)?;
+            write!(stdout, "│")?;
+        }
+
+        // Separator, help line, bottom border
+        let separator_y = start_y + 1 + list_h;
+        execute!(stdout, MoveTo(start_x as u16, separator_y as u16))?;
+        write!(stdout, "├")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┤")?;
+
+        let help = "j/k:Move Enter:Focus a:Next-alert q/Esc:Close";
+        let help = truncate_to_display_width(help, box_width.saturating_sub(3));
         let help_width = str_display_width(&help);
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
         write!(stdout, "│ {}", help)?;

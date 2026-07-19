@@ -143,10 +143,19 @@ ligatures = true
 # ============================================================================
 # Pane activity monitor (agent multiplexing support)
 # ============================================================================
-# Watches every pane for output and bells so background agents (e.g. AI
-# coding agents) that finish or wait for input get flagged:
+# Watches every pane and classifies it herdr-style as WORKING / BLOCKED /
+# DONE / IDLE, so background agents (e.g. AI coding agents) that finish or
+# wait for input get flagged:
+#   - WORKING: output is flowing
+#   - BLOCKED: bell / OSC 9 notification received, or output stopped on a
+#     question or permission prompt ("[y/n]", "Do you want ...", etc.)
+#   - DONE:    output stopped after work (or the process exited)
+#   - IDLE:    sitting at an ordinary shell prompt
+# UI:
 #   - tab bar:  "!" = a pane needs attention, "*" = a pane is producing output
+#   - status bar: state summary, e.g. "2W 1B 1D"
 #   - pane border turns yellow on the flagged pane
+#   - Prefix + g opens the agent dashboard (all panes + states, Enter jumps)
 #   - Prefix + a jumps to the next flagged pane
 #   - Prefix + e toggles input broadcast to all panes in the window ([SYNC])
 [activity]

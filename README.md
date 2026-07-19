@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.0.0 Highlights
+## 2.0.1 Highlights
 
-- **macOS / Linux support**: a new POSIX pty backend brings the full feature set to macOS and Linux. The default shell is `$SHELL`, configuration lives in `~/.config/wtmux/config.toml`, and the system clipboard is used natively.
-- **Pane activity monitor**: background panes whose program stops producing output (or rings a bell / sends an OSC 9 notification) are flagged with `!` in the tab bar and a highlighted border — ideal for running multiple AI coding agents side by side. `Prefix + a` jumps to the next flagged pane.
-- **Input broadcast**: `Prefix + e` toggles sending input to every pane in the window (tmux `synchronize-panes`), shown as `[SYNC]` in the status bar.
+- **herdr-style agent states**: every pane is classified as WORKING / BLOCKED / DONE / IDLE. Bells and permission prompts (`[y/n]`, "Do you want …") mark a pane BLOCKED; a plain shell prompt counts as IDLE, so ordinary shells no longer raise false alerts.
+- **Agent dashboard**: `Prefix + g` opens a live overlay listing every pane with its state — `Enter` jumps to the selected pane. The status bar shows a summary like `2W 1B 1D`.
+- From 2.0.0: **macOS / Linux support** (POSIX pty backend, `$SHELL`, `~/.config/wtmux/config.toml`), pane activity monitoring with `Prefix + a` jump, and input broadcast with `Prefix + e` (`[SYNC]`).
 
 ## Features
 

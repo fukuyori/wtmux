@@ -4,15 +4,15 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.0.0 の主な変更
+## 2.0.1 の主な変更
 
-- **macOS / Linux 対応**: POSIX pty バックエンドを新設し、全機能が macOS と Linux でも動作するようになりました。デフォルトシェルは `$SHELL`、設定ファイルは `~/.config/wtmux/config.toml`、クリップボードは OS ネイティブのものを使用します。
-- **ペイン状態モニタ**: バックグラウンドのペインで出力が止まったとき（またはベル・OSC 9 通知を受けたとき）にタブバーの `!` マーカーと枠線の色で通知します。複数のAIコーディングエージェントの並行実行に便利です。`Prefix + a` で要注意ペインへジャンプできます。
-- **入力ブロードキャスト**: `Prefix + e` でウィンドウ内の全ペインへの入力同時送信を切り替えます（tmux の `synchronize-panes` 相当）。有効時はステータスバーに `[SYNC]` と表示されます。
+- **herdr 風エージェント状態**: 各ペインを WORKING / BLOCKED / DONE / IDLE の4状態で分類します。ベルや許可プロンプト（`[y/n]`、`Do you want …` 等）で BLOCKED になり、通常のシェルプロンプトは IDLE 扱いになるため、シェルだけのペインで誤通知が出なくなりました。
+- **エージェントダッシュボード**: `Prefix + g` で全ペインの状態一覧をライブ表示するオーバーレイを開き、`Enter` で選択ペインへジャンプできます。ステータスバーにも `2W 1B 1D` のような集計が表示されます。
+- 2.0.0 より: **macOS / Linux 対応**（POSIX pty バックエンド、`$SHELL`、`~/.config/wtmux/config.toml`）、`Prefix + a` の要注意ペインジャンプ、`Prefix + e` の入力ブロードキャスト（`[SYNC]`）。
 
 ## 特徴
 

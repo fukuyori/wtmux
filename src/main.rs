@@ -239,6 +239,10 @@ fn print_help(wtmux_config: &WtmuxConfig) {
         "  {:<22} Jump to next pane needing attention",
         format!("{}, a", prefix_name)
     );
+    eprintln!(
+        "  {:<22} Agent dashboard (pane states)",
+        format!("{}, g", prefix_name)
+    );
     eprintln!();
     eprintln!("Snippet selector (at command prompt, not in vim/apps):");
     eprintln!("  {:<22} Open snippet selector", history_selector);
@@ -1367,6 +1371,46 @@ fn run_wm_main_loop(
                         continue;
                     }
 
+                    // Handle agent dashboard mode
+                    if ui.mode == UiMode::AgentDashboard {
+                        let entries = wm.agent_overview();
+                        match key_event.code {
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('g') => {
+                                ui.close_mode();
+                                wm.force_full_redraw();
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                ui.agent_dashboard.move_up(entries.len());
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                ui.agent_dashboard.move_down(entries.len());
+                            }
+                            KeyCode::Char('a') => {
+                                if wm.focus_next_attention() {
+                                    reset_cursor_shape();
+                                    ui.close_mode();
+                                    wm.force_full_redraw();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(entry) = ui.agent_dashboard.selected_entry(&entries) {
+                                    wm.focus_pane_at(entry.window_index, entry.pane_index);
+                                    reset_cursor_shape();
+                                }
+                                ui.close_mode();
+                                wm.force_full_redraw();
+                            }
+                            _ => {}
+                        }
+                        if ui.mode == UiMode::AgentDashboard {
+                            ui.agent_dashboard.clamp(wm.agent_overview().len());
+                            ui.render(renderer, wm, &theme_list)?;
+                        } else {
+                            renderer.render(wm)?;
+                        }
+                        continue;
+                    }
+
                     // Handle theme selector mode
                     if ui.mode == UiMode::ThemeSelector {
                         match key_event.code {
@@ -1622,6 +1666,15 @@ fn run_wm_main_loop(
                                 ui.close_mode();
                                 ui.window_selector.open(wm);
                                 ui.mode = UiMode::WindowSelector;
+                                wm.prefix_mode = false;
+                                ui.render(renderer, wm, &theme_list)?;
+                                continue;
+                            }
+                            // Agent dashboard (herdr-style pane state list)
+                            KeyCode::Char('g') => {
+                                ui.close_mode();
+                                ui.agent_dashboard.open(wm);
+                                ui.mode = UiMode::AgentDashboard;
                                 wm.prefix_mode = false;
                                 ui.render(renderer, wm, &theme_list)?;
                                 continue;

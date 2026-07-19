@@ -805,6 +805,7 @@ mod tests {
         out
     }
 
+    #[cfg(windows)]
     const REPRO_TEXT: &str = "じゅげむ じゅげむ ごこうのすりきれ かいじゃりすいぎょの すいぎょうまつ うんらいまつ ふうらいまつ くうねるところに すむところ やぶらこうじの ぶらこうじ パイポパイポ パイポのシューリンガン シューリンガンのグーリンダイ グーリンダイのポンポコピーのポンポコナーの ちょうきゅうめいの ちょうすけ";
 
     /// Diagnostic harness: drive a real ConPTY through an Ink-style streaming

@@ -23,7 +23,7 @@ pub mod tab;
 pub mod layout;
 pub mod manager;
 
-pub use pane::{Pane, PaneId, BorderStyle};
+pub use pane::{AgentState, Pane, PaneId, BorderStyle};
 pub use layout::SplitDirection;
-pub use manager::{WindowInfo, WindowManager};
+pub use manager::{AgentEntry, WindowInfo, WindowManager};
 pub use tab::{Tab, TabId};

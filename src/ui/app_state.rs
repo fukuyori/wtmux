@@ -6,7 +6,7 @@ use crate::copymode::CopyMode;
 use crate::history::HistorySelector;
 use crate::wm::WindowManager;
 
-use super::{ContextMenu, WindowSelector, WmOverlay, WmRenderer};
+use super::{AgentDashboard, ContextMenu, WindowSelector, WmOverlay, WmRenderer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiMode {
@@ -14,6 +14,7 @@ pub(crate) enum UiMode {
     HistorySelector,
     ThemeSelector,
     WindowSelector,
+    AgentDashboard,
     PaneNumbers,
     CopyMode,
     Rename,
@@ -25,6 +26,7 @@ pub(crate) struct WmAppState {
     pub(crate) history_selector: Option<HistorySelector>,
     pub(crate) theme_selector_index: usize,
     pub(crate) window_selector: WindowSelector,
+    pub(crate) agent_dashboard: AgentDashboard,
     pub(crate) pane_numbers_started: Instant,
     pub(crate) copy_mode: CopyMode,
     pub(crate) rename_buffer: String,
@@ -38,6 +40,7 @@ impl WmAppState {
             history_selector: None,
             theme_selector_index: 0,
             window_selector: WindowSelector::new(),
+            agent_dashboard: AgentDashboard::new(),
             pane_numbers_started: Instant::now(),
             copy_mode: CopyMode::new(),
             rename_buffer: String::new(),
@@ -55,6 +58,7 @@ impl WmAppState {
             selector.hide();
         }
         self.window_selector.close();
+        self.agent_dashboard.close();
         self.copy_mode.exit();
         self.rename_buffer.clear();
         self.context_menu.hide();
@@ -79,6 +83,7 @@ impl WmAppState {
                 selected: self.theme_selector_index,
             }),
             UiMode::WindowSelector => Some(WmOverlay::WindowSelector(&self.window_selector)),
+            UiMode::AgentDashboard => Some(WmOverlay::AgentDashboard(&self.agent_dashboard)),
             UiMode::PaneNumbers => Some(WmOverlay::PaneNumbers),
             UiMode::CopyMode => Some(WmOverlay::CopyMode(&self.copy_mode)),
             UiMode::Rename => Some(WmOverlay::Rename(&self.rename_buffer)),

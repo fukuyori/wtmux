@@ -311,7 +311,11 @@ impl Tab {
         let mut changed = false;
         for pane in self.panes.values_mut() {
             let focused = is_active_tab && pane.id == self.focused_pane;
-            if pane.activity.tick(focused, quiet_threshold) {
+            if !pane.session.is_running() {
+                pane.activity.note_exited();
+            }
+            let hint = crate::wm::pane::scan_prompt_hint(&pane.session.state);
+            if pane.activity.tick(focused, quiet_threshold, hint) {
                 // Repaint the pane so the border reflects the new state
                 pane.session.state.active_screen_mut().full_redraw = true;
                 changed = true;

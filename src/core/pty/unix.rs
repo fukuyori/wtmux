@@ -319,7 +319,9 @@ fn default_shell() -> String {
 mod tests {
     use super::*;
 
-    fn read_all_with_timeout(pty: &UnixPty, timeout: Duration) -> Vec<u8> {
+    /// Read until `done(collected)` is true, the pty closes, or `timeout`
+    /// elapses — so tests finish as soon as the expected output arrives.
+    fn read_until(pty: &UnixPty, timeout: Duration, done: impl Fn(&str) -> bool) -> String {
         let mut out = Vec::new();
         let mut buf = [0u8; 4096];
         let start = std::time::Instant::now();
@@ -334,18 +336,17 @@ mod tests {
                 Ok(n) => out.extend_from_slice(&buf[..n]),
                 Err(_) => break,
             }
-            if start.elapsed() > timeout {
+            if done(&String::from_utf8_lossy(&out)) || start.elapsed() > timeout {
                 break;
             }
         }
-        out
+        String::from_utf8_lossy(&out).into_owned()
     }
 
     #[test]
     fn spawns_command_and_captures_output() {
         let pty = UnixPty::new(80, 24, Some("echo hello-wtmux")).expect("spawn pty");
-        let out = read_all_with_timeout(&pty, Duration::from_secs(10));
-        let text = String::from_utf8_lossy(&out);
+        let text = read_until(&pty, Duration::from_secs(10), |s| s.contains("hello-wtmux"));
         assert!(text.contains("hello-wtmux"), "output was: {text:?}");
     }
 
@@ -353,8 +354,7 @@ mod tests {
     fn write_reaches_the_shell() {
         let pty = UnixPty::new(80, 24, Some("/bin/cat")).expect("spawn pty");
         pty.write(b"ping\n").expect("write");
-        let out = read_all_with_timeout(&pty, Duration::from_secs(10));
-        let text = String::from_utf8_lossy(&out);
+        let text = read_until(&pty, Duration::from_secs(10), |s| s.contains("ping"));
         assert!(text.contains("ping"), "output was: {text:?}");
     }
 

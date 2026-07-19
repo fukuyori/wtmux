@@ -28,10 +28,34 @@
 
 use std::collections::HashMap;
 use super::tab::{Tab, TabId};
-use super::pane::PaneId;
+use super::pane::{AgentState, PaneId};
 use super::layout::{SplitDirection, SplitResizeTarget};
 
 use crate::config::PrefixKey;
+
+/// One row of the agent dashboard: a pane anywhere in the session with its
+/// herdr-style state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEntry {
+    /// Zero-based window index (for `focus_pane_at`)
+    pub window_index: usize,
+    /// Zero-based pane index within the window (for `focus_pane_at`)
+    pub pane_index: usize,
+    /// 1-based display number of the window
+    pub window_number: usize,
+    /// Window name
+    pub window_name: String,
+    /// 1-based display number of the pane
+    pub pane_number: usize,
+    /// Pane title
+    pub pane_title: String,
+    /// Current agent state
+    pub state: AgentState,
+    /// Whether the pane carries an unacknowledged attention flag
+    pub attention: bool,
+    /// Whether this is the globally focused pane
+    pub is_focused: bool,
+}
 
 /// A pane entry within a window, for the window selector tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -662,15 +686,31 @@ impl WindowManager {
             let focused_id = tab.focused_pane;
             let zoom_indicator = if tab.is_zoomed() { " [Z]" } else { "" };
             let sync_indicator = if tab.broadcast { " [SYNC]" } else { "" };
+            // Agent state summary, e.g. " | 2W 1B 1D" (working/blocked/done)
+            let (working, blocked, done) = self.agent_state_counts();
+            let mut agents = String::new();
+            if working + blocked + done > 0 {
+                agents.push_str(" |");
+                if working > 0 {
+                    agents.push_str(&format!(" {}W", working));
+                }
+                if blocked > 0 {
+                    agents.push_str(&format!(" {}B", blocked));
+                }
+                if done > 0 {
+                    agents.push_str(&format!(" {}D", done));
+                }
+            }
             format!(
-                "[{}] {}:{} | Pane {}/{}{}{}",
+                "[{}] {}:{} | Pane {}/{}{}{}{}",
                 self.active_tab,
                 tab.name,
                 focused_id,
                 focused_id,
                 pane_count,
                 zoom_indicator,
-                sync_indicator
+                sync_indicator,
+                agents
             )
         } else {
             "No active tab".to_string()
@@ -1002,8 +1042,56 @@ impl WindowManager {
     }
 
     /// Whether input broadcast is enabled on the active window.
+    /// Only exercised by tests right now (the renderer reads the flag via
+    /// `status_info`), hence the allow.
+    #[allow(dead_code)]
     pub fn broadcast_active(&self) -> bool {
         self.active_tab().map(|tab| tab.broadcast).unwrap_or(false)
+    }
+
+    /// One row of the agent dashboard: a pane anywhere in the session with
+    /// its herdr-style state.
+    pub fn agent_overview(&self) -> Vec<AgentEntry> {
+        let mut out = Vec::new();
+        for (window_index, tab_id) in self.tab_order.iter().enumerate() {
+            let Some(tab) = self.tabs.get(tab_id) else {
+                continue;
+            };
+            for (pane_index, pane_id) in tab.pane_order.iter().enumerate() {
+                let Some(pane) = tab.panes.get(pane_id) else {
+                    continue;
+                };
+                out.push(AgentEntry {
+                    window_index,
+                    pane_index,
+                    window_number: window_index + 1,
+                    window_name: tab.name.clone(),
+                    pane_number: pane_index + 1,
+                    pane_title: pane.display_title(),
+                    state: pane.activity.state(),
+                    attention: pane.activity.attention().is_some(),
+                    is_focused: *tab_id == self.active_tab && *pane_id == tab.focused_pane,
+                });
+            }
+        }
+        out
+    }
+
+    /// Count panes per agent state: (working, blocked, done).
+    /// Idle panes are not counted.
+    pub fn agent_state_counts(&self) -> (usize, usize, usize) {
+        let (mut working, mut blocked, mut done) = (0, 0, 0);
+        for tab in self.tabs.values() {
+            for pane in tab.panes.values() {
+                match pane.activity.state() {
+                    AgentState::Working => working += 1,
+                    AgentState::Blocked => blocked += 1,
+                    AgentState::Done => done += 1,
+                    AgentState::Idle => {}
+                }
+            }
+        }
+        (working, blocked, done)
     }
 
     /// Focus the next pane (searching forward from the current focus, across

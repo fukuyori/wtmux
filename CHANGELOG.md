@@ -1,3 +1,24 @@
+## [2.0.1] - 2026-07-20
+
+### Added
+
+- **Agent dashboard**: `Prefix + g` opens a live-updating overlay listing
+  every pane across all windows with its agent state; `Enter` focuses the
+  selected pane, `a` jumps to the next flagged pane, `q`/`Esc` closes.
+- **Agent state summary in the status bar**: the number of working /
+  blocked / done panes is shown as e.g. `2W 1B 1D`.
+
+### Changed
+
+- **Pane activity monitor upgraded to herdr-style states**: every pane is
+  now classified as WORKING / BLOCKED / DONE / IDLE (tracked for focused
+  panes too). BLOCKED is detected from bells, OSC 9 notifications, and
+  output that stops on a question or permission prompt (`[y/n]`,
+  "Do you want …", a trailing `?`); output that stops on an ordinary shell
+  prompt now counts as IDLE and no longer raises the attention flag, so
+  plain shells stop producing false alerts. A pane whose process exits is
+  marked DONE.
+
 ## [2.0.0] - 2026-07-19
 
 ### Added
