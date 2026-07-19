@@ -4,16 +4,19 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.0.2 Highlights
+## 2.1.0 Highlights
 
-- **Signed & notarized macOS installer**: wtmux for macOS now ships as a Developer ID signed, notarized `.pkg` that installs to `/usr/local/bin/wtmux` and passes Gatekeeper offline.
-- **Fix**: overlays such as the agent dashboard (`Prefix + g`) no longer disappear when the mouse moves — only a click (or their usual keys) dismisses them.
-- From 2.0.1: **herdr-style agent states** (WORKING / BLOCKED / DONE / IDLE, no more false alerts from plain shells) and the **agent dashboard** (`Prefix + g`, status-bar summary like `2W 1B 1D`).
-- From 2.0.0: **macOS / Linux support** (POSIX pty backend, `$SHELL`, `~/.config/wtmux/config.toml`), pane activity monitoring with `Prefix + a` jump, and input broadcast with `Prefix + e` (`[SYNC]`).
+- **Command prompt (`Prefix + :`)**: tmux-style commands (`split-window`, `rename-window`, `select-layout`, `set synchronize-panes`, ...) with the usual abbreviations.
+- **Scripting CLI**: `wtmux send-keys` and `wtmux capture-pane` drive a running instance from outside — inject keystrokes into any pane and read its screen or scrollback back. Built for orchestrating AI agents in panes.
+- **`display-popup`**: a centered floating pane running a command (tmux 3.2 style), from the command prompt or the CLI.
+- **Agent state hooks (`[hooks]`)**: run a command (e.g. a Windows toast) the moment a pane's agent state changes to WORKING / BLOCKED / DONE / IDLE.
+- **`wtmux report-state`**: agent CLIs (e.g. Claude Code hooks) report their pane's ground-truth state, overriding the heuristics.
+- **Pane output logging** (`Prefix + Shift+P`, tmux `pipe-pane` analog) with a `[LOG]` status indicator.
+- From 2.0.2: signed & notarized macOS installer; overlay dismiss fix.
 
 ## Features
 
@@ -218,11 +221,43 @@ In copy mode:
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+B, :` | Command prompt (tmux-style commands, see below) |
 | `Ctrl+B, t` | Theme selector |
 | `Esc` in theme selector | Cancel theme selector |
 | `Ctrl+B, r` | Reset cursor shape |
+| `Ctrl+B, Shift+P` | Toggle output logging for the focused pane (`[LOG]`) |
 | `Ctrl+B, b` | Send Ctrl+B to application |
 | `Esc` | Cancel prefix mode |
+
+### Command Prompt
+
+`Ctrl+B, :` opens a tmux-style command prompt on the status bar. Supported
+commands (tmux abbreviations in parentheses):
+
+| Command | Action |
+|---------|--------|
+| `split-window [-h]` (`splitw`) | Split pane; `-h` = left/right |
+| `new-window` (`neww`) | Create window |
+| `kill-pane` (`killp`) / `kill-window` (`killw`) | Kill pane / window |
+| `next-window` / `previous-window` / `last-window` (`next` / `prev` / `last`) | Switch window |
+| `select-window -t <n>` (`selectw`) | Select window by number |
+| `rename-window <name>` (`renamew`) | Rename window |
+| `select-layout <preset>` (`selectl`) | Apply layout preset |
+| `resize-pane -Z` | Toggle pane zoom |
+| `set synchronize-panes [on\|off]` | Input broadcast |
+| `pipe-pane` | Toggle pane output logging |
+| `display-popup [command]` (`popup`) | Open a floating popup pane |
+
+Results and errors appear as a transient message on the status bar.
+
+### Popup (display-popup)
+
+`:display-popup [command]` — or `wtmux display-popup [command...]` from any
+shell — opens a centered floating pane (60% of the terminal) running the
+command, or your default shell. All input goes to the popup; it closes when
+the command exits. `Ctrl+B, x` force-closes a stuck popup. Note: the command
+is spawned directly, so shell built-ins need an explicit shell
+(e.g. `display-popup cmd /c dir`).
 
 ### Command History
 
@@ -344,6 +379,11 @@ blink = true
 # Scrollback buffer
 [scrollback]
 lines = 10000
+
+# Agent state hooks (see "AI Agent Integration" below)
+[hooks]
+# on_agent_blocked = "powershell -NoProfile -Command \"...notify...\""
+# on_agent_done = ""
 ```
 
 The `[keybindings]` section currently controls these non-prefix shortcuts:
@@ -375,6 +415,86 @@ the history selector (`Ctrl+R` by default), scrollback navigation, keyboard sele
 - `gruvbox` - Gruvbox Dark
 - `tokyo-night` - Tokyo Night
 
+## AI Agent Integration
+
+wtmux monitors every pane and classifies it herdr-style as WORKING / BLOCKED /
+DONE / IDLE (`Prefix + g` opens the agent dashboard). Three features build on
+this for running AI coding agents in panes:
+
+### Agent state hooks
+
+Run a command whenever a pane's state changes — e.g. raise a Windows toast the
+moment a background agent blocks on a permission prompt:
+
+```toml
+# %LOCALAPPDATA%\wtmux\config.toml
+[hooks]
+on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE is waiting for input\""'
+# on_agent_working / on_agent_done / on_agent_idle are also available
+```
+
+Hooks run detached (`cmd /C` on Windows, `sh -c` elsewhere) and receive the
+context via environment variables: `WTMUX_HOOK_STATE`, `WTMUX_HOOK_PREV_STATE`,
+`WTMUX_HOOK_PANE` (`<window>.<pane>`), `WTMUX_HOOK_WINDOW`, `WTMUX_HOOK_TITLE`.
+
+### Ground-truth state reporting (`wtmux report-state`)
+
+By default pane states are inferred from output heuristics. Tools running
+inside a pane can instead report the state directly:
+
+```bash
+wtmux report-state blocked     # the calling pane, via WTMUX_PID / WTMUX_PANE
+wtmux report-state -t 1.2 done # explicit <window>.<pane> target
+```
+
+This pairs naturally with agent CLIs that have their own hook systems. For
+example, Claude Code hooks can report precise states:
+
+```json
+{
+  "hooks": {
+    "Notification": [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked" }] }],
+    "Stop":         [{ "hooks": [{ "type": "command", "command": "wtmux report-state done" }] }]
+  }
+}
+```
+
+Reported states override the heuristics (until new output arrives), update the
+dashboard / status bar / attention flags, and fire `[hooks]` commands.
+
+### Scripting a running instance (`send-keys` / `capture-pane`)
+
+External tools — orchestrators, scripts, or another AI agent — can drive a
+running wtmux:
+
+```bash
+# Type a command into pane 2 of window 1 and run it
+wtmux send-keys -t 1.2 "cargo test" Enter
+
+# Read back what that pane shows (visible screen; -S - adds full scrollback)
+wtmux capture-pane -p -t 1.2
+wtmux capture-pane -p -t 1.2 -S -
+
+# Open a popup in the running instance
+wtmux display-popup "cmd /c dir"
+```
+
+`send-keys` understands tmux key names (`Enter`, `Escape`, `Tab`, `Space`,
+`BSpace`, `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`, `PageDown`,
+`C-x`, `M-x`); anything else is sent literally. Without `-t`, the calling
+pane (via `WTMUX_PANE`) or the focused pane is targeted. With a single wtmux
+running, the instance is found automatically; otherwise pass `--pid <pid>`
+(see `wtmux list-clients`). This pairs with `report-state` to build
+claude-squad-style agent orchestration on top of wtmux.
+
+### Pane output logging (tmux `pipe-pane` analog)
+
+`Prefix + Shift+P` toggles logging of the focused pane's raw output stream to
+`%LOCALAPPDATA%\wtmux\logs\wtmux-<pid>-<window>.<pane>-<epoch>.log`. The
+status bar shows `[LOG]` while logging is active. Useful for auditing or
+replaying an agent's session; the log contains the exact bytes including
+escape sequences (strip them with e.g. `sed -r 's/\x1b\[[0-9;]*[a-zA-Z]//g'`).
+
 ## Detecting wtmux from Shell
 
 wtmux sets environment variables that child processes can detect:
@@ -393,6 +513,13 @@ if ($env:WTMUX) { "Running in wtmux" }
 # bash/WSL
 [ -n "$WTMUX" ] && echo "Running in wtmux"
 ```
+
+| Variable | Meaning |
+|----------|---------|
+| `WTMUX` | `1` when running inside wtmux |
+| `WTMUX_VERSION` | wtmux version |
+| `WTMUX_PID` | Process id of the wtmux instance (target for `wtmux report-state`) |
+| `WTMUX_PANE` | `<window>.<pane>` id of the pane the process runs in |
 
 ## Mouse Support
 

@@ -45,6 +45,18 @@ pub enum LayoutType {
 }
 
 impl LayoutType {
+    /// Parse a tmux layout preset name.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "even-horizontal" => Some(LayoutType::EvenHorizontal),
+            "even-vertical" => Some(LayoutType::EvenVertical),
+            "main-horizontal" => Some(LayoutType::MainHorizontal),
+            "main-vertical" => Some(LayoutType::MainVertical),
+            "tiled" => Some(LayoutType::Tiled),
+            _ => None,
+        }
+    }
+
     /// Get next layout type
     pub fn next(self) -> Self {
         match self {

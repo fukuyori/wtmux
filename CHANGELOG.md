@@ -1,3 +1,46 @@
+## [2.1.0] - 2026-07-20
+
+### Added
+
+- **Command prompt (`Prefix + :`)**: tmux-style command line on the status
+  bar. Supports `split-window [-h]`, `new-window`, `kill-pane`,
+  `kill-window`, `next-`/`previous-`/`last-window`, `select-window -t <n>`,
+  `rename-window <name>`, `select-layout <preset>`, `resize-pane -Z`,
+  `set synchronize-panes [on|off]`, `pipe-pane`, and
+  `display-popup [command]`, including the usual tmux abbreviations
+  (`splitw`, `neww`, `killp`, ...). Results and errors appear as a
+  transient status-bar message.
+- **`wtmux send-keys` / `wtmux capture-pane` CLI**: drive a running
+  instance from outside — `wtmux send-keys -t 1.2 "cargo test" Enter`
+  injects keys (with tmux key names like `Enter`, `Escape`, `C-c`, `Up`),
+  `wtmux capture-pane -p [-S -]` prints a pane's screen (or full
+  scrollback) to stdout. Targets default to the calling pane inside wtmux
+  (`WTMUX_PANE`), or the focused pane; the instance is auto-selected when
+  only one is running (`--pid` otherwise). Designed for orchestrating AI
+  agents running in panes.
+- **`display-popup`**: a centered floating pane running a command (default:
+  your shell), tmux 3.2 style. Closes when the command exits;
+  `Prefix, x` force-closes a stuck popup. Available from the command
+  prompt (`:display-popup [command]`) and the CLI
+  (`wtmux display-popup [command...]`).
+
+- **Agent state hooks (`[hooks]`)**: config commands run (detached) when a
+  pane's agent state changes — `on_agent_working`, `on_agent_blocked`,
+  `on_agent_done`, `on_agent_idle`. The transition context is passed via
+  `WTMUX_HOOK_*` environment variables, enabling e.g. a Windows toast the
+  moment a background agent blocks on a question.
+- **`wtmux report-state` CLI**: reports a pane's ground-truth agent state
+  (`idle` / `working` / `blocked` / `done`) to the running instance,
+  overriding the output heuristics. Designed to be called from an agent
+  CLI's own hooks (e.g. Claude Code Stop / Notification hooks); targets the
+  calling pane automatically via the new `WTMUX_PID` / `WTMUX_PANE`
+  environment variables (override with `--pid` / `-t <window>.<pane>`).
+  Reported transitions also fire `[hooks]` commands.
+- **Pane output logging (tmux `pipe-pane` analog)**: `Prefix + Shift+P`
+  toggles logging of the focused pane's raw output to
+  `<data-dir>/logs/wtmux-<pid>-<window>.<pane>-<epoch>.log`; the status bar
+  shows `[LOG]` while active.
+
 ## [2.0.2] - 2026-07-20
 
 ### Added

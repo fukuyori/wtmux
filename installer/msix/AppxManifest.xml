@@ -10,7 +10,7 @@
   <Identity
     Name="J-LIS.wtmux"
     Publisher="CN=5EF2DE34-8C4A-42F6-9955-D951EB8F20B7"
-    Version="2.0.2.0"
+    Version="2.1.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>

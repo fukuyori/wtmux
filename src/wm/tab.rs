@@ -106,8 +106,9 @@ impl Tab {
         // Create pane with Single border (will be confirmed by reflow)
         let mut new_pane = Pane::new(new_pane_id, *new_width, *new_height);
         new_pane.border = BorderStyle::Single;
-        
+
         // Start the session
+        super::manager::set_pane_spawn_env(self.id, new_pane_id);
         if let Err(e) = new_pane.session.start_with_options(shell_cmd, codepage, cwd_prompt_hook) {
             eprintln!("Failed to start pane session: {}", e);
             return None;
@@ -499,17 +500,20 @@ impl Tab {
         if self.panes.len() <= 1 {
             return; // No layout change needed for single pane
         }
-        
+        self.set_layout(self.current_layout.next());
+    }
+
+    /// Apply a specific layout preset (tmux select-layout)
+    pub fn set_layout(&mut self, layout_type: LayoutType) {
+        if self.panes.len() <= 1 {
+            return;
+        }
+
         // Unzoom if zoomed
         self.zoomed_pane = None;
-        
-        // Switch to next layout type
-        self.current_layout = self.current_layout.next();
-        
-        // Rebuild layout with new type
+
+        self.current_layout = layout_type;
         self.layout = Layout::from_preset(self.current_layout, &self.pane_order);
-        
-        // Update pane positions
         self.reflow(ReflowReason::LayoutChanged);
     }
 }

@@ -164,3 +164,25 @@ enabled = true
 # How long a background pane must stay quiet after producing output before
 # it is flagged as needing attention (milliseconds)
 quiet_threshold_ms = 2000
+
+# ============================================================================
+# Agent state hooks
+# ============================================================================
+# Shell commands run (detached) whenever a pane's agent state changes to the
+# given state. Empty string / omitted = disabled. Commands run via `cmd /C`
+# on Windows and `sh -c` elsewhere, with the transition context in
+# environment variables:
+#   WTMUX_HOOK_STATE       new state (WORKING / BLOCKED / DONE / IDLE)
+#   WTMUX_HOOK_PREV_STATE  previous state
+#   WTMUX_HOOK_PANE        "<window>.<pane>" (e.g. "1.2")
+#   WTMUX_HOOK_WINDOW      window name
+#   WTMUX_HOOK_TITLE       pane title
+#
+# Example: Windows toast when an agent blocks on a question
+# (requires the BurntToast PowerShell module):
+#   on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE is waiting for input\""'
+[hooks]
+# on_agent_working = ""
+# on_agent_blocked = ""
+# on_agent_done = ""
+# on_agent_idle = ""

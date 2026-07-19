@@ -137,7 +137,12 @@ pub struct WmRenderer {
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
     /// with wrong cell widths.
     pub suppress_bold: bool,
+    /// Transient message shown over the status bar (command prompt results)
+    status_message: Option<(String, std::time::Instant)>,
 }
+
+/// How long a transient status message stays visible.
+const STATUS_MESSAGE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Optional UI layer rendered over the window-manager scene.
 ///
@@ -155,6 +160,10 @@ pub enum WmOverlay<'a> {
     WindowSelector(&'a WindowSelector),
     AgentDashboard(&'a AgentDashboard),
     ContextMenu(&'a ContextMenu),
+    /// tmux-style command prompt (`Prefix + :`) on the status bar row
+    CommandPrompt(&'a str),
+    /// Floating popup pane (display-popup)
+    Popup(&'a Pane),
 }
 
 #[derive(Clone, PartialEq)]
@@ -177,6 +186,7 @@ impl WmRenderer {
             last_generation: 0,
             cursor: CursorPresenter::default(),
             suppress_bold: false,
+            status_message: None,
         }
     }
 
@@ -188,7 +198,28 @@ impl WmRenderer {
             last_generation: 0,
             cursor: CursorPresenter::default(),
             suppress_bold: false,
+            status_message: None,
         }
+    }
+
+    /// Show a transient message over the status bar (auto-hides after a few
+    /// seconds).
+    pub fn set_status_message(&mut self, message: String) {
+        self.status_message = Some((message, std::time::Instant::now()));
+    }
+
+    /// Expire a stale status message. Returns true when it was just cleared
+    /// (the caller should re-render to erase it).
+    pub fn tick_status_message(&mut self) -> bool {
+        if self
+            .status_message
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= STATUS_MESSAGE_TTL)
+        {
+            self.status_message = None;
+            return true;
+        }
+        false
     }
 
     /// Set keyboard shortcut labels used by the status bar.
@@ -311,13 +342,26 @@ impl WmRenderer {
                     Some(WmOverlay::ContextMenu(menu)) => {
                         self.render_context_menu(out, menu)?;
                     }
+                    Some(WmOverlay::CommandPrompt(buffer)) => {
+                        self.render_command_prompt(out, wm, buffer)?;
+                    }
+                    Some(WmOverlay::Popup(pane)) => {
+                        self.render_popup(out, pane)?;
+                    }
                     Some(WmOverlay::CopyMode(_)) | None => {}
+                }
+
+                if let Some(message) = self.active_status_message() {
+                    if !matches!(overlay, Some(WmOverlay::CommandPrompt(_))) {
+                        self.render_status_message(out, wm, &message)?;
+                    }
                 }
             }
 
             match overlay.as_ref() {
                 None => self.cursor.show_focused_pane_cursor(out, wm)?,
                 Some(WmOverlay::History(_)) => {}
+                Some(WmOverlay::Popup(pane)) => self.position_popup_cursor(out, pane)?,
                 Some(_) => queue!(out, Show)?,
             }
             Ok(())
@@ -550,6 +594,87 @@ impl WmRenderer {
         write!(stdout, "┘")?;
 
         execute!(stdout, ResetColor)?;
+        Ok(())
+    }
+
+    /// The status message if it has not expired yet (cloned so callers can
+    /// keep using `&mut self`).
+    fn active_status_message(&self) -> Option<String> {
+        self.status_message
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < STATUS_MESSAGE_TTL)
+            .map(|(message, _)| message.clone())
+    }
+
+    /// Render a transient message over the status bar row.
+    fn render_status_message<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        message: &str,
+    ) -> io::Result<()> {
+        let cs = &self.color_scheme;
+        let row = wm.height.saturating_sub(1);
+        let width = wm.width as usize;
+        execute!(
+            stdout,
+            MoveTo(0, row),
+            SetBackgroundColor(cs.status_prefix_bg.to_crossterm()),
+            SetForegroundColor(cs.status_prefix_fg.to_crossterm())
+        )?;
+        let text = truncate_to_display_width(message, width);
+        let padding = width.saturating_sub(str_display_width(&text));
+        write!(stdout, "{}{:padding$}", text, "", padding = padding)?;
+        execute!(stdout, ResetColor)?;
+        Ok(())
+    }
+
+    /// Render the command prompt (`Prefix + :`) on the status bar row.
+    fn render_command_prompt<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        buffer: &str,
+    ) -> io::Result<()> {
+        let cs = &self.color_scheme;
+        let row = wm.height.saturating_sub(1);
+        let width = wm.width as usize;
+        execute!(
+            stdout,
+            MoveTo(0, row),
+            SetBackgroundColor(cs.status_bar_bg.to_crossterm()),
+            SetForegroundColor(cs.status_bar_fg.to_crossterm())
+        )?;
+        // Keep the tail visible while typing long commands
+        let input = truncate_tail_to_display_width(buffer, width.saturating_sub(2));
+        let text = format!(":{}", input);
+        let padding = width.saturating_sub(str_display_width(&text));
+        write!(stdout, "{}{:padding$}", text, "", padding = padding)?;
+        // Leave the real cursor at the input position; render_scene shows it
+        execute!(
+            stdout,
+            MoveTo(str_display_width(&text) as u16, row),
+            ResetColor
+        )?;
+        Ok(())
+    }
+
+    /// Render the floating popup pane over the scene.
+    fn render_popup<W: Write>(&self, stdout: &mut W, pane: &Pane) -> io::Result<()> {
+        // Popup panes float above other content, so always paint every row
+        self.render_pane(stdout, pane, 0, true)
+    }
+
+    /// Place the terminal cursor at the popup's cursor position.
+    fn position_popup_cursor<W: Write>(&self, stdout: &mut W, pane: &Pane) -> io::Result<()> {
+        let cursor = pane.session.state.active_cursor();
+        if cursor.visible {
+            let (inner_x, inner_y) = pane.inner_pos();
+            let (inner_w, inner_h) = pane.inner_size();
+            let col = cursor.col.min(inner_w.saturating_sub(1));
+            let row = cursor.row.min(inner_h.saturating_sub(1));
+            queue!(stdout, MoveTo(inner_x + col, inner_y + row), Show)?;
+        }
         Ok(())
     }
 

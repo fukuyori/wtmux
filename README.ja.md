@@ -4,16 +4,19 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.0.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.0.2 の主な変更
+## 2.1.0 の主な変更
 
-- **署名・公証済み macOS インストーラ**: macOS 版は Developer ID で署名し Apple の公証を取得した `.pkg` で配布するようになりました。`/usr/local/bin/wtmux` にインストールされ、オフラインでも Gatekeeper を通過します。
-- **修正**: エージェントダッシュボード（`Prefix + g`）などのオーバーレイが、マウスを動かしただけで閉じてしまう問題を修正しました。クリック（または通常のキー操作）でのみ閉じます。
-- 2.0.1 より: **herdr 風エージェント状態**（WORKING / BLOCKED / DONE / IDLE、シェルだけのペインでの誤通知解消）と **エージェントダッシュボード**（`Prefix + g`、ステータスバーの `2W 1B 1D` 集計）。
-- 2.0.0 より: **macOS / Linux 対応**（POSIX pty バックエンド、`$SHELL`、`~/.config/wtmux/config.toml`）、`Prefix + a` の要注意ペインジャンプ、`Prefix + e` の入力ブロードキャスト（`[SYNC]`）。
+- **コマンドプロンプト（`Prefix + :`）**: tmuxスタイルのコマンド入力（`split-window`、`rename-window`、`select-layout`、`set synchronize-panes` など、省略形にも対応）。
+- **スクリプト操作CLI**: `wtmux send-keys` と `wtmux capture-pane` で実行中のwtmuxを外部から操作 — 任意のペインへのキー注入と、画面/スクロールバックのテキスト取得。ペインで動くAIエージェントのオーケストレーション向け。
+- **`display-popup`**: 画面中央のフローティングペインでコマンドを実行（tmux 3.2スタイル）。コマンドプロンプトとCLIの両方から。
+- **エージェント状態フック（`[hooks]`）**: ペインの状態が WORKING / BLOCKED / DONE / IDLE に変化した瞬間にコマンド実行（Windowsトースト通知など）。
+- **`wtmux report-state`**: エージェントCLI（Claude Code hooksなど）がペインの確定状態を報告し、ヒューリスティクスを上書き。
+- **ペイン出力ログ**（`Prefix + Shift+P`、tmux `pipe-pane` 相当）と `[LOG]` インジケータ。
+- 2.0.2 より: 署名・公証済み macOS インストーラ、オーバーレイの誤クローズ修正。
 
 ## 特徴
 
@@ -215,11 +218,42 @@ wtmux --help
 
 | キー | 動作 |
 |-----|--------|
+| `Ctrl+B, :` | コマンドプロンプト（tmuxスタイルのコマンド入力、下記参照） |
 | `Ctrl+B, t` | テーマ選択 |
 | テーマ選択中の `Esc` | テーマ選択をキャンセル |
 | `Ctrl+B, r` | カーソル形状をリセット |
+| `Ctrl+B, Shift+P` | フォーカスペインの出力ログを切り替え（`[LOG]`） |
 | `Ctrl+B, b` | アプリケーションにCtrl+Bを送信 |
 | `Esc` | プレフィックスモードをキャンセル |
+
+### コマンドプロンプト
+
+`Ctrl+B, :` でステータスバー上にtmuxスタイルのコマンドプロンプトが開きます。
+対応コマンド（括弧内はtmux互換の省略形）：
+
+| コマンド | 動作 |
+|---------|------|
+| `split-window [-h]`（`splitw`） | ペイン分割。`-h` で左右分割 |
+| `new-window`（`neww`） | ウィンドウ作成 |
+| `kill-pane`（`killp`）/ `kill-window`（`killw`） | ペイン / ウィンドウを閉じる |
+| `next-window` / `previous-window` / `last-window`（`next` / `prev` / `last`） | ウィンドウ切り替え |
+| `select-window -t <n>`（`selectw`） | 番号でウィンドウ選択 |
+| `rename-window <名前>`（`renamew`） | ウィンドウ名変更 |
+| `select-layout <プリセット>`（`selectl`） | レイアウト適用 |
+| `resize-pane -Z` | ペインズーム切り替え |
+| `set synchronize-panes [on\|off]` | 入力ブロードキャスト |
+| `pipe-pane` | ペイン出力ログの切り替え |
+| `display-popup [コマンド]`（`popup`） | フローティングポップアップを開く |
+
+実行結果やエラーはステータスバーに数秒間表示されます。
+
+### ポップアップ（display-popup）
+
+`:display-popup [コマンド]`（または任意のシェルから `wtmux display-popup [コマンド...]`）で、
+画面中央（端末の60%）にフローティングペインを開いてコマンド（省略時はデフォルトシェル）を
+実行します。入力はすべてポップアップに送られ、コマンドの終了で自動的に閉じます。
+固まった場合は `Ctrl+B, x` で強制クローズできます。コマンドは直接spawnされるため、
+シェル組み込みコマンドは明示的にシェル経由で指定してください（例: `display-popup cmd /c dir`）。
 
 ### 履歴機能
 
@@ -293,6 +327,11 @@ blink = true
 # スクロールバックバッファ
 [scrollback]
 lines = 10000
+
+# エージェント状態フック（下の「AIエージェント連携」を参照）
+[hooks]
+# on_agent_blocked = "powershell -NoProfile -Command \"...通知...\""
+# on_agent_done = ""
 ```
 
 `[keybindings]` セクションでは、履歴検索（デフォルト `Ctrl+R`）、スクロールバック移動、
@@ -323,6 +362,88 @@ lines = 10000
 - `gruvbox` - Gruvbox Dark
 - `tokyo-night` - Tokyo Night
 
+## AIエージェント連携
+
+wtmuxは全ペインを監視し、herdrスタイルで WORKING / BLOCKED / DONE / IDLE に
+分類します（`Prefix + g` でエージェントダッシュボードを表示）。この上に、
+ペインでAIコーディングエージェントを走らせるための3つの機能があります。
+
+### エージェント状態フック
+
+ペインの状態が変化した瞬間にコマンドを実行できます。例えば、バックグラウンドの
+エージェントが許可待ちでブロックしたらWindowsトースト通知を出す：
+
+```toml
+# %LOCALAPPDATA%\wtmux\config.toml
+[hooks]
+on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE が入力待ちです\""'
+# on_agent_working / on_agent_done / on_agent_idle も利用可能
+```
+
+フックはデタッチ実行され（Windowsは `cmd /C`、それ以外は `sh -c`）、
+遷移コンテキストは環境変数で渡されます: `WTMUX_HOOK_STATE`、
+`WTMUX_HOOK_PREV_STATE`、`WTMUX_HOOK_PANE`（`<ウィンドウ>.<ペイン>`）、
+`WTMUX_HOOK_WINDOW`、`WTMUX_HOOK_TITLE`。
+
+### 状態の直接報告（`wtmux report-state`）
+
+ペインの状態は通常、出力のヒューリスティクスから推定されますが、ペイン内で
+動くツールが確定情報として直接報告することもできます：
+
+```bash
+wtmux report-state blocked     # 呼び出し元ペイン（WTMUX_PID / WTMUX_PANE 経由）
+wtmux report-state -t 1.2 done # <ウィンドウ>.<ペイン> を明示指定
+```
+
+フック機構を持つエージェントCLIとの相性が良く、例えばClaude Codeのhooksから
+正確な状態を報告できます：
+
+```json
+{
+  "hooks": {
+    "Notification": [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked" }] }],
+    "Stop":         [{ "hooks": [{ "type": "command", "command": "wtmux report-state done" }] }]
+  }
+}
+```
+
+報告された状態はヒューリスティクスより優先され（新しい出力が来るまで）、
+ダッシュボード・ステータスバー・注意フラグに反映され、`[hooks]` コマンドも
+発火します。
+
+### 実行中インスタンスのスクリプト操作（`send-keys` / `capture-pane`）
+
+外部ツール — オーケストレータ、スクリプト、別のAIエージェント — から
+実行中のwtmuxを操作できます：
+
+```bash
+# ウィンドウ1のペイン2にコマンドを入力して実行
+wtmux send-keys -t 1.2 "cargo test" Enter
+
+# そのペインの表示内容を取得（-S - でスクロールバック全体も）
+wtmux capture-pane -p -t 1.2
+wtmux capture-pane -p -t 1.2 -S -
+
+# 実行中インスタンスにポップアップを開く
+wtmux display-popup "cmd /c dir"
+```
+
+`send-keys` はtmuxのキー名（`Enter`、`Escape`、`Tab`、`Space`、`BSpace`、
+`Up`/`Down`/`Left`/`Right`、`Home`、`End`、`PageUp`、`PageDown`、`C-x`、`M-x`）を
+解釈し、それ以外はそのまま送信します。`-t` 省略時は呼び出し元ペイン
+（`WTMUX_PANE` 経由）またはフォーカスペインが対象です。wtmuxが1つだけ動いている場合は
+インスタンスを自動選択、複数ある場合は `--pid <pid>` を指定してください
+（`wtmux list-clients` で確認できます）。`report-state` と組み合わせると、
+wtmuxの上にclaude-squad型のエージェントオーケストレーションを構築できます。
+
+### ペイン出力ログ（tmux `pipe-pane` 相当）
+
+`Prefix + Shift+P` でフォーカスペインの生出力ストリームのログを
+`%LOCALAPPDATA%\wtmux\logs\wtmux-<pid>-<ウィンドウ>.<ペイン>-<epoch>.log`
+に記録します。記録中はステータスバーに `[LOG]` が表示されます。エージェントの
+セッションの監査やリプレイに便利です。ログにはエスケープシーケンスを含む
+生バイトが記録されます（`sed -r 's/\x1b\[[0-9;]*[a-zA-Z]//g'` などで除去可能）。
+
 ## シェルからwtmuxを検出する
 
 wtmuxは子プロセスが検出できる環境変数を設定します：
@@ -341,6 +462,13 @@ if ($env:WTMUX) { "wtmux内で実行中" }
 # bash/WSL
 [ -n "$WTMUX" ] && echo "wtmux内で実行中"
 ```
+
+| 変数 | 意味 |
+|------|------|
+| `WTMUX` | wtmux内で実行中なら `1` |
+| `WTMUX_VERSION` | wtmuxのバージョン |
+| `WTMUX_PID` | wtmuxインスタンスのプロセスID（`wtmux report-state` の宛先） |
+| `WTMUX_PANE` | プロセスが動いているペインの `<ウィンドウ>.<ペイン>` ID |
 
 ## マウスサポート
 

@@ -66,6 +66,8 @@ pub struct Session {
     parser: VtParser,
     /// Optional VT byte trace writer (enabled with --vt-trace)
     vt_trace: Option<BufWriter<std::fs::File>>,
+    /// Optional raw output log (tmux pipe-pane analog), toggled at runtime
+    pipe_log: Option<(std::path::PathBuf, BufWriter<std::fs::File>)>,
     /// Tail of an incomplete UTF-8 sequence left over from the previous
     /// `feed_bytes` call. PTY reads arrive in arbitrary-sized chunks, so a
     /// multi-byte character can be split across two reads; its leading bytes
@@ -96,6 +98,7 @@ impl Session {
             state: TerminalState::new(cols, rows),
             parser: VtParser::new(),
             vt_trace: None,
+            pipe_log: None,
             utf8_pending: Vec::new(),
             pty: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -116,6 +119,33 @@ impl Session {
             .open(path)?;
         self.vt_trace = Some(BufWriter::new(file));
         Ok(())
+    }
+
+    /// Start logging raw PTY output to a file (tmux pipe-pane analog).
+    /// The log receives the exact byte stream, including escape sequences.
+    pub fn start_pipe_log(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        self.pipe_log = Some((path.to_path_buf(), BufWriter::new(file)));
+        Ok(())
+    }
+
+    /// Stop the pipe log, returning the path it was writing to.
+    pub fn stop_pipe_log(&mut self) -> Option<std::path::PathBuf> {
+        self.pipe_log.take().map(|(path, mut writer)| {
+            let _ = writer.flush();
+            path
+        })
+    }
+
+    /// Whether a pipe log is currently attached.
+    pub fn pipe_log_active(&self) -> bool {
+        self.pipe_log.is_some()
     }
 
     /// Start the session with a shell command
@@ -281,6 +311,12 @@ impl Session {
     /// were written as visible characters even when the parser was inside a
     /// string-body state (DCS, APC, …) that should consume them silently.
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
+        // Pipe log: raw byte stream, flushed per chunk so `tail -f` works
+        if let Some((_, ref mut w)) = self.pipe_log {
+            let _ = w.write_all(bytes);
+            let _ = w.flush();
+        }
+
         // VT trace: write raw bytes in hex + printable-ASCII annotation
         if let Some(ref mut w) = self.vt_trace {
             // Header: byte offset + hex dump
@@ -629,6 +665,36 @@ mod tests {
 
         assert!(!session.process_output().unwrap());
         assert!(!session.is_settling());
+    }
+
+    #[test]
+    fn pipe_log_captures_raw_output_bytes_only_while_active() {
+        let path = std::env::temp_dir()
+            .join("wtmux_pipe_log_test")
+            .join(format!("pane-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut session = Session::new(0, 80, 24);
+        session.feed_bytes(b"before logging\r\n");
+
+        session.start_pipe_log(&path).unwrap();
+        assert!(session.pipe_log_active());
+        session.feed_bytes(b"hello \x1b[31mred\x1b[0m\r\n");
+
+        let logged = std::fs::read(&path).unwrap();
+        assert_eq!(
+            logged, b"hello \x1b[31mred\x1b[0m\r\n",
+            "log holds exactly the bytes fed while active, escapes included"
+        );
+
+        assert_eq!(session.stop_pipe_log().as_deref(), Some(path.as_path()));
+        assert!(!session.pipe_log_active());
+        session.feed_bytes(b"after logging\r\n");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            logged,
+            "nothing is appended after the log is stopped"
+        );
     }
 
     #[test]

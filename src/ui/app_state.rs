@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::copymode::CopyMode;
 use crate::history::HistorySelector;
-use crate::wm::WindowManager;
+use crate::wm::{Pane, WindowManager};
 
 use super::{AgentDashboard, ContextMenu, WindowSelector, WmOverlay, WmRenderer};
 
@@ -19,6 +19,8 @@ pub(crate) enum UiMode {
     CopyMode,
     Rename,
     ContextMenu,
+    CommandPrompt,
+    Popup,
 }
 
 pub(crate) struct WmAppState {
@@ -31,6 +33,12 @@ pub(crate) struct WmAppState {
     pub(crate) copy_mode: CopyMode,
     pub(crate) rename_buffer: String,
     pub(crate) context_menu: ContextMenu,
+    /// Input buffer for the command prompt (`Prefix + :`)
+    pub(crate) command_buffer: String,
+    /// Floating popup pane (display-popup), if open
+    pub(crate) popup: Option<Pane>,
+    /// Prefix key pressed while the popup has focus (for `Prefix, x` kill)
+    pub(crate) popup_prefix: bool,
 }
 
 impl WmAppState {
@@ -45,6 +53,9 @@ impl WmAppState {
             copy_mode: CopyMode::new(),
             rename_buffer: String::new(),
             context_menu: ContextMenu::new(),
+            command_buffer: String::new(),
+            popup: None,
+            popup_prefix: false,
         }
     }
 
@@ -62,7 +73,19 @@ impl WmAppState {
         self.copy_mode.exit();
         self.rename_buffer.clear();
         self.context_menu.hide();
+        self.command_buffer.clear();
+        self.popup = None;
+        self.popup_prefix = false;
         self.mode = UiMode::Normal;
+    }
+
+    /// Close only the popup, leaving other state alone.
+    pub(crate) fn close_popup(&mut self) {
+        self.popup = None;
+        self.popup_prefix = false;
+        if self.mode == UiMode::Popup {
+            self.mode = UiMode::Normal;
+        }
     }
 
     pub(crate) fn render(
@@ -88,6 +111,8 @@ impl WmAppState {
             UiMode::CopyMode => Some(WmOverlay::CopyMode(&self.copy_mode)),
             UiMode::Rename => Some(WmOverlay::Rename(&self.rename_buffer)),
             UiMode::ContextMenu => Some(WmOverlay::ContextMenu(&self.context_menu)),
+            UiMode::CommandPrompt => Some(WmOverlay::CommandPrompt(&self.command_buffer)),
+            UiMode::Popup => self.popup.as_ref().map(WmOverlay::Popup),
         };
         renderer.render_scene(wm, overlay)
     }

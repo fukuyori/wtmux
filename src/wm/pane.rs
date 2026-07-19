@@ -41,6 +41,17 @@ impl AgentState {
             AgentState::Done => "DONE",
         }
     }
+
+    /// Parse a state name as accepted by `wtmux report-state`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "idle" => Some(AgentState::Idle),
+            "working" => Some(AgentState::Working),
+            "blocked" => Some(AgentState::Blocked),
+            "done" => Some(AgentState::Done),
+            _ => None,
+        }
+    }
 }
 
 /// What the quiet-transition heuristic saw at the cursor when output stopped.
@@ -147,6 +158,8 @@ pub struct PaneActivity {
     displayed_busy: bool,
     /// herdr-style coarse state (tracked for focused panes too)
     state: AgentState,
+    /// State as of the last `take_state_change` call (hook dispatch)
+    hook_state: AgentState,
 }
 
 impl Default for PaneActivity {
@@ -157,6 +170,7 @@ impl Default for PaneActivity {
             attention: None,
             displayed_busy: false,
             state: AgentState::Idle,
+            hook_state: AgentState::Idle,
         }
     }
 }
@@ -184,6 +198,34 @@ impl PaneActivity {
     /// Record that the pane's process exited.
     pub fn note_exited(&mut self) {
         self.state = AgentState::Done;
+    }
+
+    /// Apply a state reported from outside via `wtmux report-state`
+    /// (e.g. an agent CLI's own hooks). Ground truth beats the heuristics:
+    /// the state is set directly, and an unfocused Blocked/Done pane raises
+    /// the attention flag just like a heuristic quiet-stop would.
+    ///
+    /// A reported Working also refreshes the output clock so the next tick
+    /// does not immediately re-classify the pane as quiet.
+    pub fn report_state(&mut self, state: AgentState, focused: bool) {
+        if state == AgentState::Working {
+            self.last_output = Some(Instant::now());
+        }
+        if !focused && matches!(state, AgentState::Blocked | AgentState::Done) {
+            self.attention.get_or_insert(Attention::Quiet);
+        }
+        self.state = state;
+    }
+
+    /// Return the pending state transition since the last call, if any.
+    /// Used to dispatch `[hooks]` commands exactly once per transition.
+    pub fn take_state_change(&mut self) -> Option<(AgentState, AgentState)> {
+        if self.state == self.hook_state {
+            return None;
+        }
+        let from = self.hook_state;
+        self.hook_state = self.state;
+        Some((from, self.state))
     }
 
     /// Advance time-based transitions. `hint` is what the screen showed at
@@ -477,6 +519,63 @@ mod tests {
         assert_eq!(a.state(), AgentState::Blocked);
         a.note_output(false);
         assert_eq!(a.state(), AgentState::Working);
+    }
+
+    #[test]
+    fn reported_state_beats_heuristics_and_flags_attention() {
+        let mut a = PaneActivity::default();
+        a.report_state(AgentState::Blocked, false);
+        assert_eq!(a.state(), AgentState::Blocked);
+        assert_eq!(a.attention(), Some(Attention::Quiet));
+
+        // Quiet ticks must not re-classify a reported (non-Working) state
+        a.tick(false, QUIET, PromptHint::None);
+        assert_eq!(a.state(), AgentState::Blocked);
+    }
+
+    #[test]
+    fn reported_working_counts_as_fresh_output() {
+        let mut a = PaneActivity::default();
+        a.report_state(AgentState::Working, true);
+        assert!(a.tick(true, Duration::from_secs(60), PromptHint::None));
+        assert!(a.is_busy());
+        assert_eq!(a.state(), AgentState::Working);
+    }
+
+    #[test]
+    fn reported_state_on_focused_pane_raises_no_attention() {
+        let mut a = PaneActivity::default();
+        a.report_state(AgentState::Done, true);
+        assert_eq!(a.state(), AgentState::Done);
+        assert_eq!(a.attention(), None);
+    }
+
+    #[test]
+    fn state_changes_are_drained_once_per_transition() {
+        let mut a = PaneActivity::default();
+        assert_eq!(a.take_state_change(), None, "no transition yet");
+
+        a.note_output(false);
+        assert_eq!(
+            a.take_state_change(),
+            Some((AgentState::Idle, AgentState::Working))
+        );
+        assert_eq!(a.take_state_change(), None, "already drained");
+
+        a.tick(false, QUIET, PromptHint::Question);
+        assert_eq!(
+            a.take_state_change(),
+            Some((AgentState::Working, AgentState::Blocked))
+        );
+    }
+
+    #[test]
+    fn parses_report_state_names() {
+        assert_eq!(AgentState::parse("blocked"), Some(AgentState::Blocked));
+        assert_eq!(AgentState::parse("WORKING"), Some(AgentState::Working));
+        assert_eq!(AgentState::parse("Done"), Some(AgentState::Done));
+        assert_eq!(AgentState::parse("idle"), Some(AgentState::Idle));
+        assert_eq!(AgentState::parse("bogus"), None);
     }
 
     fn state_with_text(lines: &[&str]) -> TerminalState {

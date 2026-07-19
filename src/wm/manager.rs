@@ -57,6 +57,33 @@ pub struct AgentEntry {
     pub is_focused: bool,
 }
 
+/// An agent state transition on one pane, drained by the main loop to
+/// dispatch `[hooks]` commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentStateEvent {
+    /// Tab (window) id the pane lives in
+    pub tab_id: TabId,
+    /// Pane id within the tab
+    pub pane_id: PaneId,
+    /// Window name at the time of the transition
+    pub window_name: String,
+    /// Pane title at the time of the transition
+    pub pane_title: String,
+    /// State before the transition
+    pub from: AgentState,
+    /// State after the transition
+    pub to: AgentState,
+}
+
+/// Set the per-pane environment variables inherited by a pane's child
+/// process. Called immediately before each spawn (spawns happen on the main
+/// thread, so the process-global env is not racy). `WTMUX_PANE` lets tools
+/// inside the pane — e.g. `wtmux report-state` run from an agent's hooks —
+/// address their own pane.
+pub(crate) fn set_pane_spawn_env(tab_id: TabId, pane_id: PaneId) {
+    std::env::set_var("WTMUX_PANE", format!("{}.{}", tab_id, pane_id));
+}
+
 /// A pane entry within a window, for the window selector tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfo {
@@ -202,6 +229,7 @@ impl WindowManager {
         
         // Start session in the initial pane
         if let Some(pane) = tab.focused_pane_mut() {
+            set_pane_spawn_env(tab_id, pane.id);
             let _ = pane.session.start_with_options(
                 self.default_shell.as_deref(),
                 self.default_codepage,
@@ -686,6 +714,15 @@ impl WindowManager {
             let focused_id = tab.focused_pane;
             let zoom_indicator = if tab.is_zoomed() { " [Z]" } else { "" };
             let sync_indicator = if tab.broadcast { " [SYNC]" } else { "" };
+            let log_indicator = if tab
+                .panes
+                .get(&focused_id)
+                .is_some_and(|pane| pane.session.pipe_log_active())
+            {
+                " [LOG]"
+            } else {
+                ""
+            };
             // Agent state summary, e.g. " | 2W 1B 1D" (working/blocked/done)
             let (working, blocked, done) = self.agent_state_counts();
             let mut agents = String::new();
@@ -702,7 +739,7 @@ impl WindowManager {
                 }
             }
             format!(
-                "[{}] {}:{} | Pane {}/{}{}{}{}",
+                "[{}] {}:{} | Pane {}/{}{}{}{}{}",
                 self.active_tab,
                 tab.name,
                 focused_id,
@@ -710,6 +747,7 @@ impl WindowManager {
                 pane_count,
                 zoom_indicator,
                 sync_indicator,
+                log_indicator,
                 agents
             )
         } else {
@@ -969,8 +1007,10 @@ impl WindowManager {
         let shell = self.default_shell.clone();
         let codepage = self.default_codepage;
         let cwd_prompt_hook = self.cwd_prompt_hook;
+        let tab_id = self.active_tab;
         if let Some(tab) = self.active_tab_mut() {
             if let Some(pane) = tab.focused_pane_mut() {
+                set_pane_spawn_env(tab_id, pane.id);
                 pane.session.start_with_options(
                     shell.as_deref(),
                     codepage,
@@ -1075,6 +1115,186 @@ impl WindowManager {
             }
         }
         out
+    }
+
+    /// Drain pending agent state transitions across all panes.
+    /// Each transition is returned exactly once; the main loop uses this to
+    /// dispatch `[hooks]` commands.
+    pub fn drain_agent_state_events(&mut self) -> Vec<AgentStateEvent> {
+        let mut out = Vec::new();
+        for &tab_id in &self.tab_order {
+            let Some(tab) = self.tabs.get_mut(&tab_id) else {
+                continue;
+            };
+            let window_name = tab.name.clone();
+            for &pane_id in &tab.pane_order {
+                let Some(pane) = tab.panes.get_mut(&pane_id) else {
+                    continue;
+                };
+                if let Some((from, to)) = pane.activity.take_state_change() {
+                    out.push(AgentStateEvent {
+                        tab_id,
+                        pane_id,
+                        window_name: window_name.clone(),
+                        pane_title: pane.display_title(),
+                        from,
+                        to,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Apply an agent state reported from outside via `wtmux report-state`.
+    /// Returns true when the pane exists and a render is needed.
+    pub fn apply_reported_state(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        state: AgentState,
+    ) -> bool {
+        let active_tab = self.active_tab;
+        let Some(tab) = self.tabs.get_mut(&tab_id) else {
+            return false;
+        };
+        let focused = tab_id == active_tab && pane_id == tab.focused_pane;
+        let Some(pane) = tab.panes.get_mut(&pane_id) else {
+            return false;
+        };
+        pane.activity.report_state(state, focused);
+        // Repaint so the border / dashboard reflect the reported state
+        pane.session.state.active_screen_mut().full_redraw = true;
+        true
+    }
+
+    /// Apply a specific layout preset to the active window (select-layout).
+    pub fn set_layout_preset(&mut self, layout: crate::wm::layout::LayoutType) {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.set_layout(layout);
+        }
+    }
+
+    /// Resolve a `<window>.<pane>` target string (as published in
+    /// `WTMUX_PANE`) to concrete ids; `None` targets the focused pane of the
+    /// active window.
+    pub fn resolve_target_pane(&self, target: Option<&str>) -> Result<(TabId, PaneId), String> {
+        let (tab_id, pane_id) = match target {
+            None => {
+                let tab_id = self.active_tab;
+                let tab = self.tabs.get(&tab_id).ok_or("no active window")?;
+                (tab_id, tab.focused_pane)
+            }
+            Some(t) => t
+                .split_once('.')
+                .and_then(|(w, p)| Some((w.parse().ok()?, p.parse().ok()?)))
+                .ok_or_else(|| format!("invalid target {t:?}: expected <window>.<pane>"))?,
+        };
+
+        let tab = self
+            .tabs
+            .get(&tab_id)
+            .ok_or_else(|| format!("window {tab_id} not found"))?;
+        if !tab.panes.contains_key(&pane_id) {
+            return Err(format!("pane {tab_id}.{pane_id} not found"));
+        }
+        Ok((tab_id, pane_id))
+    }
+
+    /// Write raw bytes to a specific pane's PTY (send-keys).
+    pub fn write_to_pane(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        let pane = self
+            .tabs
+            .get_mut(&tab_id)
+            .and_then(|tab| tab.panes.get_mut(&pane_id))
+            .ok_or_else(|| format!("pane {tab_id}.{pane_id} not found"))?;
+        pane.session.write(bytes).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Capture a pane's text content (capture-pane): the visible screen, or
+    /// the full scrollback plus the screen. Trailing blank lines and
+    /// per-line trailing spaces are trimmed.
+    pub fn capture_pane_text(
+        &self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        include_scrollback: bool,
+    ) -> Result<String, String> {
+        let pane = self
+            .tabs
+            .get(&tab_id)
+            .and_then(|tab| tab.panes.get(&pane_id))
+            .ok_or_else(|| format!("pane {tab_id}.{pane_id} not found"))?;
+
+        let row_text = |row: &crate::core::term::Row| -> String {
+            row.cells
+                .iter()
+                .filter(|c| !c.is_continuation())
+                .map(|c| c.grapheme.as_str())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+
+        let screen = pane.session.state.active_screen();
+        let mut lines: Vec<String> = Vec::new();
+        if include_scrollback {
+            lines.extend(screen.scrollback.iter().map(row_text));
+        }
+        lines.extend(screen.rows.iter().map(row_text));
+
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        Ok(lines.join("\n"))
+    }
+
+    /// Set input broadcast (synchronize-panes) on the active window to an
+    /// explicit value. Returns the resulting state.
+    pub fn set_broadcast(&mut self, enabled: bool) -> bool {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.broadcast = enabled;
+            tab.broadcast
+        } else {
+            false
+        }
+    }
+
+    /// Toggle pipe-pane style output logging on the focused pane.
+    /// Returns `(enabled, path)` on success, or None when logging could not
+    /// be started (no data dir, file error, no focused pane).
+    pub fn toggle_pipe_log(&mut self) -> Option<(bool, std::path::PathBuf)> {
+        let tab_id = self.active_tab;
+        let tab = self.tabs.get_mut(&tab_id)?;
+        let pane_id = tab.focused_pane;
+        let pane = tab.panes.get_mut(&pane_id)?;
+
+        if pane.session.pipe_log_active() {
+            let path = pane.session.stop_pipe_log()?;
+            return Some((false, path));
+        }
+
+        let epoch_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = crate::config::get_data_dir()?
+            .join("logs")
+            .join(format!(
+                "wtmux-{}-{}.{}-{}.log",
+                std::process::id(),
+                tab_id,
+                pane_id,
+                epoch_secs
+            ));
+        pane.session.start_pipe_log(&path).ok()?;
+        Some((true, path))
     }
 
     /// Count panes per agent state: (working, blocked, done).
@@ -1528,6 +1748,57 @@ mod tests {
 
         assert!(!wm.toggle_broadcast());
         assert!(!wm.broadcast_active());
+    }
+
+    #[test]
+    fn reported_state_overrides_pane_and_emits_hook_event() {
+        let mut wm = test_manager(80);
+        let tab_id = wm.active_tab;
+        let pane_id = wm.tabs.get(&tab_id).unwrap().focused_pane;
+
+        assert!(wm.drain_agent_state_events().is_empty(), "fresh manager");
+
+        assert!(wm.apply_reported_state(tab_id, pane_id, AgentState::Blocked));
+        let events = wm.drain_agent_state_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].from, AgentState::Idle);
+        assert_eq!(events[0].to, AgentState::Blocked);
+        assert_eq!((events[0].tab_id, events[0].pane_id), (tab_id, pane_id));
+        assert!(
+            wm.drain_agent_state_events().is_empty(),
+            "each transition is drained exactly once"
+        );
+
+        // Unknown targets are rejected without panicking
+        assert!(!wm.apply_reported_state(tab_id, 999, AgentState::Done));
+        assert!(!wm.apply_reported_state(999, pane_id, AgentState::Done));
+    }
+
+    #[test]
+    fn capture_pane_resolves_targets_and_returns_screen_text() {
+        let mut wm = test_manager(80);
+        let tab_id = wm.active_tab;
+        let pane_id = wm.tabs.get(&tab_id).unwrap().focused_pane;
+
+        // Default target = focused pane of the active window
+        assert_eq!(
+            wm.resolve_target_pane(None).unwrap(),
+            (tab_id, pane_id)
+        );
+        assert_eq!(
+            wm.resolve_target_pane(Some(&format!("{tab_id}.{pane_id}")))
+                .unwrap(),
+            (tab_id, pane_id)
+        );
+        assert!(wm.resolve_target_pane(Some("9.9")).is_err());
+        assert!(wm.resolve_target_pane(Some("bogus")).is_err());
+
+        let tab = wm.tabs.get_mut(&tab_id).unwrap();
+        let pane = tab.panes.get_mut(&pane_id).unwrap();
+        pane.session.feed_bytes(b"hello world\r\nsecond line  \r\n");
+
+        let text = wm.capture_pane_text(tab_id, pane_id, false).unwrap();
+        assert_eq!(text, "hello world\nsecond line");
     }
 
     #[test]

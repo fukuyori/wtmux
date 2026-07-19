@@ -45,6 +45,7 @@ mod history;
 mod config;
 mod copymode;
 mod tmux_compat;
+mod command_prompt;
 
 use std::env;
 use std::io::Write;
@@ -100,6 +101,7 @@ enum AppAction {
     },
     ToggleBroadcast,
     FocusNextAttention,
+    TogglePipeLog,
 }
 
 impl From<ContextMenuAction> for AppAction {
@@ -776,6 +778,8 @@ fn main() -> anyhow::Result<()> {
     // Set environment variable so child processes can detect wtmux
     env::set_var("WTMUX", "1");
     env::set_var("WTMUX_VERSION", env!("CARGO_PKG_VERSION"));
+    // Lets tools inside panes (e.g. `wtmux report-state`) address this instance
+    env::set_var("WTMUX_PID", std::process::id().to_string());
 
     run_terminal(config)?;
 
@@ -927,6 +931,9 @@ fn run_terminal_wm(
     wm.activity_monitor = wtmux_config.activity.enabled;
     wm.quiet_threshold = Duration::from_millis(wtmux_config.activity.quiet_threshold_ms);
 
+    // Drop stale report-state files from a previous run with this pid
+    tmux_compat::cleanup_agent_state_dir();
+
 
     // Start initial session
     if let Err(e) = wm.start() {
@@ -970,7 +977,8 @@ fn run_terminal_wm(
     let _ = std::io::stdout().flush();
 
     // Run main loop
-    let result = run_wm_main_loop(&mut wm, &mut renderer, keybindings);
+    let hooks = wtmux_config.hooks.clone();
+    let result = run_wm_main_loop(&mut wm, &mut renderer, keybindings, hooks);
 
     // Cleanup
     let _ = renderer.cleanup();
@@ -989,6 +997,7 @@ fn run_wm_main_loop(
     wm: &mut WindowManager,
     renderer: &mut crate::ui::WmRenderer,
     keybindings: ParsedKeyBindings,
+    hooks: crate::config::HooksConfig,
 ) -> anyhow::Result<()> {
     // Adaptive polling: 10ms while output is flowing, relaxing to 50ms after
     // ~0.5s of idle to cut wake-ups. Input events wake poll() immediately
@@ -1009,6 +1018,12 @@ fn run_wm_main_loop(
     let mut last_resize_time = std::time::Instant::now();
     let resize_debounce = Duration::from_millis(30);
 
+    // Agent-state plumbing: poll `wtmux report-state` drops at a low rate and
+    // dispatch [hooks] commands on state transitions.
+    let hooks_enabled = hooks.any_configured();
+    let state_report_poll = Duration::from_millis(200);
+    let mut last_state_report_poll = std::time::Instant::now();
+
     loop {
         // Check if any session is still running
         if !wm.is_running() {
@@ -1020,6 +1035,10 @@ fn run_wm_main_loop(
         if let Some((cols, rows)) = pending_resize {
             if last_resize_time.elapsed() >= resize_debounce {
                 wm.resize(cols, rows);
+                if let Some(popup) = ui.popup.as_mut() {
+                    let (x, y, w, h) = popup_geometry(cols, rows);
+                    popup.apply_geometry(x, y, w, h, crate::wm::BorderStyle::Single);
+                }
                 ui.render(renderer, wm, &theme_list)?;
                 wm.clear_all_dirty();
                 pending_resize = None;
@@ -1037,7 +1056,75 @@ fn run_wm_main_loop(
         }
 
         // Process output and closed panes/tabs.
-        let needs_render = wm.process_output();
+        let mut needs_render = wm.process_output();
+
+        // Popup pane output / lifecycle
+        if let Some(popup) = ui.popup.as_mut() {
+            if popup.session.process_output().unwrap_or(false) && ui.mode == UiMode::Popup {
+                needs_render = true;
+            }
+            if !popup.session.is_running() {
+                ui.close_popup();
+                wm.force_full_redraw();
+                needs_render = true;
+            }
+        }
+
+        // Erase an expired transient status message
+        if renderer.tick_status_message() {
+            wm.force_full_redraw();
+            needs_render = true;
+        }
+
+        // External IPC: agent states from `wtmux report-state`, and
+        // send-keys / capture-pane / display-popup requests
+        if last_state_report_poll.elapsed() >= state_report_poll {
+            last_state_report_poll = std::time::Instant::now();
+            for (tab_id, pane_id, state) in tmux_compat::drain_reported_states() {
+                if wm.apply_reported_state(tab_id, pane_id, state) {
+                    needs_render = true;
+                }
+            }
+
+            for req in tmux_compat::drain_requests() {
+                let result: Result<Option<String>, String> = match req.command.as_str() {
+                    "send-keys" => wm
+                        .resolve_target_pane(req.target.as_deref())
+                        .and_then(|(tab, pane)| {
+                            wm.write_to_pane(
+                                tab,
+                                pane,
+                                &tmux_compat::send_keys_to_bytes(&req.args),
+                            )
+                        })
+                        .map(|_| None),
+                    "capture-pane" => {
+                        let scrollback = req.args.iter().any(|a| a == "scrollback");
+                        wm.resolve_target_pane(req.target.as_deref())
+                            .and_then(|(tab, pane)| wm.capture_pane_text(tab, pane, scrollback))
+                            .map(Some)
+                    }
+                    "display-popup" => {
+                        let command = req.args.first().cloned();
+                        open_popup(wm, &mut ui, command.as_deref()).map(|_| {
+                            needs_render = true;
+                            None
+                        })
+                    }
+                    other => Err(format!("unsupported request: {other}")),
+                };
+                tmux_compat::write_reply(&req.id, &result);
+            }
+        }
+
+        // Fire [hooks] commands on agent state transitions
+        if hooks_enabled && wm.activity_monitor {
+            let events = wm.drain_agent_state_events();
+            if !events.is_empty() {
+                run_agent_state_hooks(&hooks, &events);
+            }
+        }
+
         if needs_render {
             idle_ticks = 0;
         } else {
@@ -1072,6 +1159,92 @@ fn run_wm_main_loop(
             match input::read()? {
                 Event::Key(key_event) => {
                     if key_event.kind != KeyEventKind::Press {
+                        continue;
+                    }
+
+                    // ── Popup mode: all input goes to the popup pane ─────────
+                    // Safety valve: Prefix, x kills a stuck popup.
+                    if ui.mode == UiMode::Popup {
+                        let prefix_pressed = key_event
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL)
+                            && key_event.code == KeyCode::Char(wm.prefix_key.char);
+                        if ui.popup_prefix {
+                            ui.popup_prefix = false;
+                            if key_event.code == KeyCode::Char('x') {
+                                ui.close_popup();
+                                wm.force_full_redraw();
+                                renderer.render(wm)?;
+                                wm.clear_all_dirty();
+                                continue;
+                            }
+                            // Any other key falls through to the popup
+                        } else if prefix_pressed {
+                            ui.popup_prefix = true;
+                            continue;
+                        }
+                        if let Some(popup) = ui.popup.as_mut() {
+                            let bytes = KeyMapper::map_key(&key_event);
+                            if !bytes.is_empty() {
+                                let _ = popup.session.write(&bytes);
+                            }
+                        }
+                        continue;
+                    }
+
+                    // ── Command prompt (Prefix + :) ──────────────────────────
+                    if ui.mode == UiMode::CommandPrompt {
+                        match key_event.code {
+                            KeyCode::Esc => {
+                                ui.close_mode();
+                                wm.force_full_redraw();
+                                renderer.render(wm)?;
+                                wm.clear_all_dirty();
+                            }
+                            KeyCode::Enter => {
+                                let line = ui.command_buffer.trim().to_string();
+                                ui.close_mode();
+                                wm.force_full_redraw();
+                                if !line.is_empty() {
+                                    use crate::command_prompt::PromptAction;
+                                    match crate::command_prompt::parse(&line) {
+                                        Ok(PromptAction::DisplayPopup { command }) => {
+                                            if let Err(e) =
+                                                open_popup(wm, &mut ui, command.as_deref())
+                                            {
+                                                renderer.set_status_message(format!(
+                                                    "display-popup: {e}"
+                                                ));
+                                            }
+                                        }
+                                        Ok(action) => {
+                                            let message = execute_prompt_action(wm, action);
+                                            renderer.set_status_message(message);
+                                        }
+                                        Err(e) => renderer.set_status_message(e),
+                                    }
+                                }
+                                ui.render(renderer, wm, &theme_list)?;
+                                wm.clear_all_dirty();
+                            }
+                            KeyCode::Backspace => {
+                                ui.command_buffer.pop();
+                                ui.render(renderer, wm, &theme_list)?;
+                            }
+                            KeyCode::Char('u')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.command_buffer.clear();
+                                ui.render(renderer, wm, &theme_list)?;
+                            }
+                            KeyCode::Char(c)
+                                if !key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.command_buffer.push(c);
+                                ui.render(renderer, wm, &theme_list)?;
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
 
@@ -1610,6 +1783,10 @@ fn run_wm_main_loop(
                             }
                             // Toggle input broadcast to all panes (tmux: synchronize-panes)
                             KeyCode::Char('e') => Some(AppAction::ToggleBroadcast),
+                            // Toggle raw output logging on the focused pane
+                            // (tmux: pipe-pane). Shift+P so plain p stays
+                            // "previous window".
+                            KeyCode::Char('P') => Some(AppAction::TogglePipeLog),
                             // Jump to the next pane needing attention
                             KeyCode::Char('a') => Some(AppAction::FocusNextAttention),
                             // Next pane (tmux: o)
@@ -1666,6 +1843,14 @@ fn run_wm_main_loop(
                                 ui.close_mode();
                                 ui.window_selector.open(wm);
                                 ui.mode = UiMode::WindowSelector;
+                                wm.prefix_mode = false;
+                                ui.render(renderer, wm, &theme_list)?;
+                                continue;
+                            }
+                            // Command prompt (tmux: :)
+                            KeyCode::Char(':') => {
+                                ui.close_mode();
+                                ui.mode = UiMode::CommandPrompt;
                                 wm.prefix_mode = false;
                                 ui.render(renderer, wm, &theme_list)?;
                                 continue;
@@ -1795,6 +1980,11 @@ fn run_wm_main_loop(
 
                 Event::Mouse(mouse_event) => {
                     use crossterm::event::{MouseEventKind, MouseButton};
+
+                    // Popup mode: mouse interaction is not routed anywhere
+                    if ui.mode == UiMode::Popup {
+                        continue;
+                    }
 
                     // Window selector mouse handling. Plain mouse movement must
                     // not dismiss the popup (any-event tracking reports every
@@ -2058,6 +2248,190 @@ fn run_wm_main_loop(
     Ok(())
 }
 
+/// Geometry of the display-popup pane: centered, 60% of the terminal,
+/// clamped to sensible minimums.
+fn popup_geometry(cols: u16, rows: u16) -> (u16, u16, u16, u16) {
+    let min_w = 24.min(cols.saturating_sub(2).max(1));
+    let min_h = 8.min(rows.saturating_sub(2).max(1));
+    let w = ((cols as u32 * 3 / 5) as u16).max(min_w).min(cols);
+    let h = ((rows as u32 * 3 / 5) as u16).max(min_h).min(rows);
+    let x = cols.saturating_sub(w) / 2;
+    let y = rows.saturating_sub(h) / 2;
+    (x, y, w, h)
+}
+
+/// Open a display-popup: a floating pane running `command` (or the default
+/// shell) that closes when the process exits. `Prefix, x` force-closes it.
+fn open_popup(
+    wm: &mut WindowManager,
+    ui: &mut WmAppState,
+    command: Option<&str>,
+) -> Result<(), String> {
+    ui.close_mode(); // drop any existing popup or other modal state
+
+    let (x, y, w, h) = popup_geometry(wm.width, wm.height);
+    let mut pane = crate::wm::Pane::new(POPUP_PANE_ID, w, h);
+    pane.move_to(x, y);
+    pane.focused = true;
+    pane.title = Some(match command {
+        Some(cmd) => format!("popup: {cmd}"),
+        None => "popup".to_string(),
+    });
+
+    // Popups are not addressable window panes; keep children from inheriting
+    // the previously spawned pane's id.
+    env::set_var("WTMUX_PANE", "0.0");
+    let shell = command
+        .map(str::to_string)
+        .or_else(|| wm.default_shell.clone());
+    pane.session
+        .start_with_options(shell.as_deref(), wm.default_codepage, false)
+        .map_err(|e| e.to_string())?;
+
+    ui.popup = Some(pane);
+    ui.mode = UiMode::Popup;
+    Ok(())
+}
+
+/// Fixed pane id for the popup (never collides with tab pane numbering,
+/// which is only unique per tab anyway).
+const POPUP_PANE_ID: u64 = 0;
+
+/// Execute a parsed command-prompt action and return the status message.
+/// `display-popup` is handled by the caller (it needs UI state).
+fn execute_prompt_action(
+    wm: &mut WindowManager,
+    action: crate::command_prompt::PromptAction,
+) -> String {
+    use crate::command_prompt::PromptAction as P;
+
+    match action {
+        P::Split { direction } => {
+            match direction {
+                SplitDirection::Horizontal => wm.split_horizontal(),
+                SplitDirection::Vertical => wm.split_vertical(),
+            };
+            "pane split".to_string()
+        }
+        P::NewWindow => {
+            wm.new_tab();
+            "window created".to_string()
+        }
+        P::KillPane => {
+            wm.close_pane();
+            "pane killed".to_string()
+        }
+        P::KillWindow => {
+            wm.close_tab();
+            "window killed".to_string()
+        }
+        P::NextWindow => {
+            wm.next_tab();
+            "next window".to_string()
+        }
+        P::PrevWindow => {
+            wm.prev_tab();
+            "previous window".to_string()
+        }
+        P::LastWindow => {
+            wm.last_tab();
+            "last window".to_string()
+        }
+        P::SelectWindow(n) => {
+            wm.goto_tab(n);
+            format!("window {n}")
+        }
+        P::RenameWindow(name) => {
+            wm.rename_active_tab(&name);
+            format!("window renamed to {name:?}")
+        }
+        P::SelectLayout(layout) => {
+            wm.set_layout_preset(layout);
+            format!("layout: {layout:?}")
+        }
+        P::ToggleZoom => {
+            wm.toggle_zoom();
+            "zoom toggled".to_string()
+        }
+        P::SetSyncPanes(value) => {
+            let state = match value {
+                None => wm.toggle_broadcast(),
+                Some(v) => wm.set_broadcast(v),
+            };
+            format!("synchronize-panes: {}", if state { "on" } else { "off" })
+        }
+        P::PipePane => match wm.toggle_pipe_log() {
+            Some((true, path)) => format!("logging → {}", path.display()),
+            Some((false, _)) => "logging stopped".to_string(),
+            None => "pipe-pane: could not start logging".to_string(),
+        },
+        // Handled by the caller; kept for exhaustiveness
+        P::DisplayPopup { .. } => String::new(),
+    }
+}
+
+/// Dispatch `[hooks]` commands for a batch of agent state transitions.
+fn run_agent_state_hooks(hooks: &crate::config::HooksConfig, events: &[crate::wm::AgentStateEvent]) {
+    use crate::wm::AgentState;
+
+    for event in events {
+        let command = match event.to {
+            AgentState::Working => &hooks.on_agent_working,
+            AgentState::Blocked => &hooks.on_agent_blocked,
+            AgentState::Done => &hooks.on_agent_done,
+            AgentState::Idle => &hooks.on_agent_idle,
+        };
+        if command.is_empty() {
+            continue;
+        }
+        spawn_hook_command(command, event);
+    }
+}
+
+/// Run a hook command detached, with the transition context in env vars.
+/// Hook failures are logged but never disturb the terminal session.
+fn spawn_hook_command(command_line: &str, event: &crate::wm::AgentStateEvent) {
+    use std::process::{Command, Stdio};
+
+    let mut command = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", command_line]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", command_line]);
+        c
+    };
+    command
+        .env("WTMUX_HOOK_STATE", event.to.label())
+        .env("WTMUX_HOOK_PREV_STATE", event.from.label())
+        .env("WTMUX_HOOK_PANE", format!("{}.{}", event.tab_id, event.pane_id))
+        .env("WTMUX_HOOK_WINDOW", &event.window_name)
+        .env("WTMUX_HOOK_TITLE", &event.pane_title)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match command.spawn() {
+        Ok(mut child) => {
+            // Reap the child off-thread so it never blocks the event loop
+            // (and never lingers as a zombie on Unix).
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => {
+            info!("agent hook failed to spawn ({command_line:?}): {e}");
+        }
+    }
+}
+
 fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
     match action {
         AppAction::Noop => {}
@@ -2140,6 +2514,14 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
                 reset_cursor_shape();
             }
         }
+        AppAction::TogglePipeLog => match wm.toggle_pipe_log() {
+            Some((enabled, path)) => {
+                info!("pipe log {}: {:?}", if enabled { "started" } else { "stopped" }, path);
+            }
+            None => {
+                info!("pipe log toggle failed");
+            }
+        },
     }
 }
 

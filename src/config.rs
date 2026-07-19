@@ -69,6 +69,8 @@ pub struct Config {
     pub font: FontConfig,
     /// Pane activity monitor settings (agent multiplexing support)
     pub activity: ActivityConfig,
+    /// Commands to run when a pane's agent state changes
+    pub hooks: HooksConfig,
 }
 
 impl Default for Config {
@@ -85,7 +87,39 @@ impl Default for Config {
             pane: PaneConfig::default(),
             font: FontConfig::default(),
             activity: ActivityConfig::default(),
+            hooks: HooksConfig::default(),
         }
+    }
+}
+
+/// Agent state transition hooks.
+///
+/// Each entry is a shell command executed (detached, via `cmd /C` on Windows
+/// and `sh -c` elsewhere) when a pane's agent state changes to that state.
+/// The command receives the transition context through environment variables:
+/// `WTMUX_HOOK_STATE`, `WTMUX_HOOK_PREV_STATE`, `WTMUX_HOOK_PANE`
+/// (`<window>.<pane>`), `WTMUX_HOOK_WINDOW` (window name), and
+/// `WTMUX_HOOK_TITLE` (pane title). Empty string = hook disabled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HooksConfig {
+    /// Run when a pane starts producing output
+    pub on_agent_working: String,
+    /// Run when a pane looks like it is waiting on the user
+    pub on_agent_blocked: String,
+    /// Run when a pane finished a burst of work (or its process exited)
+    pub on_agent_done: String,
+    /// Run when a pane returns to a plain shell prompt
+    pub on_agent_idle: String,
+}
+
+impl HooksConfig {
+    /// Whether any hook command is configured.
+    pub fn any_configured(&self) -> bool {
+        !self.on_agent_working.is_empty()
+            || !self.on_agent_blocked.is_empty()
+            || !self.on_agent_done.is_empty()
+            || !self.on_agent_idle.is_empty()
     }
 }
 
