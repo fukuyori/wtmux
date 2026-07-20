@@ -6,6 +6,8 @@ For developers who work in Linux or macOS terminals, **tmux** is an indispensabl
 
 **wtmux** is a terminal multiplexer developed to bring the tmux experience to Windows. Written in Rust, it leverages Windows 10's ConPTY (Console Pseudo Terminal) to provide a native Windows experience.
 
+> **Note:** Since v2.0.0, wtmux also runs on macOS and Linux (using a POSIX pty backend). This tutorial focuses on Windows; on macOS / Linux, everything works the same except that the default shell is `$SHELL` and the config file lives at `~/.config/wtmux/config.toml` instead of `%LOCALAPPDATA%\wtmux\config.toml`.
+
 Startup is light: command history is loaded lazily on first use of the history selector shortcut (`Ctrl+R` by default), and config/history directories are created only when wtmux actually needs to write data.
 
 ### Key Features
@@ -361,7 +363,7 @@ wtmux includes 8 built-in color schemes.
 
 ### Set in Config File
 
-Create `%LOCALAPPDATA%\wtmux\config.toml`:
+Create `%LOCALAPPDATA%\wtmux\config.toml` (macOS / Linux: `~/.config/wtmux/config.toml`):
 
 ```toml
 color_scheme = "tokyo-night"
@@ -386,7 +388,9 @@ For more details, see: https://qiita.com/spumoni/items/7d43ed7e579d99cfda3e
 
 ## Configuration File
 
-wtmux reads settings from `%LOCALAPPDATA%\wtmux\config.toml`.
+wtmux reads settings from `%LOCALAPPDATA%\wtmux\config.toml` on Windows,
+and from `$XDG_CONFIG_HOME/wtmux/config.toml` (default:
+`~/.config/wtmux/config.toml`) on macOS / Linux.
 
 ### Example Configuration
 

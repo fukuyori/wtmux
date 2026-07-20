@@ -1,17 +1,22 @@
 # wtmux configuration file
-# Place this file at %LOCALAPPDATA%\wtmux\config.toml
+# Place this file at:
+#   Windows:       %LOCALAPPDATA%\wtmux\config.toml
+#   macOS / Linux: $XDG_CONFIG_HOME/wtmux/config.toml
+#                  (~/.config/wtmux/config.toml when XDG_CONFIG_HOME is unset)
 
 # ==============================================================================
 # General Settings
 # ==============================================================================
 
 # Default shell (optional)
-# Options: "cmd", "powershell", "pwsh", "wsl", or full path to executable
+# Windows: "cmd", "powershell", "pwsh", "wsl", or full path to executable
+# macOS / Linux: command name or full path (default: $SHELL, then /bin/sh)
 # shell = "pwsh.exe"
 # shell = "cmd.exe"
 # shell = "wsl.exe"
+# shell = "zsh"
 
-# Default codepage (optional)
+# Default codepage (optional, Windows only)
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS (Japanese)
 
@@ -91,7 +96,7 @@ lines = 10000
 # ==============================================================================
 # Font Settings
 # ==============================================================================
-# Note: wtmux runs inside an existing terminal (e.g. Windows Terminal).
+# Note: wtmux runs inside an existing terminal (e.g. Windows Terminal, iTerm2).
 # These settings are stored in config.toml and respected where possible.
 # To change the font rendered on screen, also update your host terminal's profile.
 
@@ -181,6 +186,10 @@ quiet_threshold_ms = 2000
 # Example: Windows toast when an agent blocks on a question
 # (requires the BurntToast PowerShell module):
 #   on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE is waiting for input\""'
+# Example: macOS notification:
+#   on_agent_blocked = 'osascript -e "display notification \"$WTMUX_HOOK_TITLE is waiting for input\" with title \"wtmux\""'
+# Example: Linux notification:
+#   on_agent_blocked = 'notify-send wtmux "$WTMUX_HOOK_TITLE is waiting for input"'
 [hooks]
 # on_agent_working = ""
 # on_agent_blocked = ""

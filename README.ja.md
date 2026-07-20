@@ -29,9 +29,9 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 - **検索機能** - スクロールバック内をハイライト検索
 - **カラースキーム** - 8種類の組み込みテーマ（default、solarized、monokai、nord、dracula、gruvbox、tokyo-night）
 - **設定ファイル** - TOML形式の設定ファイル対応
-- **ConPTY対応** - Windows標準の擬似端末
-- **複数シェル対応** - cmd.exe、PowerShell、PowerShell 7、WSL
-- **エンコーディング対応** - UTF-8とShift-JIS（CP932）
+- **クロスプラットフォームPTYバックエンド** - WindowsはConPTY、macOS / LinuxはPOSIX pty（openpty）
+- **複数シェル対応** - Windowsはcmd.exe、PowerShell、PowerShell 7、WSL。macOS / Linuxは `$SHELL`（bash、zsh、fishなど）
+- **エンコーディング対応** - UTF-8とShift-JIS（CP932、Windowsのみ）
 - **マウスパススルー** - TUIアプリにマウスイベントを転送（Shiftでwtmuxの選択を使用）
 
 ## スクリーンショット
@@ -49,7 +49,8 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 ## 動作要件
 
-- Windows 10 バージョン1809以降（ConPTYサポートが必要）
+- **Windows**: Windows 10 バージョン1809以降（ConPTYサポートが必要）
+- **macOS / Linux**: 一般的なターミナル（iTerm2、Ghostty、WezTerm、kitty、GNOME Terminal など）— wtmux は標準の POSIX pty を使ってその中で動作します
 - Rust 1.70以降（ソースからビルドする場合）
 
 ## インストール
@@ -58,11 +59,21 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [Releases](https://github.com/fukuyori/wtmux/releases) ページからダウンロード：
 
+**Windows**
+
 - **インストーラー** (`wtmux-x.x.x-setup.exe`) - 一般ユーザー向け推奨
 - **ポータブル版** (`wtmux-x.x.x-portable-x64.zip`) - インストール不要、展開して実行するだけ
 - **MSI** (`wtmux-x.x.x-x64.msi`) - 企業展開向け
 
-### 方法2: PowerShellインストールスクリプト
+**macOS**
+
+- **インストーラーパッケージ** (`wtmux-x.x.x.pkg`) - 署名・公証済み。`/usr/local/bin/wtmux` にインストールされます
+
+**Linux**
+
+- ソースからビルド（方法3を参照）
+
+### 方法2: PowerShellインストールスクリプト（Windows）
 
 ```powershell
 # ビルドしてインストール
@@ -80,11 +91,14 @@ git clone https://github.com/fukuyori/wtmux.git
 cd wtmux
 cargo build --release
 
-# 任意の場所にコピー
+# Windows: 任意の場所にコピー
 copy target\release\wtmux.exe C:\your\bin\path\
+
+# macOS / Linux: PATH の通ったディレクトリにコピー
+cp target/release/wtmux /usr/local/bin/
 ```
 
-### インストーラーのビルド
+### インストーラーのビルド（Windows）
 
 ```powershell
 # ポータブル版（ZIP）
@@ -109,6 +123,17 @@ copy target\release\wtmux.exe C:\your\bin\path\
 .\generate-icons.ps1
 ```
 
+### macOSインストーラーのビルド
+
+`scripts/sign-and-notarize-macos.sh` は `target/release/wtmux` から
+署名・公証済みの `.pkg` をビルドします（Developer ID証明書と
+notarytoolのキーチェーンプロファイルが必要）：
+
+```bash
+cargo build --release
+./scripts/sign-and-notarize-macos.sh
+```
+
 ## 使い方
 
 ```bash
@@ -120,6 +145,9 @@ wtmux -7 -u
 
 # WSL
 wtmux -w
+
+# カスタムシェル（例: macOS / Linux で zsh）
+wtmux -s zsh
 
 # シンプルモード（単一ペイン）
 wtmux -1
@@ -133,16 +161,20 @@ wtmux --help
 | オプション | 説明 |
 |--------|-------------|
 | `-1, --simple` | シンプルモード（単一ペイン） |
-| `-c, --cmd` | コマンドプロンプトを使用 |
-| `-p, --powershell` | Windows PowerShellを使用 |
-| `-7, --pwsh` | PowerShell 7を使用 |
-| `-w, --wsl` | WSLを使用 |
+| `-c, --cmd` | コマンドプロンプトを使用 *（Windowsのみ）* |
+| `-p, --powershell` | Windows PowerShellを使用 *（Windowsのみ）* |
+| `-7, --pwsh` | PowerShell 7を使用 *（Windowsのみ）* |
+| `-w, --wsl` | WSLを使用 *（Windowsのみ）* |
 | `-s, --shell <CMD>` | カスタムシェルコマンド |
-| `--sjis` | Shift-JISエンコーディング（デフォルト: UTF-8） |
-| `-P, --cwd-prompt-hook <on\|off>` | cmd.exe / PowerShell の cwd 追跡用プロンプトフックを設定 |
-| `--no-cwd-prompt-hook` | cmd.exe / PowerShell の cwd 追跡用プロンプトフックを無効化 |
+| `--sjis` | Shift-JISエンコーディング（デフォルト: UTF-8）*（Windowsのみ）* |
+| `-P, --cwd-prompt-hook <on\|off>` | シェルの cwd 追跡用プロンプトフックを設定 |
+| `--no-cwd-prompt-hook` | シェルの cwd 追跡用プロンプトフックを無効化 |
 | `-v, --version` | バージョン表示 |
 | `-h, --help` | ヘルプ表示 |
+
+Windows専用オプションは macOS / Linux では非表示になります。macOS / Linux の
+デフォルトシェルは `$SHELL`（未設定時は `/bin/sh`）で、`-s` オプションまたは
+設定ファイルの `shell` キーで変更できます。
 
 ## キーバインド
 
@@ -253,7 +285,8 @@ wtmux --help
 画面中央（端末の60%）にフローティングペインを開いてコマンド（省略時はデフォルトシェル）を
 実行します。入力はすべてポップアップに送られ、コマンドの終了で自動的に閉じます。
 固まった場合は `Ctrl+B, x` で強制クローズできます。コマンドは直接spawnされるため、
-シェル組み込みコマンドは明示的にシェル経由で指定してください（例: `display-popup cmd /c dir`）。
+シェル組み込みコマンドは明示的にシェル経由で指定してください
+（例: Windowsは `display-popup cmd /c dir`、macOS / Linuxは `display-popup sh -c "ls | head"`）。
 
 ### 履歴機能
 
@@ -271,14 +304,23 @@ wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴
 
 ## 設定
 
-wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
+wtmuxは設定ディレクトリ内の `config.toml` から設定を読み込みます：
+
+| OS | 場所 |
+|----|------|
+| Windows | `%LOCALAPPDATA%\wtmux\config.toml`（例: `C:\Users\ユーザー名\AppData\Local\wtmux\config.toml`） |
+| macOS / Linux | `$XDG_CONFIG_HOME/wtmux/config.toml`（`XDG_CONFIG_HOME` 未設定時は `~/.config/wtmux/config.toml`） |
+
+どちらの場所も決定できない場合は `~/.wtmux/config.toml` にフォールバックします。
+コマンド履歴・ペイン出力ログ・VTトレースも同じディレクトリに保存されます。
 
 ```toml
 # デフォルトシェル（省略可）
-# オプション: "cmd", "powershell", "pwsh", "wsl", またはフルパス
+# Windows: "cmd", "powershell", "pwsh", "wsl", またはフルパス
+# macOS / Linux: コマンド名またはフルパス（デフォルト: $SHELL、未設定時は /bin/sh）
 # shell = "pwsh.exe"
 
-# エンコーディングのコードページ（省略可）
+# エンコーディングのコードページ（省略可、Windowsのみ）
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS
 
@@ -374,9 +416,14 @@ wtmuxは全ペインを監視し、herdrスタイルで WORKING / BLOCKED / DONE
 エージェントが許可待ちでブロックしたらWindowsトースト通知を出す：
 
 ```toml
-# %LOCALAPPDATA%\wtmux\config.toml
+# Windows: %LOCALAPPDATA%\wtmux\config.toml
+# macOS / Linux: ~/.config/wtmux/config.toml
 [hooks]
 on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE が入力待ちです\""'
+# macOSで通知する場合:
+# on_agent_blocked = 'osascript -e "display notification \"$WTMUX_HOOK_TITLE が入力待ちです\" with title \"wtmux\""'
+# Linuxで通知する場合:
+# on_agent_blocked = 'notify-send wtmux "$WTMUX_HOOK_TITLE が入力待ちです"'
 # on_agent_working / on_agent_done / on_agent_idle も利用可能
 ```
 
@@ -439,8 +486,9 @@ wtmuxの上にclaude-squad型のエージェントオーケストレーション
 ### ペイン出力ログ（tmux `pipe-pane` 相当）
 
 `Prefix + Shift+P` でフォーカスペインの生出力ストリームのログを
-`%LOCALAPPDATA%\wtmux\logs\wtmux-<pid>-<ウィンドウ>.<ペイン>-<epoch>.log`
-に記録します。記録中はステータスバーに `[LOG]` が表示されます。エージェントの
+設定ディレクトリ（Windowsは `%LOCALAPPDATA%\wtmux`、macOS / Linuxは
+`~/.config/wtmux`）配下の
+`logs/wtmux-<pid>-<ウィンドウ>.<ペイン>-<epoch>.log` に記録します。記録中はステータスバーに `[LOG]` が表示されます。エージェントの
 セッションの監査やリプレイに便利です。ログにはエスケープシーケンスを含む
 生バイトが記録されます（`sed -r 's/\x1b\[[0-9;]*[a-zA-Z]//g'` などで除去可能）。
 
@@ -459,7 +507,7 @@ if ($env:WTMUX) { "wtmux内で実行中" }
 ```
 
 ```bash
-# bash/WSL
+# bash / zsh（macOS / Linux / WSL）
 [ -n "$WTMUX" ] && echo "wtmux内で実行中"
 ```
 
@@ -519,8 +567,8 @@ wtmuxは包括的なマウスサポートを提供しています。
 
 | 機能 | tmux | wtmux |
 |---------|------|-------|
-| プラットフォーム | Unix/Linux/macOS | Windows |
-| バックエンド | PTY | ConPTY |
+| プラットフォーム | Unix/Linux/macOS | Windows / macOS / Linux |
+| バックエンド | PTY | ConPTY（Windows）/ POSIX pty（macOS・Linux） |
 | ウィンドウ/ペイン | ✓ | ✓ |
 | キーバインド | ✓ | ✓（互換） |
 | コピーモード | ✓ | ✓ |
@@ -531,7 +579,7 @@ wtmuxは包括的なマウスサポートを提供しています。
 | マウスサポート | ✓ | ✓ |
 | デタッチ/アタッチ | ✓ | 予定 |
 | セッション共有 | ✓ | 予定 |
-| スクリプティング | ✓ | 予定 |
+| スクリプティング | ✓ | ✓（`send-keys` / `capture-pane`） |
 
 ## プロジェクト構成
 
@@ -556,13 +604,17 @@ wtmux/
 │   ├── wtmux.wxs          # WiXスクリプト
 │   ├── msix/Assets/       # MSIX用アイコン資産
 │   └── license.rtf
+├── scripts/
+│   └── sign-and-notarize-macos.sh  # macOS署名・公証済み.pkgビルド
 └── src/
     ├── main.rs            # エントリーポイント
     ├── config.rs          # 設定
     ├── copymode.rs        # コピーモード
     ├── history.rs         # コマンド履歴
     ├── core/
-    │   ├── pty.rs         # ConPTYラッパー
+    │   ├── pty/
+    │   │   ├── conpty.rs  # Windows ConPTYバックエンド
+    │   │   └── unix.rs    # POSIX ptyバックエンド（macOS / Linux）
     │   ├── session.rs     # セッション管理
     │   └── term/
     │       ├── state.rs   # ターミナル状態
@@ -591,7 +643,9 @@ oh-my-posh、Starship 等の Powerline ベースのプロンプトが正しく�
 4 ファイルをダウンロードしてインストールします。Bold が欠けていると Windows の
 フォントフォールバックが PUA グリフを持たない別フォントで描画し、矢印が崩れます。
 
-**手順2 — Windows Terminal でフォントを設定**
+**手順2 — ホスト端末でフォントを設定**
+
+Windows Terminal の例（macOS / Linux は iTerm2、Ghostty 等で設定）：
 
 ```json
 "fontFace": "CaskaydiaCove Nerd Font"
@@ -600,7 +654,8 @@ oh-my-posh、Starship 等の Powerline ベースのプロンプトが正しく�
 **手順3 — それでも崩れる場合は `suppress_bold` を有効化**
 
 ```toml
-# %LOCALAPPDATA%\wtmux\config.toml
+# Windows: %LOCALAPPDATA%\wtmux\config.toml
+# macOS / Linux: ~/.config/wtmux/config.toml
 [font]
 suppress_bold = true
 ```
@@ -611,16 +666,17 @@ SGR 1 (Bold) をホスト端末に送出しなくなり、全テキストが Reg
 
 描画の問題を報告する際は `--vt-trace` フラグで PTY の生バイトを記録できます：
 
-```powershell
+```bash
 wtmux --vt-trace
 ```
 
-`%LOCALAPPDATA%\wtmux\vt_trace.log` に Hex + UTF-8 形式で出力されます。
+設定ディレクトリ（Windowsは `%LOCALAPPDATA%\wtmux`、macOS / Linuxは
+`~/.config/wtmux`）の `vt_trace.log` に Hex + UTF-8 形式で出力されます。
 バグ報告にこのファイルを添付してください。
 
 ## 既知の制限
 
-- Windowsのみ（ConPTYはWindows専用）
+- シェルショートカット（`-c`/`-p`/`-7`/`-w`）とShift-JISエンコーディングはWindows専用
 - デタッチ/アタッチは未サポート（将来のリリースで対応予定）
 - セッション共有は未サポート
 

@@ -30,9 +30,9 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 - **Command history** - Record and reuse commands with `Ctrl+R` by default
 - **Color schemes** - 8 built-in themes (default, solarized, monokai, nord, dracula, gruvbox, tokyo-night)
 - **Configuration** - TOML config file support
-- **ConPTY support** - Native Windows pseudo-terminal
-- **Multiple shells** - cmd.exe, PowerShell, PowerShell 7, WSL
-- **Encoding support** - UTF-8 and Shift-JIS (CP932)
+- **Cross-platform PTY backends** - ConPTY on Windows, POSIX pty (openpty) on macOS / Linux
+- **Multiple shells** - cmd.exe, PowerShell, PowerShell 7, WSL on Windows; `$SHELL` (bash, zsh, fish, ...) on macOS / Linux
+- **Encoding support** - UTF-8 and Shift-JIS (CP932, Windows only)
 - **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
 - **Mouse passthrough** - TUI apps receive mouse events (hold Shift for wtmux selection)
 - **Nerd Font / Powerline support** - oh-my-posh, Starship, and Powerline prompts render correctly
@@ -53,7 +53,8 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 ## Requirements
 
-- Windows 10 version 1809 or later (ConPTY support required)
+- **Windows**: Windows 10 version 1809 or later (ConPTY support required)
+- **macOS / Linux**: any modern terminal (iTerm2, Ghostty, WezTerm, kitty, GNOME Terminal, ...) — wtmux runs inside it via the standard POSIX pty
 - Rust 1.70 or later (for building from source)
 
 ## Installation
@@ -62,11 +63,21 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 Download from the [Releases](https://github.com/fukuyori/wtmux/releases) page:
 
+**Windows**
+
 - **Installer** (`wtmux-x.x.x-setup.exe`) - Recommended for most users
 - **Portable** (`wtmux-x.x.x-portable-x64.zip`) - No installation required, just extract and run
 - **MSI** (`wtmux-x.x.x-x64.msi`) - For enterprise deployment
 
-### Option 2: PowerShell Install Script
+**macOS**
+
+- **Installer package** (`wtmux-x.x.x.pkg`) - Signed & notarized; installs `/usr/local/bin/wtmux`
+
+**Linux**
+
+- Build from source (see Option 3)
+
+### Option 2: PowerShell Install Script (Windows)
 
 ```powershell
 # Build and install
@@ -84,11 +95,14 @@ git clone https://github.com/fukuyori/wtmux.git
 cd wtmux
 cargo build --release
 
-# Copy to your preferred location
+# Windows: copy to your preferred location
 copy target\release\wtmux.exe C:\your\bin\path\
+
+# macOS / Linux: copy to a directory on your PATH
+cp target/release/wtmux /usr/local/bin/
 ```
 
-### Building Installers
+### Building Installers (Windows)
 
 ```powershell
 # Portable package (ZIP)
@@ -113,6 +127,17 @@ copy target\release\wtmux.exe C:\your\bin\path\
 .\generate-icons.ps1
 ```
 
+### Building the macOS Installer
+
+`scripts/sign-and-notarize-macos.sh` builds a signed & notarized `.pkg` from
+`target/release/wtmux` (requires Developer ID certificates and a notarytool
+keychain profile):
+
+```bash
+cargo build --release
+./scripts/sign-and-notarize-macos.sh
+```
+
 ## Usage
 
 ```bash
@@ -124,6 +149,9 @@ wtmux -7 -u
 
 # With WSL
 wtmux -w
+
+# Custom shell (e.g. zsh on macOS / Linux)
+wtmux -s zsh
 
 # Simple single-pane mode
 wtmux -1
@@ -137,16 +165,20 @@ wtmux --help
 | Option | Description |
 |--------|-------------|
 | `-1, --simple` | Simple single-pane mode |
-| `-c, --cmd` | Use Command Prompt (cmd.exe) |
-| `-p, --powershell` | Use Windows PowerShell |
-| `-7, --pwsh` | Use PowerShell 7 (pwsh.exe) |
-| `-w, --wsl` | Use WSL |
+| `-c, --cmd` | Use Command Prompt (cmd.exe) *(Windows only)* |
+| `-p, --powershell` | Use Windows PowerShell *(Windows only)* |
+| `-7, --pwsh` | Use PowerShell 7 (pwsh.exe) *(Windows only)* |
+| `-w, --wsl` | Use WSL *(Windows only)* |
 | `-s, --shell <CMD>` | Custom shell command |
-| `--sjis` | Shift-JIS encoding (default: UTF-8) |
-| `-P, --cwd-prompt-hook <on\|off>` | Set cmd.exe / PowerShell prompt hook cwd tracking |
-| `--no-cwd-prompt-hook` | Disable cmd.exe / PowerShell prompt hook cwd tracking |
+| `--sjis` | Shift-JIS encoding (default: UTF-8) *(Windows only)* |
+| `-P, --cwd-prompt-hook <on\|off>` | Set shell prompt hook cwd tracking |
+| `--no-cwd-prompt-hook` | Disable shell prompt hook cwd tracking |
 | `-v, --version` | Show version |
 | `-h, --help` | Show help |
+
+The Windows-only options are hidden on macOS / Linux. There, the default
+shell is `$SHELL` (falling back to `/bin/sh`); use `-s` or the `shell`
+config key to override it.
 
 ## Keybindings
 
@@ -257,7 +289,8 @@ shell — opens a centered floating pane (60% of the terminal) running the
 command, or your default shell. All input goes to the popup; it closes when
 the command exits. `Ctrl+B, x` force-closes a stuck popup. Note: the command
 is spawned directly, so shell built-ins need an explicit shell
-(e.g. `display-popup cmd /c dir`).
+(e.g. `display-popup cmd /c dir` on Windows, `display-popup sh -c "ls | head"`
+on macOS / Linux).
 
 ### Command History
 
@@ -291,7 +324,7 @@ $env:TERM_PROGRAM = "vscode"
 PowerShell 7 and Windows PowerShell 5 automatically emit OSC 633 markers
 when `TERM_PROGRAM` is set to `"vscode"`.
 
-### bash / zsh (WSL)
+### bash / zsh (macOS / Linux / WSL)
 
 Add to `~/.bashrc` or `~/.zshrc`:
 
@@ -323,14 +356,24 @@ shell — which gives accurate results without any shell configuration.
 
 ## Configuration
 
-wtmux reads configuration from `%LOCALAPPDATA%\wtmux\config.toml`.
+wtmux reads configuration from `config.toml` in its config directory:
+
+| OS | Location |
+|----|----------|
+| Windows | `%LOCALAPPDATA%\wtmux\config.toml` (e.g. `C:\Users\you\AppData\Local\wtmux\config.toml`) |
+| macOS / Linux | `$XDG_CONFIG_HOME/wtmux/config.toml`, or `~/.config/wtmux/config.toml` when `XDG_CONFIG_HOME` is unset |
+
+If neither location can be determined, `~/.wtmux/config.toml` is used as a
+fallback. Command history, pane output logs, and VT traces are stored in the
+same directory.
 
 ```toml
 # Default shell (optional)
-# Options: "cmd", "powershell", "pwsh", "wsl", or full path
+# Windows: "cmd", "powershell", "pwsh", "wsl", or full path
+# macOS / Linux: command name or full path (default: $SHELL, then /bin/sh)
 # shell = "pwsh.exe"
 
-# Codepage for encoding (optional)
+# Codepage for encoding (optional, Windows only)
 # codepage = 65001  # UTF-8
 # codepage = 932    # Shift-JIS
 
@@ -427,9 +470,14 @@ Run a command whenever a pane's state changes — e.g. raise a Windows toast the
 moment a background agent blocks on a permission prompt:
 
 ```toml
-# %LOCALAPPDATA%\wtmux\config.toml
+# Windows: %LOCALAPPDATA%\wtmux\config.toml
+# macOS / Linux: ~/.config/wtmux/config.toml
 [hooks]
 on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -Text \"wtmux\", \"$env:WTMUX_HOOK_TITLE is waiting for input\""'
+# macOS notification instead:
+# on_agent_blocked = 'osascript -e "display notification \"$WTMUX_HOOK_TITLE is waiting for input\" with title \"wtmux\""'
+# Linux notification instead:
+# on_agent_blocked = 'notify-send wtmux "$WTMUX_HOOK_TITLE is waiting for input"'
 # on_agent_working / on_agent_done / on_agent_idle are also available
 ```
 
@@ -490,7 +538,8 @@ claude-squad-style agent orchestration on top of wtmux.
 ### Pane output logging (tmux `pipe-pane` analog)
 
 `Prefix + Shift+P` toggles logging of the focused pane's raw output stream to
-`%LOCALAPPDATA%\wtmux\logs\wtmux-<pid>-<window>.<pane>-<epoch>.log`. The
+`logs/wtmux-<pid>-<window>.<pane>-<epoch>.log` under the config directory
+(`%LOCALAPPDATA%\wtmux` on Windows, `~/.config/wtmux` on macOS / Linux). The
 status bar shows `[LOG]` while logging is active. Useful for auditing or
 replaying an agent's session; the log contains the exact bytes including
 escape sequences (strip them with e.g. `sed -r 's/\x1b\[[0-9;]*[a-zA-Z]//g'`).
@@ -510,7 +559,7 @@ if ($env:WTMUX) { "Running in wtmux" }
 ```
 
 ```bash
-# bash/WSL
+# bash / zsh (macOS / Linux / WSL)
 [ -n "$WTMUX" ] && echo "Running in wtmux"
 ```
 
@@ -571,8 +620,8 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 
 | Feature | tmux | wtmux |
 |---------|------|-------|
-| Platform | Unix/Linux/macOS | Windows |
-| Backend | PTY | ConPTY |
+| Platform | Unix/Linux/macOS | Windows / macOS / Linux |
+| Backend | PTY | ConPTY (Windows) / POSIX pty (macOS, Linux) |
 | Windows/Panes | ✓ | ✓ |
 | Keybindings | ✓ | ✓ (compatible) |
 | Copy mode | ✓ | ✓ |
@@ -583,7 +632,7 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Mouse support | ✓ | ✓ |
 | Detach/Attach | ✓ | Planned |
 | Session sharing | ✓ | Planned |
-| Scripting | ✓ | Planned |
+| Scripting | ✓ | ✓ (`send-keys` / `capture-pane`) |
 
 ## Project Structure
 
@@ -608,13 +657,17 @@ wtmux/
 │   ├── wtmux.wxs          # WiX script
 │   ├── msix/Assets/       # MSIX icon assets
 │   └── license.rtf
+├── scripts/
+│   └── sign-and-notarize-macos.sh  # macOS signed/notarized .pkg build
 └── src/
     ├── main.rs            # Entry point
     ├── config.rs          # Configuration
     ├── copymode.rs        # Copy mode
     ├── history.rs         # Command history
     ├── core/
-    │   ├── pty.rs         # ConPTY wrapper
+    │   ├── pty/
+    │   │   ├── conpty.rs  # Windows ConPTY backend
+    │   │   └── unix.rs    # POSIX pty backend (macOS / Linux)
     │   ├── session.rs     # Session management
     │   └── term/
     │       ├── state.rs   # Terminal state
@@ -643,7 +696,9 @@ Download Regular, Bold, Italic, and BoldItalic variants from [nerdfonts.com](htt
 and install all four. Windows Terminal's font fallback will use a non-Nerd-Font bold face
 if the Bold variant is missing, breaking PUA glyphs.
 
-**Step 2 — Set the font in Windows Terminal**
+**Step 2 — Set the font in your host terminal**
+
+Windows Terminal example (macOS / Linux: set it in iTerm2, Ghostty, etc.):
 
 ```json
 "fontFace": "CaskaydiaCove Nerd Font"
@@ -652,7 +707,8 @@ if the Bold variant is missing, breaking PUA glyphs.
 **Step 3 — If the problem persists, enable `suppress_bold`**
 
 ```toml
-# %LOCALAPPDATA%\wtmux\config.toml
+# Windows: %LOCALAPPDATA%\wtmux\config.toml
+# macOS / Linux: ~/.config/wtmux/config.toml
 [font]
 suppress_bold = true
 ```
@@ -665,16 +721,17 @@ the Regular face that contains the PUA glyphs.
 If a rendering problem is hard to reproduce, run wtmux with `--vt-trace` to record
 every raw byte from the PTY:
 
-```powershell
+```bash
 wtmux --vt-trace
 ```
 
-The trace is written to `%LOCALAPPDATA%\wtmux\vt_trace.log` in hex + UTF-8 format.
-Attach this file when filing a bug report.
+The trace is written to `vt_trace.log` in the config directory
+(`%LOCALAPPDATA%\wtmux` on Windows, `~/.config/wtmux` on macOS / Linux)
+in hex + UTF-8 format. Attach this file when filing a bug report.
 
 ## Known Limitations
 
-- Windows only (ConPTY is Windows-specific)
+- Shell shortcuts (`-c`/`-p`/`-7`/`-w`) and Shift-JIS encoding are Windows-only
 - No detach/attach support yet (planned for future release)
 - No session sharing yet
 

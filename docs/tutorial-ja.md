@@ -6,6 +6,8 @@ Linuxやmacでターミナル作業をする人にとって、**tmux**は欠か�
 
 **wtmux**は、そんなtmuxの使い勝手をWindowsで実現するために開発されたターミナルマルチプレクサです。Rustで書かれており、Windows 10以降のConPTY（Console Pseudo Terminal）を活用して、ネイティブなWindows体験を提供します。
 
+> **注:** v2.0.0以降、wtmuxはmacOSとLinuxでも動作します（POSIX ptyバックエンドを使用）。本チュートリアルはWindowsを中心に説明しますが、macOS / Linuxでもデフォルトシェルが `$SHELL` になる点と、設定ファイルの場所が `%LOCALAPPDATA%\wtmux\config.toml` ではなく `~/.config/wtmux/config.toml` になる点を除き、同じように使えます。
+
 起動処理は軽く、コマンド履歴は履歴検索ショートカット（デフォルト `Ctrl+R`）を初めて使った時に遅延読み込みされ、設定/履歴ディレクトリも実際に書き込みが必要になるまで作成されません。
 
 ### wtmuxの特徴
@@ -361,7 +363,7 @@ wtmuxには8種類のカラースキームが組み込まれています。
 
 ### 設定ファイルで指定
 
-`%LOCALAPPDATA%\wtmux\config.toml` を作成：
+`%LOCALAPPDATA%\wtmux\config.toml`（macOS / Linuxは `~/.config/wtmux/config.toml`）を作成：
 
 ```toml
 color_scheme = "tokyo-night"
@@ -386,7 +388,9 @@ wtmuxには、シェルの履歴機能とは別に、独自のコマンド履歴
 
 ## 設定ファイル
 
-wtmuxは `%LOCALAPPDATA%\wtmux\config.toml` から設定を読み込みます。
+wtmuxは、Windowsでは `%LOCALAPPDATA%\wtmux\config.toml` から、
+macOS / Linuxでは `$XDG_CONFIG_HOME/wtmux/config.toml`
+（デフォルト: `~/.config/wtmux/config.toml`）から設定を読み込みます。
 
 ### 設定例
 
