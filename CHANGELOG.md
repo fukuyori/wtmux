@@ -1,3 +1,15 @@
+## [2.2.1] - 2026-07-20
+
+### Added
+
+- **Right-click rename**: right-clicking a tab in the tab bar opens the
+  rename popup for that window (switching to it first), and
+  right-clicking a pane's title row (top border) opens a rename popup
+  for that pane. An empty pane name restores the default `Pane N`
+  title.
+- **Rename Pane in the context menu**: the right-click context menu
+  gained a "Rename Pane" item.
+
 ## [2.2.0] - 2026-07-20
 
 ### Fixed

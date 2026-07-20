@@ -60,7 +60,7 @@ use tracing_subscriber::FmtSubscriber;
 use crate::core::session::Session;
 use crate::core::term::width::{char_width, str_display_width};
 use crate::ui::{
-    input, ContextMenuAction, KeyMapper, Renderer, TreeEntry, UiMode, WmAppState,
+    input, ContextMenuAction, KeyMapper, RenameTarget, Renderer, TreeEntry, UiMode, WmAppState,
 };
 use crate::wm::{WindowManager, SplitDirection};
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
@@ -112,6 +112,9 @@ impl From<ContextMenuAction> for AppAction {
             ContextMenuAction::SplitHorizontal => AppAction::SplitHorizontal,
             ContextMenuAction::SplitVertical => AppAction::SplitVertical,
             ContextMenuAction::ToggleZoom => AppAction::ToggleZoom,
+            // RenamePane needs UI state (the rename popup), so the event loop
+            // handles it before converting to an AppAction.
+            ContextMenuAction::RenamePane => AppAction::Noop,
             ContextMenuAction::Cancel => AppAction::Noop,
         }
     }
@@ -1265,12 +1268,16 @@ fn run_wm_main_loop(
                                 ui.render(renderer, wm, &theme_list)?;
                             }
                             KeyCode::Enter | KeyCode::Char(' ') => {
-                                let action: AppAction =
-                                    ui.context_menu.selected_action().into();
-                                apply_app_action(wm, action);
+                                let menu_action = ui.context_menu.selected_action();
                                 ui.close_mode();
                                 wm.force_full_redraw();
-                                renderer.render(wm)?;
+                                if menu_action == ContextMenuAction::RenamePane {
+                                    open_rename_pane(&mut ui, wm);
+                                    ui.render(renderer, wm, &theme_list)?;
+                                } else {
+                                    apply_app_action(wm, menu_action.into());
+                                    renderer.render(wm)?;
+                                }
                             }
                             _ => {}
                         }
@@ -1416,8 +1423,16 @@ fn run_wm_main_loop(
                                 continue;
                             }
                             KeyCode::Enter => {
-                                if !ui.rename_buffer.is_empty() {
-                                    wm.rename_active_tab(&ui.rename_buffer);
+                                match ui.rename_target {
+                                    RenameTarget::Window => {
+                                        if !ui.rename_buffer.is_empty() {
+                                            wm.rename_active_tab(&ui.rename_buffer);
+                                        }
+                                    }
+                                    // Empty name restores the default pane title
+                                    RenameTarget::Pane => {
+                                        wm.rename_focused_pane(&ui.rename_buffer);
+                                    }
                                 }
                                 ui.close_mode();
                                 renderer.render(wm)?;
@@ -1801,6 +1816,7 @@ fn run_wm_main_loop(
                             KeyCode::Char(',') => {
                                 ui.close_mode();
                                 ui.mode = UiMode::Rename;
+                                ui.rename_target = RenameTarget::Window;
                                 if let Some(tab) = wm.active_tab() {
                                     ui.rename_buffer = tab.name.clone();
                                 }
@@ -2076,9 +2092,14 @@ fn run_wm_main_loop(
                                     .context_menu
                                     .handle_click(mouse_event.column, mouse_event.row)
                                 {
-                                    apply_app_action(wm, action.into());
                                     ui.close_mode();
-                                    renderer.render(wm)?;
+                                    if action == ContextMenuAction::RenamePane {
+                                        open_rename_pane(&mut ui, wm);
+                                        ui.render(renderer, wm, &theme_list)?;
+                                    } else {
+                                        apply_app_action(wm, action.into());
+                                        renderer.render(wm)?;
+                                    }
                                 } else {
                                     // Clicked outside menu - close it
                                     ui.close_mode();
@@ -2208,11 +2229,31 @@ fn run_wm_main_loop(
                             renderer.render(wm)?;
                         }
                         MouseEventKind::Down(MouseButton::Right) => {
-                            // Show context menu
-                            if let Some((pane_id, x, y)) = wm.handle_right_click(mouse_event.column, mouse_event.row) {
-                                ui.context_menu.show(pane_id, x, y, wm.width, wm.height);
-                                ui.mode = UiMode::ContextMenu;
-                                ui.render(renderer, wm, &theme_list)?;
+                            if mouse_event.row < wm.tab_bar_height {
+                                // Right-click on a tab renames that window
+                                if let Some(tab_id) = wm.tab_at_position(mouse_event.column) {
+                                    if wm.select_tab(tab_id) {
+                                        reset_cursor_shape();
+                                        wm.force_full_redraw();
+                                    }
+                                    ui.mode = UiMode::Rename;
+                                    ui.rename_target = RenameTarget::Window;
+                                    if let Some(tab) = wm.active_tab() {
+                                        ui.rename_buffer = tab.name.clone();
+                                    }
+                                    ui.render(renderer, wm, &theme_list)?;
+                                }
+                            } else if let Some((pane_id, x, y)) = wm.handle_right_click(mouse_event.column, mouse_event.row) {
+                                if wm.pane_title_at(mouse_event.column, mouse_event.row) == Some(pane_id) {
+                                    // Right-click on the title row renames the pane
+                                    open_rename_pane(&mut ui, wm);
+                                    ui.render(renderer, wm, &theme_list)?;
+                                } else {
+                                    // Show context menu
+                                    ui.context_menu.show(pane_id, x, y, wm.width, wm.height);
+                                    ui.mode = UiMode::ContextMenu;
+                                    ui.render(renderer, wm, &theme_list)?;
+                                }
                             }
                         }
                         MouseEventKind::ScrollUp => {
@@ -2430,6 +2471,14 @@ fn spawn_hook_command(command_line: &str, event: &crate::wm::AgentStateEvent) {
             info!("agent hook failed to spawn ({command_line:?}): {e}");
         }
     }
+}
+
+/// Open the rename popup for the focused pane, prefilled with its custom
+/// title (empty when the pane still shows the default "Pane N" title).
+fn open_rename_pane(ui: &mut WmAppState, wm: &WindowManager) {
+    ui.mode = UiMode::Rename;
+    ui.rename_target = RenameTarget::Pane;
+    ui.rename_buffer = wm.focused_pane_title().unwrap_or_default();
 }
 
 fn apply_app_action(wm: &mut WindowManager, action: AppAction) {

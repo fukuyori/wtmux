@@ -152,7 +152,10 @@ pub enum WmOverlay<'a> {
     History(&'a HistorySelector),
     PaneNumbers,
     CopyMode(&'a CopyMode),
-    Rename(&'a str),
+    Rename {
+        buffer: &'a str,
+        target: super::app_state::RenameTarget,
+    },
     ThemeSelector {
         themes: &'a [&'a str],
         selected: usize,
@@ -327,8 +330,12 @@ impl WmRenderer {
                     Some(WmOverlay::PaneNumbers) => {
                         self.render_pane_numbers(out, wm)?;
                     }
-                    Some(WmOverlay::Rename(buffer)) => {
-                        self.render_rename_popup(out, wm, buffer)?;
+                    Some(WmOverlay::Rename { buffer, target }) => {
+                        let title = match target {
+                            super::app_state::RenameTarget::Window => "Rename Window",
+                            super::app_state::RenameTarget::Pane => "Rename Pane",
+                        };
+                        self.render_rename_popup(out, wm, buffer, title)?;
                     }
                     Some(WmOverlay::ThemeSelector { themes, selected }) => {
                         self.render_theme_selector(out, wm, themes, *selected)?;
@@ -532,7 +539,13 @@ impl WmRenderer {
     }
 
     /// Render rename popup in center of screen
-    fn render_rename_popup<W: Write>(&self, stdout: &mut W, wm: &WindowManager, rename_buffer: &str) -> io::Result<()> {
+    fn render_rename_popup<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        rename_buffer: &str,
+        title: &str,
+    ) -> io::Result<()> {
         let box_width = 40.min(wm.width.saturating_sub(4)) as usize;
         let box_height = 5;
         if box_width < 8 || wm.height < box_height as u16 {
@@ -549,8 +562,8 @@ impl WmRenderer {
 
         // Top border
         execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
-        write!(stdout, "┌─ Rename Window ")?;
-        let title_len = 16;
+        write!(stdout, "┌─ {} ", title)?;
+        let title_len = title.chars().count() + 3; // "─ title " after the corner
         for _ in 0..(box_width.saturating_sub(title_len + 2)) {
             write!(stdout, "─")?;
         }
@@ -1952,11 +1965,30 @@ mod tests {
         let mut out = Vec::new();
 
         renderer
-            .render_rename_popup(&mut out, &wm, "とても長いウィンドウ名")
+            .render_rename_popup(&mut out, &wm, "とても長いウィンドウ名", "Rename Window")
             .expect("render rename popup");
 
         let output = String::from_utf8(out).expect("valid UTF-8 output");
         assert!(output.contains("いウィンドウ名█"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rename_popup_shows_pane_title_variant() {
+        use crate::config::PrefixKey;
+        use crate::wm::WindowManager;
+
+        let wm = WindowManager::new(60, 10, None, None, PrefixKey { char: 'b' }, true);
+        let renderer = WmRenderer::new();
+        let mut out = Vec::new();
+
+        renderer
+            .render_rename_popup(&mut out, &wm, "agent", "Rename Pane")
+            .expect("render rename popup");
+
+        let output = String::from_utf8(out).expect("valid UTF-8 output");
+        assert!(output.contains("Rename Pane"));
+        assert!(output.contains("agent█"));
     }
 
     #[cfg(windows)]

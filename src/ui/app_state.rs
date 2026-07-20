@@ -8,6 +8,13 @@ use crate::wm::{Pane, WindowManager};
 
 use super::{AgentDashboard, ContextMenu, WindowSelector, WmOverlay, WmRenderer};
 
+/// What the rename popup (`UiMode::Rename`) is renaming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenameTarget {
+    Window,
+    Pane,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiMode {
     Normal,
@@ -32,6 +39,7 @@ pub(crate) struct WmAppState {
     pub(crate) pane_numbers_started: Instant,
     pub(crate) copy_mode: CopyMode,
     pub(crate) rename_buffer: String,
+    pub(crate) rename_target: RenameTarget,
     pub(crate) context_menu: ContextMenu,
     /// Input buffer for the command prompt (`Prefix + :`)
     pub(crate) command_buffer: String,
@@ -52,6 +60,7 @@ impl WmAppState {
             pane_numbers_started: Instant::now(),
             copy_mode: CopyMode::new(),
             rename_buffer: String::new(),
+            rename_target: RenameTarget::Window,
             context_menu: ContextMenu::new(),
             command_buffer: String::new(),
             popup: None,
@@ -109,7 +118,10 @@ impl WmAppState {
             UiMode::AgentDashboard => Some(WmOverlay::AgentDashboard(&self.agent_dashboard)),
             UiMode::PaneNumbers => Some(WmOverlay::PaneNumbers),
             UiMode::CopyMode => Some(WmOverlay::CopyMode(&self.copy_mode)),
-            UiMode::Rename => Some(WmOverlay::Rename(&self.rename_buffer)),
+            UiMode::Rename => Some(WmOverlay::Rename {
+                buffer: &self.rename_buffer,
+                target: self.rename_target,
+            }),
             UiMode::ContextMenu => Some(WmOverlay::ContextMenu(&self.context_menu)),
             UiMode::CommandPrompt => Some(WmOverlay::CommandPrompt(&self.command_buffer)),
             UiMode::Popup => self.popup.as_ref().map(WmOverlay::Popup),

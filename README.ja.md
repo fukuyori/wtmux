@@ -4,13 +4,14 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.2.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.2.0 の主な変更
+## 2.2.1 の主な変更
 
-- **ペイン境界ドラッグ時の表示乱れを修正**: PTYリサイズをドラッグ確定時まで遅延させ（SIGWINCH連打をやめて1回に）、OSC 133 シェル統合が有効な場合はプロンプト行・入力行をリサイズ中も物理的に固定 — oh-my-posh 等の Powerline プロンプトが境界移動でゴミを撒き散らさなくなりました。
+- **右クリックで名前変更**: タブバーのタブを右クリックでそのウィンドウの名前変更、ペインのタイトル行（上枠）を右クリックでそのペインの名前変更ができるようになりました。コンテキストメニューにも「Rename Pane」を追加。
+- 2.2.0 より: ペイン境界ドラッグ時の表示乱れを修正 — PTYリサイズをドラッグ確定時まで遅延させ、OSC 133 シェル統合により oh-my-posh 等の Powerline プロンプトが境界移動でゴミを撒き散らさなくなりました。
 - 2.1.0 より: コマンドプロンプト（`Prefix + :`）、スクリプト操作CLI（`send-keys` / `capture-pane`）、`display-popup`、エージェント状態フック（`[hooks]`）、`wtmux report-state`、ペイン出力ログ（`Prefix + Shift+P`）。
 
 ## 特徴
@@ -97,25 +98,25 @@ cp target/release/wtmux /usr/local/bin/
 
 ```powershell
 # ポータブル版（ZIP）
-.\build-portable.ps1
+.\scripts\build-portable.ps1
 
 # Inno Setup使用（エンドユーザー向け推奨）
 # ダウンロード: https://jrsoftware.org/isinfo.php
-.\build-inno-installer.ps1
+.\scripts\build-inno-installer.ps1
 
 # WiX Toolset使用（企業展開向け）
 # ダウンロード: https://wixtoolset.org/releases/
 # WiX Toolset v7 では、スクリプトが OSMF EULA を自動受諾してからビルドします。
-.\build-installer.ps1
+.\scripts\build-installer.ps1
 
 # MSIXパッケージ（Windows 10/11向け）
 # Windows 10 SDKが必要
-.\build-msix.ps1              # 未署名（開発者モードが必要）
-.\build-msix.ps1 -Sign        # 自己署名（テスト用）
+.\scripts\build-msix.ps1              # 未署名（開発者モードが必要）
+.\scripts\build-msix.ps1 -Sign        # 自己署名（テスト用）
 
 # assets/wtmux-icon.svg を編集した後にアイコン資産を再生成
 # 生成された .ico は wtmux.exe に埋め込まれ、各インストーラーでも再利用されます。
-.\generate-icons.ps1
+.\scripts\generate-icons.ps1
 ```
 
 ### macOSインストーラーのビルド
@@ -555,7 +556,9 @@ wtmuxは包括的なマウスサポートを提供しています。
 | 分割境界を左ドラッグ | ペインサイズ変更 | ペインサイズ変更 |
 | タブバーを左クリック | タブ切り替え | タブ切り替え |
 | タブバーの `[+]` を左クリック | 新規タブ作成 | 新規タブ作成 |
-| 右クリック | コンテキストメニュー（Paste, Zoom, Split等） | コンテキストメニュー |
+| 右クリック | コンテキストメニュー（Paste, Zoom, Split, Rename Pane等） | コンテキストメニュー |
+| タブバーを右クリック | そのウィンドウの名前変更 | そのウィンドウの名前変更 |
+| ペインタイトル（上枠）を右クリック | そのペインの名前変更 | そのペインの名前変更 |
 | スクロールホイール | バッファをスクロール | アプリに転送 |
 
 ## tmuxとの比較
@@ -587,19 +590,20 @@ wtmux/
 ├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
-├── generate-icons.ps1
 ├── assets/
 │   ├── wtmux-icon.svg       # アイコン原本
 │   └── generated/           # 生成済み .ico / プレビュー PNG
-├── build-portable.ps1
-├── build-installer.ps1
-├── build-inno-installer.ps1
 ├── installer/
 │   ├── wtmux.iss          # Inno Setupスクリプト
 │   ├── wtmux.wxs          # WiXスクリプト
 │   ├── msix/Assets/       # MSIX用アイコン資産
 │   └── license.rtf
 ├── scripts/
+│   ├── build-portable.ps1
+│   ├── build-installer.ps1
+│   ├── build-inno-installer.ps1
+│   ├── build-msix.ps1
+│   ├── generate-icons.ps1
 │   └── sign-and-notarize-macos.sh  # macOS署名・公証済み.pkgビルド
 └── src/
     ├── main.rs            # エントリーポイント

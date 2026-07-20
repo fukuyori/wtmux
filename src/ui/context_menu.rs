@@ -43,6 +43,8 @@ pub enum ContextMenuAction {
     /// Toggle zoom state of the current pane.
     /// Equivalent to `Ctrl+B, z`.
     ToggleZoom,
+    /// Rename the current pane (opens the rename input popup).
+    RenamePane,
     /// Cancel and close the menu without taking action.
     Cancel,
 }
@@ -105,6 +107,7 @@ impl ContextMenu {
     /// - Zoom/Unzoom (z)
     /// - Split ─ (") - horizontal split
     /// - Split │ (%) - vertical split
+    /// - Rename Pane
     /// - Kill Pane (x)
     /// - Cancel (Esc)
     pub fn new() -> Self {
@@ -119,6 +122,7 @@ impl ContextMenu {
                 MenuItem::new("Zoom/Unzoom", ContextMenuAction::ToggleZoom, Some("z")),
                 MenuItem::new("Split ─", ContextMenuAction::SplitVertical, Some("\"")),
                 MenuItem::new("Split │", ContextMenuAction::SplitHorizontal, Some("%")),
+                MenuItem::new("Rename Pane", ContextMenuAction::RenamePane, None),
                 MenuItem::new("Kill Pane", ContextMenuAction::KillPane, Some("x")),
                 MenuItem::new("Cancel", ContextMenuAction::Cancel, Some("Esc")),
             ],

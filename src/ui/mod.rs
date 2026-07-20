@@ -25,7 +25,7 @@ pub mod agent_dashboard;
 pub mod context_menu;
 
 pub use keymapper::*;
-pub(crate) use app_state::{UiMode, WmAppState};
+pub(crate) use app_state::{RenameTarget, UiMode, WmAppState};
 pub use renderer::*;
 pub use wm_renderer::{WmOverlay, WmRenderer};
 pub use window_selector::{TreeEntry, WindowSelector};

@@ -7,12 +7,14 @@ $ErrorActionPreference = "Stop"
 
 Add-Type -AssemblyName System.Drawing
 
+$ProjectRoot = Split-Path $PSScriptRoot -Parent
+
 if (-not $GeneratedDir) {
-    $GeneratedDir = Join-Path $PSScriptRoot "assets\generated"
+    $GeneratedDir = Join-Path $ProjectRoot "assets\generated"
 }
 
 if (-not $MsixAssetsDir) {
-    $MsixAssetsDir = Join-Path $PSScriptRoot "installer\msix\Assets"
+    $MsixAssetsDir = Join-Path $ProjectRoot "installer\msix\Assets"
 }
 
 function New-RoundedRectanglePath {

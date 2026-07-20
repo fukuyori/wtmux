@@ -4,13 +4,14 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.2.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.2.0 Highlights
+## 2.2.1 Highlights
 
-- **Clean split-border drags**: PTY resizes are deferred until the drag ends (a single SIGWINCH instead of a redraw storm), and with OSC 133 shell integration the prompt + input rows keep their physical layout across resizes — Powerline prompts (oh-my-posh etc.) no longer scatter artifacts when a pane divider is moved.
+- **Right-click rename**: right-click a tab in the tab bar to rename that window, or right-click a pane's title row (top border) to rename that pane. The context menu also gained a "Rename Pane" item.
+- From 2.2.0: clean split-border drags — PTY resizes are deferred until the drag ends, and with OSC 133 shell integration Powerline prompts (oh-my-posh etc.) no longer scatter artifacts when a pane divider is moved.
 - From 2.1.0: command prompt (`Prefix + :`), scripting CLI (`send-keys` / `capture-pane`), `display-popup`, agent state hooks (`[hooks]`), `wtmux report-state`, pane output logging (`Prefix + Shift+P`).
 
 ## Features
@@ -101,25 +102,25 @@ cp target/release/wtmux /usr/local/bin/
 
 ```powershell
 # Portable package (ZIP)
-.\build-portable.ps1
+.\scripts\build-portable.ps1
 
 # Using Inno Setup (recommended for end users)
 # Download from: https://jrsoftware.org/isinfo.php
-.\build-inno-installer.ps1
+.\scripts\build-inno-installer.ps1
 
 # Using WiX Toolset (for enterprise deployment)
 # Download from: https://wixtoolset.org/releases/
 # On WiX Toolset v7, the script accepts the OSMF EULA automatically before building.
-.\build-installer.ps1
+.\scripts\build-installer.ps1
 
 # MSIX package (for Windows 10/11)
 # Requires Windows 10 SDK
-.\build-msix.ps1              # Unsigned (requires Developer Mode)
-.\build-msix.ps1 -Sign        # Self-signed (for testing)
+.\scripts\build-msix.ps1              # Unsigned (requires Developer Mode)
+.\scripts\build-msix.ps1 -Sign        # Self-signed (for testing)
 
 # Regenerate icon assets after editing assets/wtmux-icon.svg
 # The generated .ico is embedded into wtmux.exe and reused by the installers.
-.\generate-icons.ps1
+.\scripts\generate-icons.ps1
 ```
 
 ### Building the macOS Installer
@@ -608,7 +609,9 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Left drag on split border | Resize panes | Resize panes |
 | Left click on tab bar | Switch tab | Switch tab |
 | Left click `[+]` in tab bar | Create new tab | Create new tab |
-| Right click | Context menu (Paste, Zoom, Split, etc.) | Context menu |
+| Right click | Context menu (Paste, Zoom, Split, Rename Pane, etc.) | Context menu |
+| Right click on tab bar | Rename that window | Rename that window |
+| Right click on pane title (top border) | Rename that pane | Rename that pane |
 | Scroll wheel | Scroll buffer | App receives event |
 
 ## Comparison with tmux
@@ -640,19 +643,20 @@ wtmux/
 ├── CHANGELOG.md
 ├── config.example.toml
 ├── install.ps1
-├── generate-icons.ps1
 ├── assets/
 │   ├── wtmux-icon.svg       # Icon source artwork
 │   └── generated/           # Generated .ico / preview PNG
-├── build-portable.ps1
-├── build-installer.ps1
-├── build-inno-installer.ps1
 ├── installer/
 │   ├── wtmux.iss          # Inno Setup script
 │   ├── wtmux.wxs          # WiX script
 │   ├── msix/Assets/       # MSIX icon assets
 │   └── license.rtf
 ├── scripts/
+│   ├── build-portable.ps1
+│   ├── build-installer.ps1
+│   ├── build-inno-installer.ps1
+│   ├── build-msix.ps1
+│   ├── generate-icons.ps1
 │   └── sign-and-notarize-macos.sh  # macOS signed/notarized .pkg build
 └── src/
     ├── main.rs            # Entry point

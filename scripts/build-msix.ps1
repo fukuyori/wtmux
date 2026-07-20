@@ -6,9 +6,9 @@
 #   - Rust toolchain (for cargo build)
 #
 # Usage:
-#   .\build-msix.ps1                    # Build unsigned MSIX
-#   .\build-msix.ps1 -Sign              # Build and sign with self-signed cert
-#   .\build-msix.ps1 -Sign -CertPath "path\to\cert.pfx" -CertPassword "password"
+#   .\scripts\build-msix.ps1                    # Build unsigned MSIX
+#   .\scripts\build-msix.ps1 -Sign              # Build and sign with self-signed cert
+#   .\scripts\build-msix.ps1 -Sign -CertPath "path\to\cert.pfx" -CertPassword "password"
 #
 
 param(
@@ -27,7 +27,7 @@ $Revision = "0"
 $Publisher = "CN=5EF2DE34-8C4A-42F6-9955-D951EB8F20B7"
 
 # Paths
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path $PSScriptRoot -Parent
 $InstallerDir = Join-Path $ProjectRoot "installer"
 $MsixDir = Join-Path $InstallerDir "msix"
 $OutputDir = Join-Path $ProjectRoot "target\release"
@@ -109,7 +109,7 @@ try {
 }
 
 # Generate and copy assets
-$iconScript = Join-Path $ProjectRoot "generate-icons.ps1"
+$iconScript = Join-Path $PSScriptRoot "generate-icons.ps1"
 if (Test-Path $iconScript) {
     Write-Host "  Generating icon assets..." -ForegroundColor Green
     try {

@@ -310,6 +310,18 @@ impl WindowManager {
         true
     }
 
+    /// Switch to a tab by id (e.g. the tab under a mouse click).
+    ///
+    /// Returns true when the active tab changed.
+    pub fn select_tab(&mut self, tab_id: TabId) -> bool {
+        if tab_id == self.active_tab || !self.tabs.contains_key(&tab_id) {
+            return false;
+        }
+        self.last_active_tab = Some(self.active_tab);
+        self.active_tab = tab_id;
+        true
+    }
+
     /// Get the active tab
     /// Get mutable access to the active (focused) pane's session
     pub fn get_active_session_mut(&mut self) -> Option<&mut crate::core::session::Session> {
@@ -409,6 +421,24 @@ impl WindowManager {
         if let Some(tab) = self.active_tab_mut() {
             tab.name = name.to_string();
         }
+    }
+
+    /// Rename the focused pane. An empty name restores the default title.
+    pub fn rename_focused_pane(&mut self, name: &str) {
+        if let Some(pane) = self.active_tab_mut().and_then(|tab| tab.focused_pane_mut()) {
+            pane.title = if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            };
+        }
+    }
+
+    /// Custom title of the focused pane, if one has been set.
+    pub fn focused_pane_title(&self) -> Option<String> {
+        self.active_tab()
+            .and_then(|tab| tab.panes.get(&tab.focused_pane))
+            .and_then(|pane| pane.title.clone())
     }
 
     /// Switch to next layout
@@ -898,6 +928,18 @@ impl WindowManager {
             }
         }
         None
+    }
+
+    /// Pane whose title row (top border) is at the given screen position.
+    pub fn pane_title_at(&self, col: u16, row: u16) -> Option<PaneId> {
+        if row < self.tab_bar_height {
+            return None;
+        }
+        let content_row = row - self.tab_bar_height;
+        let tab = self.active_tab()?;
+        let pane_id = tab.pane_at(col, content_row)?;
+        let pane = tab.panes.get(&pane_id)?;
+        (content_row == pane.y).then_some(pane_id)
     }
 
     /// Handle mouse drag (extend selection)
@@ -1744,6 +1786,50 @@ mod tests {
         wm.last_tab();
         assert_eq!(wm.active_tab_index(), 1);
         assert!(!wm.select_tab_at(99));
+    }
+
+    #[test]
+    fn select_tab_activates_by_id_and_tracks_last_window() {
+        let mut wm = test_manager(80);
+        let first = wm.active_tab;
+        wm.new_tab();
+        let second = wm.active_tab;
+
+        assert!(wm.select_tab(first));
+        assert_eq!(wm.active_tab, first);
+        assert_eq!(wm.last_active_tab, Some(second));
+
+        assert!(!wm.select_tab(first)); // already active
+        assert!(!wm.select_tab(u64::MAX)); // unknown id
+    }
+
+    #[test]
+    fn rename_focused_pane_sets_and_clears_custom_title() {
+        let mut wm = test_manager(80);
+        assert_eq!(wm.focused_pane_title(), None);
+
+        wm.rename_focused_pane("build");
+        assert_eq!(wm.focused_pane_title().as_deref(), Some("build"));
+        let pane_title = wm
+            .active_tab()
+            .and_then(|tab| tab.panes.get(&tab.focused_pane))
+            .map(|pane| pane.display_title());
+        assert_eq!(pane_title.as_deref(), Some("build"));
+
+        // Empty name restores the default title
+        wm.rename_focused_pane("");
+        assert_eq!(wm.focused_pane_title(), None);
+    }
+
+    #[test]
+    fn pane_title_at_matches_only_top_border_row() {
+        let wm = test_manager(80);
+        let title_row = wm.tab_bar_height; // first content row = top border
+
+        assert!(wm.pane_title_at(10, title_row).is_some());
+        assert_eq!(wm.pane_title_at(10, title_row + 1), None);
+        // Tab bar rows are never a pane title
+        assert_eq!(wm.pane_title_at(10, 0), None);
     }
 
     #[test]

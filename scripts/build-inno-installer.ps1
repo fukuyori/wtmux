@@ -11,6 +11,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Run from the repository root regardless of invocation directory
+Set-Location (Split-Path $PSScriptRoot -Parent)
+
 Write-Host "=== wtmux Inno Setup Installer Build ===" -ForegroundColor Cyan
 
 # Get version from Cargo.toml if not specified

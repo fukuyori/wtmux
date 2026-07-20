@@ -3,8 +3,8 @@
 # Create portable ZIP package for wtmux
 #
 # Usage:
-#   .\build-portable.ps1              # Build and package
-#   .\build-portable.ps1 -SkipBuild   # Package only (use existing build)
+#   .\scripts\build-portable.ps1              # Build and package
+#   .\scripts\build-portable.ps1 -SkipBuild   # Package only (use existing build)
 
 param(
     [string]$Version = "",
@@ -12,6 +12,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Run from the repository root regardless of invocation directory
+Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "=== wtmux Portable Package Builder ===" -ForegroundColor Cyan
 
