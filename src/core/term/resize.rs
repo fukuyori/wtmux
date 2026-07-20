@@ -42,6 +42,7 @@ pub(crate) fn reflow_screen(
     new_cols: u16,
     new_rows: u16,
     anchors: &[ReflowAnchor],
+    pin_from_abs_row: Option<usize>,
 ) -> ScreenResizePlan {
     let new_cols = new_cols.max(1);
     let old_scroll_offset = screen.scroll_offset;
@@ -61,6 +62,12 @@ pub(crate) fn reflow_screen(
         .max()
         .map(|idx| idx + 1)
         .unwrap_or(0);
+    let total_abs_len = screen.scrollback.len() + visible_rows_len;
+    // Rows at/below this absolute row bypass the rewrap and are carried
+    // through physically (see the pinned-region block below).
+    let pin_from = pin_from_abs_row
+        .unwrap_or(total_abs_len)
+        .clamp(screen.scrollback.len(), total_abs_len);
 
     for (abs_row, row) in screen
         .scrollback
@@ -68,6 +75,9 @@ pub(crate) fn reflow_screen(
         .chain(screen.rows.iter().take(visible_rows_len))
         .enumerate()
     {
+        if abs_row >= pin_from {
+            break;
+        }
         let mut preserve_until_col = None;
         for (idx, anchor) in anchors.iter().enumerate() {
             if anchor.abs_row == abs_row {
@@ -92,7 +102,7 @@ pub(crate) fn reflow_screen(
         }
     }
 
-    if !current_line.is_empty() || logical_lines.is_empty() {
+    if !current_line.is_empty() || (logical_lines.is_empty() && pin_from >= total_abs_len) {
         logical_lines.push(current_line);
     }
 
@@ -123,6 +133,26 @@ pub(crate) fn reflow_screen(
                 .saturating_sub(row_start)
                 .min(new_cols.saturating_sub(1) as usize) as u16;
             anchor_positions_abs[anchor_idx] = Some((line_start_abs_row + row_in_line, col));
+        }
+    }
+
+    // Pinned region: rows at/below the shell's active prompt/input line are
+    // carried through as-is (truncated or padded to the new width) instead
+    // of being rewrapped. The shell repaints this region itself on the
+    // post-resize SIGWINCH, and its cursor-relative erase/reprint sequences
+    // only line up if these rows keep their physical layout.
+    let pinned_base = physical_rows.len();
+    for screen_row in (pin_from - screen.scrollback.len())..visible_rows_len {
+        let mut row = screen.rows[screen_row].clone();
+        row.resize(new_cols);
+        physical_rows.push(row);
+    }
+    for (anchor_idx, anchor) in anchors.iter().enumerate() {
+        if anchor.abs_row >= pin_from && anchor.abs_row < total_abs_len {
+            anchor_positions_abs[anchor_idx] = Some((
+                pinned_base + (anchor.abs_row - pin_from),
+                anchor.col.min(new_cols.saturating_sub(1)),
+            ));
         }
     }
 

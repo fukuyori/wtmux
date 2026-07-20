@@ -4,19 +4,14 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.1.0 の主な変更
+## 2.2.0 の主な変更
 
-- **コマンドプロンプト（`Prefix + :`）**: tmuxスタイルのコマンド入力（`split-window`、`rename-window`、`select-layout`、`set synchronize-panes` など、省略形にも対応）。
-- **スクリプト操作CLI**: `wtmux send-keys` と `wtmux capture-pane` で実行中のwtmuxを外部から操作 — 任意のペインへのキー注入と、画面/スクロールバックのテキスト取得。ペインで動くAIエージェントのオーケストレーション向け。
-- **`display-popup`**: 画面中央のフローティングペインでコマンドを実行（tmux 3.2スタイル）。コマンドプロンプトとCLIの両方から。
-- **エージェント状態フック（`[hooks]`）**: ペインの状態が WORKING / BLOCKED / DONE / IDLE に変化した瞬間にコマンド実行（Windowsトースト通知など）。
-- **`wtmux report-state`**: エージェントCLI（Claude Code hooksなど）がペインの確定状態を報告し、ヒューリスティクスを上書き。
-- **ペイン出力ログ**（`Prefix + Shift+P`、tmux `pipe-pane` 相当）と `[LOG]` インジケータ。
-- 2.0.2 より: 署名・公証済み macOS インストーラ、オーバーレイの誤クローズ修正。
+- **ペイン境界ドラッグ時の表示乱れを修正**: PTYリサイズをドラッグ確定時まで遅延させ（SIGWINCH連打をやめて1回に）、OSC 133 シェル統合が有効な場合はプロンプト行・入力行をリサイズ中も物理的に固定 — oh-my-posh 等の Powerline プロンプトが境界移動でゴミを撒き散らさなくなりました。
+- 2.1.0 より: コマンドプロンプト（`Prefix + :`）、スクリプト操作CLI（`send-keys` / `capture-pane`）、`display-popup`、エージェント状態フック（`[hooks]`）、`wtmux report-state`、ペイン出力ログ（`Prefix + Shift+P`）。
 
 ## 特徴
 

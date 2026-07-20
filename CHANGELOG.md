@@ -1,3 +1,22 @@
+## [2.2.0] - 2026-07-20
+
+### Fixed
+
+- **Prompt corruption when dragging a split border**: dragging a pane
+  divider left the pane littered with stale prompt copies (especially
+  with Powerline prompts such as oh-my-posh on macOS / Linux). Three
+  fixes work together:
+  - PTY resizes are deferred while the drag is in progress and flushed
+    once on mouse-up, so the shell receives a single SIGWINCH (one
+    prompt redraw) instead of a redraw storm racing the local reflow.
+  - Panes whose size did not actually change no longer trigger a PTY
+    ioctl or a local reflow on layout recomputes.
+  - With OSC 133 / 633 shell integration active, the prompt + input
+    rows are carried through a resize physically (pinned, not
+    rewrapped) — the shell repaints them on SIGWINCH with
+    cursor-relative sequences, which now line up. The prompt start row
+    (OSC 133 A) is tracked so multi-line prompts stay stable too.
+
 ## [2.1.0] - 2026-07-20
 
 ### Added

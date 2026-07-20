@@ -898,8 +898,10 @@ impl VtParser {
 
         match marker {
             "A" => {
-                // Prompt start: clear previous confirmed command
-                state.shell_integration.on_prompt_start();
+                // Prompt start: record where the prompt begins and clear the
+                // previous confirmed command
+                let row = state.active_cursor().row;
+                state.shell_integration.on_prompt_start(row);
             }
             "B" => {
                 // Prompt end: record where the user's input begins

@@ -828,21 +828,29 @@ impl WindowManager {
     /// Returns true if focus changed to a different pane
     pub fn handle_mouse_down(&mut self, col: u16, row: u16) -> bool {
         self.mouse_selection_moved = false;
-        self.mouse_resize_drag = None;
+        if self.mouse_resize_drag.take().is_some() {
+            // Lost the matching mouse-up (e.g. dropped event): make sure no
+            // pane is left with PTY resizes deferred.
+            self.end_pty_resize_deferral();
+        }
 
         // Check if click is on tab bar
         if row < self.tab_bar_height {
             return self.handle_tab_click(col);
         }
-        
+
         // Adjust row for content area
         let content_row = row - self.tab_bar_height;
 
-        if let Some(tab) = self.active_tab_mut() {
-            if let Some(target) = tab.split_resize_target_at(col, content_row) {
-                self.mouse_resize_drag = Some(target);
-                return false;
-            }
+        let resize_target = self.active_tab_mut().and_then(|tab| {
+            let target = tab.split_resize_target_at(col, content_row)?;
+            // Defer PTY resizes for the drag; flushed on mouse-up.
+            tab.set_pty_resize_deferred(true);
+            Some(target)
+        });
+        if let Some(target) = resize_target {
+            self.mouse_resize_drag = Some(target);
+            return false;
         }
         
         // Find pane at position and focus it
@@ -926,10 +934,18 @@ impl WindowManager {
         }
     }
 
+    /// Flush deferred PTY resizes on every pane (drag end / recovery).
+    fn end_pty_resize_deferral(&mut self) {
+        for tab in self.tabs.values_mut() {
+            tab.set_pty_resize_deferred(false);
+        }
+    }
+
     /// Handle mouse up (end selection and copy)
     pub fn handle_mouse_up(&mut self) -> Option<String> {
         if self.mouse_resize_drag.take().is_some() {
             self.mouse_selection_moved = false;
+            self.end_pty_resize_deferral();
             return None;
         }
 

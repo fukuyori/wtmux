@@ -4,19 +4,14 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.1.0 Highlights
+## 2.2.0 Highlights
 
-- **Command prompt (`Prefix + :`)**: tmux-style commands (`split-window`, `rename-window`, `select-layout`, `set synchronize-panes`, ...) with the usual abbreviations.
-- **Scripting CLI**: `wtmux send-keys` and `wtmux capture-pane` drive a running instance from outside — inject keystrokes into any pane and read its screen or scrollback back. Built for orchestrating AI agents in panes.
-- **`display-popup`**: a centered floating pane running a command (tmux 3.2 style), from the command prompt or the CLI.
-- **Agent state hooks (`[hooks]`)**: run a command (e.g. a Windows toast) the moment a pane's agent state changes to WORKING / BLOCKED / DONE / IDLE.
-- **`wtmux report-state`**: agent CLIs (e.g. Claude Code hooks) report their pane's ground-truth state, overriding the heuristics.
-- **Pane output logging** (`Prefix + Shift+P`, tmux `pipe-pane` analog) with a `[LOG]` status indicator.
-- From 2.0.2: signed & notarized macOS installer; overlay dismiss fix.
+- **Clean split-border drags**: PTY resizes are deferred until the drag ends (a single SIGWINCH instead of a redraw storm), and with OSC 133 shell integration the prompt + input rows keep their physical layout across resizes — Powerline prompts (oh-my-posh etc.) no longer scatter artifacts when a pane divider is moved.
+- From 2.1.0: command prompt (`Prefix + :`), scripting CLI (`send-keys` / `capture-pane`), `display-popup`, agent state hooks (`[hooks]`), `wtmux report-state`, pane output logging (`Prefix + Shift+P`).
 
 ## Features
 

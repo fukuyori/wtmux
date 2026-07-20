@@ -120,8 +120,49 @@ impl TerminalState {
 
         match policy {
             ResizePolicy::LocalReflow => {
+                let sb_len = self.primary_screen.scrollback.len();
+
+                // Pin the active region: on the post-resize SIGWINCH the
+                // shell erases and repaints its prompt + input line with
+                // cursor-relative sequences, so the rows it is about to
+                // touch must keep their physical layout instead of being
+                // rewrapped. Rows above still reflow; they shift the pinned
+                // region and the cursor by the same amount, which keeps the
+                // shell's relative movements aligned.
+                let rows_len = self.primary_screen.rows.len();
+                let line_start = |row: usize| {
+                    let mut r = row.min(rows_len.saturating_sub(1));
+                    while r > 0 && self.primary_screen.rows[r - 1].wrapped {
+                        r -= 1;
+                    }
+                    r
+                };
+                let cursor_line_start = line_start(self.primary_cursor.row as usize);
+                // Pin only when OSC 133 markers confirm the cursor sits on
+                // the shell's input line — then the shell is guaranteed to
+                // repaint the pinned rows. Without that confidence, rewrap
+                // everything as before to preserve content (nothing may
+                // repaint a truncated row). The pin extends to the prompt's
+                // first row so multi-line prompts stay stable; the distance
+                // guard protects against stale markers.
+                let pin_from_abs_row = match self.shell_integration.prompt_end_row {
+                    Some(prompt_end)
+                        if line_start(prompt_end as usize) == cursor_line_start =>
+                    {
+                        let mut pin_start = cursor_line_start;
+                        if let Some(prompt_start) = self.shell_integration.prompt_start_row {
+                            let prompt_start = prompt_start as usize;
+                            if prompt_start <= pin_start && pin_start - prompt_start <= 4 {
+                                pin_start = line_start(prompt_start);
+                            }
+                        }
+                        Some(sb_len + pin_start)
+                    }
+                    _ => None,
+                };
+
                 let mut primary_anchors = vec![ReflowAnchor {
-                    abs_row: self.primary_screen.scrollback.len() + self.primary_cursor.row as usize,
+                    abs_row: sb_len + self.primary_cursor.row as usize,
                     col: self.primary_cursor.col,
                 }];
                 let prompt_anchor_idx = if let (Some(prompt_row), Some(prompt_col)) = (
@@ -129,15 +170,29 @@ impl TerminalState {
                     self.shell_integration.prompt_end_col,
                 ) {
                     primary_anchors.push(ReflowAnchor {
-                        abs_row: self.primary_screen.scrollback.len() + prompt_row as usize,
+                        abs_row: sb_len + prompt_row as usize,
                         col: prompt_col,
                     });
                     Some(primary_anchors.len() - 1)
                 } else {
                     None
                 };
+                let prompt_start_anchor_idx =
+                    self.shell_integration.prompt_start_row.map(|row| {
+                        primary_anchors.push(ReflowAnchor {
+                            abs_row: sb_len + row as usize,
+                            col: 0,
+                        });
+                        primary_anchors.len() - 1
+                    });
 
-                let primary_plan = reflow_screen(&self.primary_screen, cols, rows, &primary_anchors);
+                let primary_plan = reflow_screen(
+                    &self.primary_screen,
+                    cols,
+                    rows,
+                    &primary_anchors,
+                    pin_from_abs_row,
+                );
                 let primary_positions = primary_plan.anchor_positions.clone();
                 self.primary_screen.apply_resize_plan(primary_plan, cols, rows);
 
@@ -159,6 +214,14 @@ impl TerminalState {
                             self.shell_integration.prompt_end_col = None;
                         }
                     }
+                }
+
+                if let Some(idx) = prompt_start_anchor_idx {
+                    self.shell_integration.prompt_start_row = primary_positions
+                        .get(idx)
+                        .copied()
+                        .flatten()
+                        .map(|(row, _)| row);
                 }
             }
             ResizePolicy::HostDriven | ResizePolicy::NoReflow => {
@@ -1459,6 +1522,10 @@ pub struct ShellIntegration {
     /// Used to decide whether to use OSC data or the keystroke fallback.
     pub active: bool,
 
+    /// Row at which the prompt starts being drawn (recorded on marker A).
+    /// With multi-line prompts this is above `prompt_end_row`.
+    pub prompt_start_row: Option<u16>,
+
     /// Column at which user input starts (recorded on marker B).
     pub prompt_end_col: Option<u16>,
     /// Row at which user input starts (recorded on marker B).
@@ -1475,9 +1542,11 @@ pub struct ShellIntegration {
 
 impl ShellIntegration {
     /// Called when OSC 133;A or 633;A is received (prompt start).
-    /// Clears the previous confirmed command so a fresh one can be captured.
-    pub fn on_prompt_start(&mut self) {
+    /// Records where the prompt begins and clears the previous confirmed
+    /// command so a fresh one can be captured.
+    pub fn on_prompt_start(&mut self, row: u16) {
         self.confirmed_command = None;
+        self.prompt_start_row = Some(row);
     }
 
     /// Called when OSC 133;B or 633;B is received (prompt end = input start).
@@ -1663,6 +1732,72 @@ mod tests {
 
         assert_eq!(row_text(&state, 0), "hello");
         assert_eq!(row_text(&state, 1), "world");
+    }
+
+    /// With OSC 133 markers placing the cursor on the input line, the
+    /// prompt + input rows must be carried through a resize physically
+    /// (truncated, not rewrapped): the shell repaints them on SIGWINCH with
+    /// cursor-relative sequences, which only line up if these rows keep
+    /// their layout. Rows above still reflow.
+    #[test]
+    fn resize_pins_prompt_and_input_rows_when_at_prompt() {
+        let mut state = TerminalState::new(10, 6);
+        for ch in "OUTPUTLINE".chars() {
+            state.put_char(ch);
+        }
+        state.carriage_return();
+        state.linefeed();
+
+        let prompt_row = state.active_cursor().row;
+        state.shell_integration.on_prompt_start(prompt_row);
+        for ch in "PROMPT1".chars() {
+            state.put_char(ch);
+        }
+        state.carriage_return();
+        state.linefeed();
+        for ch in "> ".chars() {
+            state.put_char(ch);
+        }
+        let (input_col, input_row) = {
+            let cursor = state.active_cursor();
+            (cursor.col, cursor.row)
+        };
+        state.shell_integration.on_prompt_end(input_col, input_row);
+        for ch in "abc".chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(6, 6);
+
+        // The output line above the prompt reflows into two rows...
+        assert_eq!(visible_row_text(&state, 0), "OUTPUT");
+        assert_eq!(visible_row_text(&state, 1), "LINE");
+        // ...while the prompt and input rows keep their physical layout
+        // (the prompt row is truncated, not wrapped).
+        assert_eq!(visible_row_text(&state, 2), "PROMPT");
+        assert_eq!(visible_row_text(&state, 3), "> abc");
+        assert_eq!(
+            (state.primary_cursor.row, state.primary_cursor.col),
+            (3, 5),
+            "cursor keeps its offset within the pinned region"
+        );
+        assert_eq!(state.shell_integration.prompt_start_row, Some(2));
+        assert_eq!(state.shell_integration.prompt_end_row, Some(3));
+        assert_eq!(state.shell_integration.prompt_end_col, Some(2));
+    }
+
+    /// Without OSC 133 markers there is no guarantee anything repaints the
+    /// cursor row after a resize, so it must keep rewrapping as before.
+    #[test]
+    fn resize_without_prompt_markers_still_reflows_cursor_line() {
+        let mut state = TerminalState::new(10, 4);
+        for ch in "abcdefghijKL".chars() {
+            state.put_char(ch);
+        }
+
+        state.resize(6, 4);
+        assert_eq!(row_text(&state, 0), "abcdef");
+        assert_eq!(row_text(&state, 1), "ghijKL");
     }
 
     #[test]

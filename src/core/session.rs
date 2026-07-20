@@ -81,6 +81,15 @@ pub struct Session {
     reader_thread: Option<JoinHandle<()>>,
     /// Channel to receive PTY output
     output_rx: Option<Receiver<Vec<u8>>>,
+    /// While true (during a split-border drag), `resize()` updates only the
+    /// local state and records the size in `pending_pty_resize`; the PTY is
+    /// resized once when the deferral ends, so the shell sees a single
+    /// SIGWINCH instead of a redraw storm racing the local reflow.
+    defer_pty_resize: bool,
+    /// Last size deferred while `defer_pty_resize` was set.
+    pending_pty_resize: Option<(u16, u16)>,
+    /// Last size actually sent to the PTY.
+    pty_size: (u16, u16),
     /// In-progress ConPTY buffer replay after a resize (renders suppressed)
     #[cfg(windows)]
     resize_settle: Option<ResizeSettle>,
@@ -104,6 +113,9 @@ impl Session {
             running: Arc::new(AtomicBool::new(false)),
             reader_thread: None,
             output_rx: None,
+            defer_pty_resize: false,
+            pending_pty_resize: None,
+            pty_size: (cols, rows),
             #[cfg(windows)]
             resize_settle: None,
         }
@@ -176,6 +188,7 @@ impl Session {
             cwd_prompt_hook,
         )?);
         self.pty = Some(pty.clone());
+        self.pty_size = (cols, rows);
         self.running.store(true, Ordering::SeqCst);
 
         // Create channel for PTY output
@@ -443,18 +456,46 @@ impl Session {
 
     /// Resize the terminal
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
+        // Layout recomputes call resize on every pane; skip the local reflow
+        // when this pane's size didn't actually change.
+        let unchanged = cols == self.state.cols && rows == self.state.rows;
+
+        if self.defer_pty_resize {
+            // A split-border drag is in progress: update local state only.
+            // The PTY gets one resize (and the shell one SIGWINCH) when the
+            // drag ends, so its prompt redraw runs against the final size
+            // instead of racing the per-step local reflows.
+            if !unchanged {
+                self.pending_pty_resize = Some((cols, rows));
+                self.state
+                    .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
+            }
+            return Ok(());
+        }
+
         // Let the PTY / the host terminal recalculate wrapping first, then
         // update our local state using the selected resize policy.
+        self.resize_pty_now(cols, rows)?;
+        if !unchanged {
+            self.state
+                .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
+        }
+        Ok(())
+    }
+
+    /// Send a size to the PTY, skipping sizes it already has.
+    fn resize_pty_now(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
+        if (cols, rows) == self.pty_size {
+            return Ok(());
+        }
         if let Some(pty) = &self.pty {
-            #[cfg(windows)]
-            let size_changed = cols != self.state.cols || rows != self.state.rows;
             pty.resize_pty(cols, rows)?;
             // conhost replays the whole buffer after a real size change;
             // suppress renders until it settles so only the final state is
-            // painted. Same-size calls (layout recomputes) don't replay.
-            // Unix ptys don't replay, so no settle window is needed there.
+            // painted. Unix ptys don't replay, so no settle window is
+            // needed there.
             #[cfg(windows)]
-            if size_changed {
+            {
                 let now = Instant::now();
                 self.resize_settle = Some(ResizeSettle {
                     started: now,
@@ -463,11 +504,19 @@ impl Session {
                 });
             }
         }
-
-        self.state
-            .resize_with_policy(cols, rows, DEFAULT_SESSION_RESIZE_POLICY);
-
+        self.pty_size = (cols, rows);
         Ok(())
+    }
+
+    /// Enable or disable PTY-resize deferral (set while a split-border drag
+    /// is in progress). Disabling flushes the last deferred size to the PTY.
+    pub fn set_pty_resize_deferred(&mut self, defer: bool) {
+        self.defer_pty_resize = defer;
+        if !defer {
+            if let Some((cols, rows)) = self.pending_pty_resize.take() {
+                let _ = self.resize_pty_now(cols, rows);
+            }
+        }
     }
 
     /// Whether the post-resize ConPTY buffer replay is still in flight.
@@ -695,6 +744,46 @@ mod tests {
             logged,
             "nothing is appended after the log is stopped"
         );
+    }
+
+    /// During a split-border drag, resize() must touch only the local state;
+    /// the PTY receives a single resize with the final size when the
+    /// deferral ends.
+    #[test]
+    fn deferred_resize_updates_local_state_only_and_flushes_on_release() {
+        let mut session = Session::new(0, 80, 24);
+        session.set_pty_resize_deferred(true);
+
+        session.resize(60, 24).unwrap();
+        session.resize(50, 20).unwrap();
+        assert_eq!((session.state.cols, session.state.rows), (50, 20));
+        assert_eq!(
+            session.pty_size,
+            (80, 24),
+            "PTY size must stay untouched mid-drag"
+        );
+        assert_eq!(session.pending_pty_resize, Some((50, 20)));
+
+        session.set_pty_resize_deferred(false);
+        assert_eq!(
+            session.pty_size,
+            (50, 20),
+            "only the final size is flushed to the PTY on drag end"
+        );
+        assert_eq!(session.pending_pty_resize, None);
+    }
+
+    /// Layout recomputes resize every pane; a call with the unchanged size
+    /// must be a no-op (no pending PTY resize recorded).
+    #[test]
+    fn unchanged_resize_is_a_noop() {
+        let mut session = Session::new(0, 80, 24);
+        session.set_pty_resize_deferred(true);
+        session.resize(80, 24).unwrap();
+        assert_eq!(session.pending_pty_resize, None);
+
+        session.set_pty_resize_deferred(false);
+        assert_eq!(session.pty_size, (80, 24));
     }
 
     #[test]

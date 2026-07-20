@@ -426,6 +426,15 @@ impl Tab {
         self.layout.split_resize_target_at(col, row, self.width, self.height)
     }
 
+    /// Enable or disable PTY-resize deferral for every pane in this tab.
+    /// Set while a split-border drag is in progress; disabling flushes the
+    /// final size to each pane's PTY.
+    pub fn set_pty_resize_deferred(&mut self, defer: bool) {
+        for pane in self.panes.values_mut() {
+            pane.session.set_pty_resize_deferred(defer);
+        }
+    }
+
     /// Resize a split boundary selected by mouse.
     pub fn resize_split_to(&mut self, target: &SplitResizeTarget, col: u16, row: u16) -> bool {
         if self.zoomed_pane.is_some() {
