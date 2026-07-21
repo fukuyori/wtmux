@@ -1319,7 +1319,8 @@ impl WmRenderer {
                 padding = box_width.saturating_sub(used + STATE_COL + 2)
             )?;
 
-            // State cell, colored unless the row is selected
+            // State cell, colored unless the row is selected. WORKING rows
+            // animate a Nerd Font spinner in place of the spacer.
             let attn = if entry.attention { '!' } else { ' ' };
             if !is_selected {
                 let state_color = match entry.state {
@@ -1330,7 +1331,12 @@ impl WmRenderer {
                 };
                 execute!(stdout, SetForegroundColor(state_color))?;
             }
-            write!(stdout, "{} {:<8}", attn, entry.state.label())?;
+            let spinner = if entry.state == crate::wm::AgentState::Working {
+                crate::wm::pane::working_spinner_frame_now()
+            } else {
+                ' '
+            };
+            write!(stdout, "{}{}{:<8}", attn, spinner, entry.state.label())?;
 
             base_colors(stdout)?;
             write!(stdout, "│")?;

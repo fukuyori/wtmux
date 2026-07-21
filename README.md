@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.3.0 Highlights
+## 2.3.1 Highlights
 
-- **Message composer (`Prefix + m`)**: compose a multi-line message in a floating editor and send it to a pane (e.g. an AI agent like Claude Code). Enter = newline, Ctrl+Enter / Ctrl+S = send, Ctrl+P/N = recall sent messages, unsent drafts are restored on reopen. IME-friendly (Japanese input works inline). From the agent dashboard, `m` targets the selected pane.
-- **Held popups**: `display-popup ls` now keeps its output visible after the command exits (any key closes; wheel / PageUp scroll). Use `-E` for the old auto-close. The command prompt also accepts vim-style `:!command`.
-- From 2.2.x: right-click rename, clean split-border drags with Powerline prompts.
+- **`wtmux agents`**: a herdr-style agent monitor CLI — run it in any pane or popup to watch every pane's WORKING / BLOCKED / DONE / IDLE state, refreshed four times a second (`--once` for a single snapshot). WORKING panes animate a Nerd Font circle-slice spinner, here and in the `Prefix + g` dashboard.
+- From 2.3.0: **message composer (`Prefix + m`)** — compose a multi-line message in a floating editor and send it to a pane (e.g. an AI agent like Claude Code). Enter = newline, Ctrl+Enter / Ctrl+S = send, Ctrl+P/N = recall sent messages, unsent drafts are restored on reopen. IME-friendly (Japanese input works inline).
+- From 2.3.0: **held popups** — `display-popup ls` keeps its output visible after the command exits (any key closes; wheel / PageUp scroll; `-E` restores auto-close), and the command prompt accepts vim-style `:!command`.
 
 ## Features
 
@@ -457,8 +457,12 @@ the history selector (`Ctrl+R` by default), scrollback navigation, keyboard sele
 ## AI Agent Integration
 
 wtmux monitors every pane and classifies it herdr-style as WORKING / BLOCKED /
-DONE / IDLE (`Prefix + g` opens the agent dashboard). Three features build on
-this for running AI coding agents in panes:
+DONE / IDLE (`Prefix + g` opens the agent dashboard; WORKING panes animate a
+Nerd Font circle-slice spinner there). `wtmux agents` prints the same list
+from any pane and refreshes four times a second (Ctrl+C quits; `--once` for a
+single snapshot) — run it in a spare pane or a `display-popup` for an
+always-on monitor. Three more features build on this for running AI coding
+agents in panes:
 
 ### Agent state hooks
 
@@ -491,17 +495,27 @@ wtmux report-state blocked     # the calling pane, via WTMUX_PID / WTMUX_PANE
 wtmux report-state -t 1.2 done # explicit <window>.<pane> target
 ```
 
-This pairs naturally with agent CLIs that have their own hook systems. For
-example, Claude Code hooks can report precise states:
+This pairs naturally with agent CLIs that have their own hook systems, and is
+the recommended setup for Claude Code: its waiting-for-input UI keeps
+redrawing (spinner, status line), so the output-quiet heuristics tend to
+leave the pane stuck on WORKING. With hooks the pane flips to BLOCKED the
+moment Claude Code asks for permission or input. Add to
+`~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "Notification": [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked" }] }],
-    "Stop":         [{ "hooks": [{ "type": "command", "command": "wtmux report-state done" }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "wtmux report-state working 2>/dev/null || true" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked 2>/dev/null || true" }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "wtmux report-state done 2>/dev/null || true" }] }]
   }
 }
 ```
+
+`UserPromptSubmit` marks the pane WORKING when a prompt is sent,
+`Notification` marks it BLOCKED (waiting for permission / input), and `Stop`
+marks it DONE. The `2>/dev/null || true` keeps the hooks silent when Claude
+Code runs outside wtmux.
 
 Reported states override the heuristics (until new output arrives), update the
 dashboard / status bar / attention flags, and fire `[hooks]` commands.

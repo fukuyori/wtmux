@@ -151,6 +151,10 @@ pub fn maybe_run_tmux_compat_cli(args: &[String]) -> anyhow::Result<bool> {
             run_list_clients(&args[2..])?;
             Ok(true)
         }
+        "agents" => {
+            run_agents(&args[2..])?;
+            Ok(true)
+        }
         "report-state" => {
             run_report_state(&args[2..])?;
             Ok(true)
@@ -627,6 +631,148 @@ fn run_display_popup(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One row of the `list-agents` IPC reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLine {
+    pub window_number: usize,
+    pub window_name: String,
+    pub pane_number: usize,
+    pub pane_title: String,
+    pub state: String,
+    pub attention: bool,
+    pub focused: bool,
+}
+
+/// Serialize the agent overview for the `list-agents` reply: one TSV row
+/// per pane.
+pub fn format_agent_lines(entries: &[crate::wm::AgentEntry]) -> String {
+    let mut out = String::new();
+    for entry in entries {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            entry.window_number,
+            escape_field(&entry.window_name),
+            entry.pane_number,
+            escape_field(&entry.pane_title),
+            entry.state.label(),
+            u8::from(entry.attention),
+            u8::from(entry.is_focused),
+        ));
+    }
+    out
+}
+
+fn parse_agent_lines(text: &str) -> Vec<AgentLine> {
+    text.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 7 {
+                return None;
+            }
+            Some(AgentLine {
+                window_number: fields[0].parse().ok()?,
+                window_name: unescape_field(fields[1]),
+                pane_number: fields[2].parse().ok()?,
+                pane_title: unescape_field(fields[3]),
+                state: fields[4].to_string(),
+                attention: fields[5] == "1",
+                focused: fields[6] == "1",
+            })
+        })
+        .collect()
+}
+
+/// One dashboard-style row with ANSI state colors; WORKING rows animate a
+/// Nerd Font spinner:
+/// ` * 1:main · 2: claude    󰪡 WORKING`
+fn render_agent_line(line: &AgentLine, tick: usize) -> String {
+    let color = match line.state.as_str() {
+        "WORKING" => "\x1b[32m",
+        "BLOCKED" => "\x1b[33m",
+        "DONE" => "\x1b[36m",
+        _ => "\x1b[90m",
+    };
+    let focus = if line.focused { '*' } else { ' ' };
+    let attention = if line.attention { '!' } else { ' ' };
+    let spinner = if line.state == "WORKING" {
+        crate::wm::pane::working_spinner_frame(tick)
+    } else {
+        ' '
+    };
+    format!(
+        " {} {}:{} · {}: {:<24} {}{}{} {:<8}\x1b[0m",
+        focus,
+        line.window_number,
+        line.window_name,
+        line.pane_number,
+        line.pane_title,
+        color,
+        attention,
+        spinner,
+        line.state,
+    )
+}
+
+/// How often `wtmux agents` refreshes (one spinner frame per refresh).
+const AGENTS_REFRESH: Duration =
+    Duration::from_millis(crate::wm::pane::WORKING_SPINNER_INTERVAL_MS);
+
+/// `wtmux agents [--once] [--pid <pid>]`
+///
+/// Herdr-style agent monitor meant to run inside a pane (or a popup): the
+/// same WORKING / BLOCKED / DONE / IDLE list as the `Prefix + g` dashboard,
+/// refreshed every second until Ctrl+C. `--once` prints once and exits.
+fn run_agents(args: &[String]) -> anyhow::Result<()> {
+    let mut once = false;
+    let mut filtered = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--once" | "-1" => once = true,
+            other => filtered.push(other.to_string()),
+        }
+    }
+    let (_, pid_override, rest) = split_common_options(&filtered)?;
+    if !rest.is_empty() {
+        anyhow::bail!("usage: wtmux agents [--once] [--pid <pid>]");
+    }
+    let pid = resolve_instance_pid(pid_override)?;
+
+    if !once {
+        // Start from a clean screen; afterwards redraw in place
+        print!("\x1b[2J");
+    }
+    let mut tick = 0usize;
+    loop {
+        let reply = send_request(pid, "list-agents", None, &[])?.unwrap_or_default();
+        let lines = parse_agent_lines(&reply);
+
+        if once {
+            for line in &lines {
+                println!("{}", render_agent_line(line, tick));
+            }
+            return Ok(());
+        }
+
+        // Home the cursor and overwrite each row (\x1b[K erases the tail)
+        // instead of clearing the whole screen — avoids flicker.
+        let mut out = String::from("\x1b[H");
+        out.push_str(&format!(
+            "\x1b[1mwtmux agents\x1b[0m — {} pane(s), 1s refresh, Ctrl+C quits\x1b[K\n\x1b[K\n",
+            lines.len()
+        ));
+        for line in &lines {
+            out.push_str(&render_agent_line(line, tick));
+            out.push_str("\x1b[K\n");
+        }
+        // Erase anything left below (rows that disappeared)
+        out.push_str("\x1b[J");
+        print!("{out}");
+        io::Write::flush(&mut io::stdout())?;
+        tick = tick.wrapping_add(1);
+        std::thread::sleep(AGENTS_REFRESH);
+    }
+}
+
 /// Parse the `-t <target>` / `--pid <pid>` options shared by the IPC
 /// commands, returning the remaining positional arguments.
 fn split_common_options(args: &[String]) -> anyhow::Result<(Option<String>, Option<u32>, Vec<String>)> {
@@ -960,6 +1106,32 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect()
+    }
+
+    #[test]
+    fn agent_lines_round_trip_with_escaped_fields() {
+        use crate::wm::{AgentEntry, AgentState};
+
+        let entries = vec![AgentEntry {
+            window_index: 0,
+            pane_index: 1,
+            window_number: 1,
+            window_name: "main\twin".to_string(),
+            pane_number: 2,
+            pane_title: "claude".to_string(),
+            state: AgentState::Blocked,
+            attention: true,
+            is_focused: false,
+        }];
+        let text = format_agent_lines(&entries);
+        let parsed = parse_agent_lines(&text);
+        assert_eq!(parsed.len(), 1);
+        let line = &parsed[0];
+        assert_eq!(line.window_name, "main\twin");
+        assert_eq!(line.pane_title, "claude");
+        assert_eq!(line.state, "BLOCKED");
+        assert!(line.attention);
+        assert!(!line.focused);
     }
 
     #[test]

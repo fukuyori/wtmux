@@ -1021,6 +1021,11 @@ fn run_wm_main_loop(
     let mut last_resize_time = std::time::Instant::now();
     let resize_debounce = Duration::from_millis(30);
 
+    // Drives the WORKING spinner while the agent dashboard is open
+    let spinner_interval =
+        Duration::from_millis(crate::wm::pane::WORKING_SPINNER_INTERVAL_MS);
+    let mut last_spinner_tick = std::time::Instant::now();
+
     // Agent-state plumbing: poll `wtmux report-state` drops at a low rate and
     // dispatch [hooks] commands on state transitions.
     let hooks_enabled = hooks.any_configured();
@@ -1119,6 +1124,9 @@ fn run_wm_main_loop(
                             .and_then(|(tab, pane)| wm.capture_pane_text(tab, pane, scrollback))
                             .map(Some)
                     }
+                    "list-agents" => {
+                        Ok(Some(tmux_compat::format_agent_lines(&wm.agent_overview())))
+                    }
                     "display-popup" => {
                         let auto_close = req.args.iter().any(|a| a == "-E");
                         let command = req.args.iter().find(|a| *a != "-E").cloned();
@@ -1166,6 +1174,13 @@ fn run_wm_main_loop(
             ui.render(renderer, wm, &theme_list)?;
             // Clear dirty state after rendering so the next frame only redraws
             // rows that have genuinely changed.
+            wm.clear_all_dirty();
+        } else if ui.mode == UiMode::AgentDashboard
+            && last_spinner_tick.elapsed() >= spinner_interval
+        {
+            // Keep the WORKING spinner animating while the dashboard is open
+            last_spinner_tick = std::time::Instant::now();
+            ui.render(renderer, wm, &theme_list)?;
             wm.clear_all_dirty();
         }
 

@@ -54,6 +54,28 @@ impl AgentState {
     }
 }
 
+/// Nerd Font circle-slice glyphs animated while an agent is WORKING
+/// (nf-md-circle_slice_1..8, one cell wide).
+pub const WORKING_SPINNER_FRAMES: &[char] = &['󰪞', '󰪟', '󰪠', '󰪡', '󰪢', '󰪣', '󰪤', '󰪥'];
+
+/// How long each spinner frame is shown.
+pub const WORKING_SPINNER_INTERVAL_MS: u64 = 250;
+
+/// Spinner frame for an arbitrary tick counter (CLI refresh loops).
+pub fn working_spinner_frame(tick: usize) -> char {
+    WORKING_SPINNER_FRAMES[tick % WORKING_SPINNER_FRAMES.len()]
+}
+
+/// Spinner frame derived from wall-clock time, so every renderer shows the
+/// same phase without threading a counter through.
+pub fn working_spinner_frame_now() -> char {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    working_spinner_frame((millis / WORKING_SPINNER_INTERVAL_MS) as usize)
+}
+
 /// What the quiet-transition heuristic saw at the cursor when output stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptHint {

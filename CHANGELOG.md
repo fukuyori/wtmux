@@ -1,3 +1,16 @@
+## [2.3.1] - 2026-07-21
+
+### Added
+
+- **`wtmux agents [--once]`**: a herdr-style agent monitor CLI. Run it
+  in any pane (or a popup) to see the `Prefix + g` dashboard list —
+  WORKING / BLOCKED / DONE / IDLE per pane, with focus and attention
+  markers — refreshed four times a second until Ctrl+C. Backed by a new
+  `list-agents` IPC request.
+- **WORKING spinner**: panes in the WORKING state animate a Nerd Font
+  circle-slice spinner (`󰪞…󰪥`, 250 ms per frame) in the `Prefix + g`
+  agent dashboard and in `wtmux agents`.
+
 ## [2.3.0] - 2026-07-21
 
 ### Added

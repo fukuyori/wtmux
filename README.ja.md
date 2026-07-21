@@ -4,15 +4,15 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.3.0 の主な変更
+## 2.3.1 の主な変更
 
-- **メッセージコンポーザ（`Prefix + m`）**: フローティングエディタで複数行メッセージを作成し、ペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴の呼び出し、未送信の下書きは次回開いたとき復元。IME対応（日本語入力がインラインで機能）。エージェントダッシュボードから `m` で選択中ペイン宛てに開けます。
-- **ポップアップの保持**: `display-popup ls` がコマンド終了後も結果を表示したままになりました（任意キーで閉じる。ホイール / PageUp でスクロール）。従来の自動クローズは `-E` で。コマンドプロンプトで vim風の `:!コマンド` も使えます。
-- 2.2.x より: 右クリックで名前変更、ペイン境界ドラッグ時の Powerline プロンプト表示乱れの修正。
+- **`wtmux agents`**: herdrスタイルのエージェントモニタCLI。任意のペインやポップアップで実行すると、全ペインの WORKING / BLOCKED / DONE / IDLE 状態が毎秒4回更新表示されます（`--once` で1回だけ表示）。WORKING中のペインは Nerd Font の円スライススピナーがアニメーションします（`Prefix + g` ダッシュボードでも同様）。
+- 2.3.0 より: **メッセージコンポーザ（`Prefix + m`）** — フローティングエディタで複数行メッセージを作成しペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴、未送信の下書きは復元。IME対応（日本語入力がインラインで機能）。
+- 2.3.0 より: **ポップアップの保持** — `display-popup ls` がコマンド終了後も結果を表示したまま（任意キーで閉じる、ホイール / PageUp でスクロール、`-E` で自動クローズ）。コマンドプロンプトで vim風の `:!コマンド` も使用可能。
 
 ## 特徴
 
@@ -403,8 +403,12 @@ lines = 10000
 ## AIエージェント連携
 
 wtmuxは全ペインを監視し、herdrスタイルで WORKING / BLOCKED / DONE / IDLE に
-分類します（`Prefix + g` でエージェントダッシュボードを表示）。この上に、
-ペインでAIコーディングエージェントを走らせるための3つの機能があります。
+分類します（`Prefix + g` でエージェントダッシュボードを表示。WORKING中の
+ペインは Nerd Font の円スライススピナーがアニメーションします）。
+`wtmux agents` を任意のペインで実行すると同じ一覧が毎秒4回更新され続けます
+（Ctrl+Cで終了、`--once` で1回だけ表示）。空きペインや `display-popup` で
+流しておけば常時モニタになります。この上に、ペインでAIコーディング
+エージェントを走らせるための3つの機能があります。
 
 ### エージェント状態フック
 
@@ -438,17 +442,25 @@ wtmux report-state blocked     # 呼び出し元ペイン（WTMUX_PID / WTMUX_PA
 wtmux report-state -t 1.2 done # <ウィンドウ>.<ペイン> を明示指定
 ```
 
-フック機構を持つエージェントCLIとの相性が良く、例えばClaude Codeのhooksから
-正確な状態を報告できます：
+フック機構を持つエージェントCLIとの相性が良く、Claude Codeでは特にこの設定を
+推奨します。Claude Codeは入力待ちの間もスピナーやステータス行を再描画し続ける
+ため、出力静止ベースのヒューリスティクスではWORKINGのまま張り付きがちですが、
+hooksを使うと許可待ち・入力待ちになった瞬間にBLOCKEDへ切り替わります。
+`~/.claude/settings.json` に追加：
 
 ```json
 {
   "hooks": {
-    "Notification": [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked" }] }],
-    "Stop":         [{ "hooks": [{ "type": "command", "command": "wtmux report-state done" }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "wtmux report-state working 2>/dev/null || true" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "wtmux report-state blocked 2>/dev/null || true" }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "wtmux report-state done 2>/dev/null || true" }] }]
   }
 }
 ```
+
+`UserPromptSubmit` = プロンプト送信でWORKING、`Notification` = 許可・入力待ちで
+BLOCKED、`Stop` = 応答完了でDONE。`2>/dev/null || true` を付けておくと、wtmux外で
+Claude Codeを使うときにフックが黙って無視されます。
 
 報告された状態はヒューリスティクスより優先され（新しい出力が来るまで）、
 ダッシュボード・ステータスバー・注意フラグに反映され、`[hooks]` コマンドも
