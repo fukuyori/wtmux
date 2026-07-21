@@ -6,7 +6,7 @@ use crate::copymode::CopyMode;
 use crate::history::HistorySelector;
 use crate::wm::{Pane, WindowManager};
 
-use super::{AgentDashboard, ContextMenu, WindowSelector, WmOverlay, WmRenderer};
+use super::{AgentDashboard, ContextMenu, MessageComposer, WindowSelector, WmOverlay, WmRenderer};
 
 /// What the rename popup (`UiMode::Rename`) is renaming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,7 @@ pub(crate) enum UiMode {
     ContextMenu,
     CommandPrompt,
     Popup,
+    MessageComposer,
 }
 
 pub(crate) struct WmAppState {
@@ -47,6 +48,10 @@ pub(crate) struct WmAppState {
     pub(crate) popup: Option<Pane>,
     /// Prefix key pressed while the popup has focus (for `Prefix, x` kill)
     pub(crate) popup_prefix: bool,
+    /// Keep the popup open after its process exits (display-popup without -E)
+    pub(crate) popup_hold: bool,
+    /// Floating message composer (`Prefix + m`)
+    pub(crate) message_composer: MessageComposer,
 }
 
 impl WmAppState {
@@ -65,6 +70,8 @@ impl WmAppState {
             command_buffer: String::new(),
             popup: None,
             popup_prefix: false,
+            popup_hold: false,
+            message_composer: MessageComposer::new(),
         }
     }
 
@@ -85,6 +92,8 @@ impl WmAppState {
         self.command_buffer.clear();
         self.popup = None;
         self.popup_prefix = false;
+        self.popup_hold = false;
+        self.message_composer.close();
         self.mode = UiMode::Normal;
     }
 
@@ -92,6 +101,7 @@ impl WmAppState {
     pub(crate) fn close_popup(&mut self) {
         self.popup = None;
         self.popup_prefix = false;
+        self.popup_hold = false;
         if self.mode == UiMode::Popup {
             self.mode = UiMode::Normal;
         }
@@ -125,6 +135,7 @@ impl WmAppState {
             UiMode::ContextMenu => Some(WmOverlay::ContextMenu(&self.context_menu)),
             UiMode::CommandPrompt => Some(WmOverlay::CommandPrompt(&self.command_buffer)),
             UiMode::Popup => self.popup.as_ref().map(WmOverlay::Popup),
+            UiMode::MessageComposer => Some(WmOverlay::MessageComposer(&self.message_composer)),
         };
         renderer.render_scene(wm, overlay)
     }
@@ -132,7 +143,7 @@ impl WmAppState {
     pub(crate) fn defers_background_render(&self) -> bool {
         matches!(
             self.mode,
-            UiMode::CopyMode | UiMode::Rename | UiMode::ContextMenu
+            UiMode::CopyMode | UiMode::Rename | UiMode::ContextMenu | UiMode::MessageComposer
         )
     }
 }

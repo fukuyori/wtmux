@@ -1,3 +1,27 @@
+## [2.3.0] - 2026-07-21
+
+### Added
+
+- **Message composer (`Prefix + m`)**: a floating multi-line editor for
+  sending a message to a pane (typically an AI agent such as Claude
+  Code). Enter inserts a newline; Ctrl+Enter (on terminals supporting
+  the kitty keyboard protocol, and on Windows) or Ctrl+S sends; Esc
+  cancels. The 8-row box soft-wraps long lines, works with IMEs
+  (Japanese input shows its preedit inline), and delivers multi-line
+  text via bracketed paste so agents receive it as one message. Sent
+  messages are recallable with Ctrl+P / Ctrl+N while wtmux runs, and an
+  unsent draft is restored the next time the composer opens. From the
+  agent dashboard (`Prefix + g`), `m` composes to the selected pane.
+- **Held popups**: `display-popup <command>` without `-E` now keeps the
+  popup open after the command exits (title gains ` [exited]`), so
+  short-lived commands like `ls` no longer flash and vanish. Any key
+  closes it; the wheel and Up / Down / PageUp / PageDown / Home / End
+  scroll the output. `-E` restores the auto-close behaviour, matching
+  tmux. The wheel also scrolls a still-running popup's scrollback.
+- **vim-style `:!<command>`**: the command prompt runs `!ls`,
+  `!git log --oneline | head -5` etc. through `/bin/sh -c` in a held
+  popup.
+
 ## [2.2.1] - 2026-07-20
 
 ### Added

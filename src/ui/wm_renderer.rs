@@ -49,6 +49,7 @@ use super::context_menu::ContextMenu;
 use super::cursor::CursorPresenter;
 use super::frame::{with_cursor_hidden, with_frame};
 use super::agent_dashboard::AgentDashboard;
+use super::message_composer::MessageComposer;
 use super::window_selector::{TreeEntry, WindowSelector};
 
 /// Border characters
@@ -167,6 +168,8 @@ pub enum WmOverlay<'a> {
     CommandPrompt(&'a str),
     /// Floating popup pane (display-popup)
     Popup(&'a Pane),
+    /// Floating message composer (`Prefix + m`)
+    MessageComposer(&'a MessageComposer),
 }
 
 #[derive(Clone, PartialEq)]
@@ -314,6 +317,9 @@ impl WmRenderer {
             queue!(out, Hide)?;
             self.cursor.note_hidden();
 
+            // Text-cursor position inside the message composer, if open
+            let mut composer_cursor: Option<(u16, u16)> = None;
+
             if let Some(WmOverlay::CopyMode(copy_mode)) = overlay.as_ref() {
                 self.render_pane_with_copy_mode(out, wm, copy_mode)?;
                 self.render_copy_mode_status(out, wm, copy_mode)?;
@@ -355,6 +361,9 @@ impl WmRenderer {
                     Some(WmOverlay::Popup(pane)) => {
                         self.render_popup(out, pane)?;
                     }
+                    Some(WmOverlay::MessageComposer(composer)) => {
+                        composer_cursor = self.render_message_composer(out, wm, composer)?;
+                    }
                     Some(WmOverlay::CopyMode(_)) | None => {}
                 }
 
@@ -368,6 +377,13 @@ impl WmRenderer {
             match overlay.as_ref() {
                 None => self.cursor.show_focused_pane_cursor(out, wm)?,
                 Some(WmOverlay::History(_)) => {}
+                // Park the real cursor at the composer's input position so
+                // IMEs anchor their inline preedit window there
+                Some(WmOverlay::MessageComposer(_)) => {
+                    if let Some((x, y)) = composer_cursor {
+                        queue!(out, MoveTo(x, y), Show)?;
+                    }
+                }
                 Some(WmOverlay::Popup(pane)) => self.position_popup_cursor(out, pane)?,
                 Some(_) => queue!(out, Show)?,
             }
@@ -689,6 +705,143 @@ impl WmRenderer {
             queue!(stdout, MoveTo(inner_x + col, inner_y + row), Show)?;
         }
         Ok(())
+    }
+
+    /// Render the floating message composer (`Prefix + m`): a small
+    /// multi-line editor addressed to one pane.
+    ///
+    /// Returns the screen position of the text cursor so `render_scene` can
+    /// park the real terminal cursor there — IMEs anchor their inline
+    /// preedit/candidate window to it.
+    fn render_message_composer<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        composer: &MessageComposer,
+    ) -> io::Result<Option<(u16, u16)>> {
+        let Some(target) = composer.target.as_ref() else {
+            return Ok(None);
+        };
+        if wm.width < 30 || wm.height < 8 {
+            return Ok(None);
+        }
+
+        let cs = &self.color_scheme;
+        let content_top = wm.tab_bar_height as usize;
+        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+
+        let box_width = (wm.width as usize).saturating_sub(4).min(70);
+        // Chrome: top border, separator, help line, bottom border
+        let max_body = content_height.saturating_sub(4).min(8);
+        if box_width < 24 || max_body < 1 {
+            return Ok(None);
+        }
+        // Fixed-size editor area so the popup reads as multi-line from the
+        // start (8 rows, less on small terminals)
+        let body_h = max_body;
+        let box_height = body_h + 4;
+        let inner_width = box_width.saturating_sub(4);
+        // Long lines soft-wrap onto extra display rows instead of truncating
+        let rows = composer.wrapped_rows(inner_width);
+        let (cursor_display_row, cursor_offset) = composer.cursor_display_pos(&rows);
+        // Scroll so the cursor's display row stays visible
+        let first_visible = cursor_display_row
+            .saturating_add(1)
+            .saturating_sub(body_h)
+            .min(rows.len().saturating_sub(body_h));
+        let start_x = (wm.width as usize - box_width) / 2;
+        let start_y = content_top + (content_height - box_height) / 2;
+
+        execute!(
+            stdout,
+            SetBackgroundColor(cs.selector_bg.to_crossterm()),
+            SetForegroundColor(cs.selector_fg.to_crossterm())
+        )?;
+
+        // Top border with the destination pane in the title, plus the
+        // history position while browsing with Ctrl+P/N
+        let title = match composer.history_position() {
+            Some((index, total)) => {
+                format!("Send to {} [{}/{}]", target.label, index + 1, total)
+            }
+            None => format!("Send to {}", target.label),
+        };
+        let title = truncate_to_display_width(&title, box_width.saturating_sub(5));
+        let title_width = str_display_width(&title);
+        execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
+        write!(stdout, "┌─ {} ", title)?;
+        for _ in 0..box_width.saturating_sub(title_width + 5) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┐")?;
+
+        // Editor body: soft-wrapped display rows. The cursor is the real
+        // terminal cursor (positioned by the caller), not a drawn glyph, so
+        // IME preedit text appears inline at the right spot.
+        for row in 0..body_h {
+            let index = first_visible + row;
+            let display: String = rows
+                .get(index)
+                .and_then(|wrow| {
+                    composer.lines.get(wrow.line).map(|line| {
+                        line.chars()
+                            .skip(wrow.start)
+                            .take(wrow.end - wrow.start)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+            let padding = inner_width.saturating_sub(str_display_width(&display));
+            execute!(stdout, MoveTo(start_x as u16, (start_y + 1 + row) as u16))?;
+            write!(stdout, "│ {}{:padding$} │", display, "", padding = padding)?;
+        }
+
+        // Screen position of the text cursor within the box
+        let cursor_left: String = rows
+            .get(cursor_display_row)
+            .and_then(|wrow| {
+                composer.lines.get(wrow.line).map(|line| {
+                    line.chars().skip(wrow.start).take(cursor_offset).collect()
+                })
+            })
+            .unwrap_or_default();
+        let cursor_x = start_x + 2 + str_display_width(&cursor_left).min(inner_width);
+        let cursor_y = start_y
+            + 1
+            + cursor_display_row
+                .saturating_sub(first_visible)
+                .min(body_h - 1);
+
+        // Separator, help line, bottom border
+        let separator_y = start_y + 1 + body_h;
+        execute!(stdout, MoveTo(start_x as u16, separator_y as u16))?;
+        write!(stdout, "├")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┤")?;
+
+        let help = "Ctrl+Enter/Ctrl+S:Send Enter:Newline Ctrl+P/N:History Esc:Cancel";
+        let help = truncate_to_display_width(help, box_width.saturating_sub(3));
+        let help_width = str_display_width(&help);
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
+        write!(stdout, "│ {}", help)?;
+        write!(
+            stdout,
+            "{:padding$}│",
+            "",
+            padding = box_width.saturating_sub(help_width + 3)
+        )?;
+
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 2) as u16))?;
+        write!(stdout, "└")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┘")?;
+
+        execute!(stdout, ResetColor)?;
+        Ok(Some((cursor_x as u16, cursor_y as u16)))
     }
 
     /// Render theme selector overlay
@@ -1192,7 +1345,7 @@ impl WmRenderer {
         }
         write!(stdout, "┤")?;
 
-        let help = "j/k:Move Enter:Focus a:Next-alert q/Esc:Close";
+        let help = "j/k:Move Enter:Focus m:Message a:Next-alert q/Esc:Close";
         let help = truncate_to_display_width(help, box_width.saturating_sub(3));
         let help_width = str_display_width(&help);
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;

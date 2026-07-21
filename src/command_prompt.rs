@@ -28,12 +28,29 @@ pub enum PromptAction {
     SetSyncPanes(Option<bool>),
     /// pipe-pane (toggle output logging on the focused pane)
     PipePane,
-    /// display-popup [command]
-    DisplayPopup { command: Option<String> },
+    /// display-popup [-E] [command]; `hold` keeps the popup open after the
+    /// command exits (tmux semantics: no -E = stay open)
+    DisplayPopup {
+        command: Option<String>,
+        hold: bool,
+    },
 }
 
 /// Parse a prompt line. Returns a user-facing error message on failure.
 pub fn parse(line: &str) -> Result<PromptAction, String> {
+    // vim-style `:!command` — run it in a held popup (stays open until a
+    // key is pressed). Everything after `!` goes to the shell verbatim.
+    if let Some(command) = line.strip_prefix('!') {
+        let command = command.trim();
+        if command.is_empty() {
+            return Err("usage: !<command>".to_string());
+        }
+        return Ok(PromptAction::DisplayPopup {
+            command: Some(command.to_string()),
+            hold: true,
+        });
+    }
+
     let tokens = tokenize(line);
     let Some((name, args)) = tokens.split_first() else {
         return Err("empty command".to_string());
@@ -92,13 +109,17 @@ pub fn parse(line: &str) -> Result<PromptAction, String> {
         }
         "pipe-pane" | "pipep" => Ok(PromptAction::PipePane),
         "display-popup" | "popup" => {
+            let auto_close = args.contains(&"-E");
             let rest: Vec<&str> = args.iter().copied().filter(|a| *a != "-E").collect();
             let command = if rest.is_empty() {
                 None
             } else {
                 Some(rest.join(" "))
             };
-            Ok(PromptAction::DisplayPopup { command })
+            // A shell popup (no command) always closes on exit; a command
+            // popup stays open unless -E was given
+            let hold = command.is_some() && !auto_close;
+            Ok(PromptAction::DisplayPopup { command, hold })
         }
         other => Err(format!("unknown command: {other}")),
     }
@@ -215,14 +236,46 @@ mod tests {
         assert_eq!(parse("pipe-pane").unwrap(), PromptAction::PipePane);
         assert_eq!(
             parse("display-popup").unwrap(),
-            PromptAction::DisplayPopup { command: None }
+            PromptAction::DisplayPopup {
+                command: None,
+                hold: false
+            }
         );
         assert_eq!(
             parse("popup -E cargo test").unwrap(),
             PromptAction::DisplayPopup {
-                command: Some("cargo test".to_string())
+                command: Some("cargo test".to_string()),
+                hold: false
             }
         );
+        // Without -E a command popup stays open after the command exits
+        assert_eq!(
+            parse("display-popup ls").unwrap(),
+            PromptAction::DisplayPopup {
+                command: Some("ls".to_string()),
+                hold: true
+            }
+        );
+    }
+
+    #[test]
+    fn parses_vim_style_bang_commands() {
+        assert_eq!(
+            parse("!ls").unwrap(),
+            PromptAction::DisplayPopup {
+                command: Some("ls".to_string()),
+                hold: true
+            }
+        );
+        // The rest of the line reaches the shell verbatim
+        assert_eq!(
+            parse("! git log --oneline | head -3").unwrap(),
+            PromptAction::DisplayPopup {
+                command: Some("git log --oneline | head -3".to_string()),
+                hold: true
+            }
+        );
+        assert!(parse("!").is_err());
     }
 
     #[test]

@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.2.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.2.1 Highlights
+## 2.3.0 Highlights
 
-- **Right-click rename**: right-click a tab in the tab bar to rename that window, or right-click a pane's title row (top border) to rename that pane. The context menu also gained a "Rename Pane" item.
-- From 2.2.0: clean split-border drags — PTY resizes are deferred until the drag ends, and with OSC 133 shell integration Powerline prompts (oh-my-posh etc.) no longer scatter artifacts when a pane divider is moved.
-- From 2.1.0: command prompt (`Prefix + :`), scripting CLI (`send-keys` / `capture-pane`), `display-popup`, agent state hooks (`[hooks]`), `wtmux report-state`, pane output logging (`Prefix + Shift+P`).
+- **Message composer (`Prefix + m`)**: compose a multi-line message in a floating editor and send it to a pane (e.g. an AI agent like Claude Code). Enter = newline, Ctrl+Enter / Ctrl+S = send, Ctrl+P/N = recall sent messages, unsent drafts are restored on reopen. IME-friendly (Japanese input works inline). From the agent dashboard, `m` targets the selected pane.
+- **Held popups**: `display-popup ls` now keeps its output visible after the command exits (any key closes; wheel / PageUp scroll). Use `-E` for the old auto-close. The command prompt also accepts vim-style `:!command`.
+- From 2.2.x: right-click rename, clean split-border drags with Powerline prompts.
 
 ## Features
 

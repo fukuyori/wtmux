@@ -601,23 +601,28 @@ fn run_capture_pane(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// `wtmux display-popup [-E] [--pid <pid>] [command...]`
+///
+/// Without `-E` a command popup stays open after the command exits (tmux
+/// semantics); `-E` closes it automatically.
 fn run_display_popup(args: &[String]) -> anyhow::Result<()> {
+    let mut auto_close = false;
     let mut filtered = Vec::new();
     for arg in args {
         if arg == "-E" {
-            // Popups always close when the command exits; accept for
-            // tmux compatibility.
+            auto_close = true;
             continue;
         }
         filtered.push(arg.clone());
     }
     let (_, pid_override, rest) = split_common_options(&filtered)?;
     let pid = resolve_instance_pid(pid_override)?;
-    let command = if rest.is_empty() {
-        Vec::new()
-    } else {
-        vec![rest.join(" ")]
-    };
+    let mut command = Vec::new();
+    if auto_close {
+        command.push("-E".to_string());
+    }
+    if !rest.is_empty() {
+        command.push(rest.join(" "));
+    }
     send_request(pid, "display-popup", None, &command)?;
     Ok(())
 }

@@ -23,6 +23,7 @@ pub mod wm_renderer;
 pub mod window_selector;
 pub mod agent_dashboard;
 pub mod context_menu;
+pub mod message_composer;
 
 pub use keymapper::*;
 pub(crate) use app_state::{RenameTarget, UiMode, WmAppState};
@@ -31,3 +32,4 @@ pub use wm_renderer::{WmOverlay, WmRenderer};
 pub use window_selector::{TreeEntry, WindowSelector};
 pub use agent_dashboard::AgentDashboard;
 pub use context_menu::{ContextMenu, ContextMenuAction};
+pub use message_composer::MessageComposer;

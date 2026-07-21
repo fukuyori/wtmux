@@ -4,15 +4,15 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.2.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.2.1 の主な変更
+## 2.3.0 の主な変更
 
-- **右クリックで名前変更**: タブバーのタブを右クリックでそのウィンドウの名前変更、ペインのタイトル行（上枠）を右クリックでそのペインの名前変更ができるようになりました。コンテキストメニューにも「Rename Pane」を追加。
-- 2.2.0 より: ペイン境界ドラッグ時の表示乱れを修正 — PTYリサイズをドラッグ確定時まで遅延させ、OSC 133 シェル統合により oh-my-posh 等の Powerline プロンプトが境界移動でゴミを撒き散らさなくなりました。
-- 2.1.0 より: コマンドプロンプト（`Prefix + :`）、スクリプト操作CLI（`send-keys` / `capture-pane`）、`display-popup`、エージェント状態フック（`[hooks]`）、`wtmux report-state`、ペイン出力ログ（`Prefix + Shift+P`）。
+- **メッセージコンポーザ（`Prefix + m`）**: フローティングエディタで複数行メッセージを作成し、ペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴の呼び出し、未送信の下書きは次回開いたとき復元。IME対応（日本語入力がインラインで機能）。エージェントダッシュボードから `m` で選択中ペイン宛てに開けます。
+- **ポップアップの保持**: `display-popup ls` がコマンド終了後も結果を表示したままになりました（任意キーで閉じる。ホイール / PageUp でスクロール）。従来の自動クローズは `-E` で。コマンドプロンプトで vim風の `:!コマンド` も使えます。
+- 2.2.x より: 右クリックで名前変更、ペイン境界ドラッグ時の Powerline プロンプト表示乱れの修正。
 
 ## 特徴
 

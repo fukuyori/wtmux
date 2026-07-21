@@ -1067,9 +1067,21 @@ fn run_wm_main_loop(
                 needs_render = true;
             }
             if !popup.session.is_running() {
-                ui.close_popup();
-                wm.force_full_redraw();
-                needs_render = true;
+                if ui.popup_hold {
+                    // display-popup without -E: keep the output visible and
+                    // mark the title; any key closes it (key handler below)
+                    const EXITED_SUFFIX: &str = " [exited]";
+                    if let Some(title) = popup.title.as_mut() {
+                        if !title.ends_with(EXITED_SUFFIX) {
+                            title.push_str(EXITED_SUFFIX);
+                            needs_render = true;
+                        }
+                    }
+                } else {
+                    ui.close_popup();
+                    wm.force_full_redraw();
+                    needs_render = true;
+                }
             }
         }
 
@@ -1108,8 +1120,10 @@ fn run_wm_main_loop(
                             .map(Some)
                     }
                     "display-popup" => {
-                        let command = req.args.first().cloned();
-                        open_popup(wm, &mut ui, command.as_deref()).map(|_| {
+                        let auto_close = req.args.iter().any(|a| a == "-E");
+                        let command = req.args.iter().find(|a| *a != "-E").cloned();
+                        let hold = command.is_some() && !auto_close;
+                        open_popup(wm, &mut ui, command.as_deref(), hold).map(|_| {
                             needs_render = true;
                             None
                         })
@@ -1168,6 +1182,37 @@ fn run_wm_main_loop(
                     // ── Popup mode: all input goes to the popup pane ─────────
                     // Safety valve: Prefix, x kills a stuck popup.
                     if ui.mode == UiMode::Popup {
+                        // A held popup whose process has exited: scroll keys
+                        // browse the output, any other key closes it
+                        if ui
+                            .popup
+                            .as_ref()
+                            .is_some_and(|popup| !popup.session.is_running())
+                        {
+                            let mut close = false;
+                            if let Some(popup) = ui.popup.as_mut() {
+                                let page = popup.inner_size().1.max(1) as usize;
+                                let screen = popup.session.state.active_screen_mut();
+                                match key_event.code {
+                                    KeyCode::Up => screen.scroll_view_up(1),
+                                    KeyCode::Down => screen.scroll_view_down(1),
+                                    KeyCode::PageUp => screen.scroll_view_up(page),
+                                    KeyCode::PageDown => screen.scroll_view_down(page),
+                                    KeyCode::Home => screen.scroll_view_up(usize::MAX / 2),
+                                    KeyCode::End => screen.scroll_to_bottom(),
+                                    _ => close = true,
+                                }
+                            }
+                            if close {
+                                ui.close_popup();
+                                wm.force_full_redraw();
+                                renderer.render(wm)?;
+                            } else {
+                                ui.render(renderer, wm, &theme_list)?;
+                            }
+                            wm.clear_all_dirty();
+                            continue;
+                        }
                         let prefix_pressed = key_event
                             .modifiers
                             .contains(KeyModifiers::CONTROL)
@@ -1189,6 +1234,9 @@ fn run_wm_main_loop(
                         if let Some(popup) = ui.popup.as_mut() {
                             let bytes = KeyMapper::map_key(&key_event);
                             if !bytes.is_empty() {
+                                // Typing returns the view to the live bottom,
+                                // like regular panes
+                                popup.session.state.active_screen_mut().scroll_to_bottom();
                                 let _ = popup.session.write(&bytes);
                             }
                         }
@@ -1211,9 +1259,9 @@ fn run_wm_main_loop(
                                 if !line.is_empty() {
                                     use crate::command_prompt::PromptAction;
                                     match crate::command_prompt::parse(&line) {
-                                        Ok(PromptAction::DisplayPopup { command }) => {
+                                        Ok(PromptAction::DisplayPopup { command, hold }) => {
                                             if let Err(e) =
-                                                open_popup(wm, &mut ui, command.as_deref())
+                                                open_popup(wm, &mut ui, command.as_deref(), hold)
                                             {
                                                 renderer.set_status_message(format!(
                                                     "display-popup: {e}"
@@ -1248,6 +1296,74 @@ fn run_wm_main_loop(
                             }
                             _ => {}
                         }
+                        continue;
+                    }
+
+                    // ── Message composer (Prefix + m) ────────────────────────
+                    if ui.mode == UiMode::MessageComposer {
+                        match key_event.code {
+                            KeyCode::Esc => {
+                                ui.close_mode();
+                                pop_composer_key_reporting();
+                                wm.force_full_redraw();
+                                renderer.render(wm)?;
+                                wm.clear_all_dirty();
+                                continue;
+                            }
+                            // Ctrl+Enter sends; Ctrl+S is the fallback for
+                            // terminals that cannot report Ctrl+Enter
+                            KeyCode::Enter
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                send_composer_message(wm, &mut ui, renderer);
+                                ui.render(renderer, wm, &theme_list)?;
+                                wm.clear_all_dirty();
+                                continue;
+                            }
+                            KeyCode::Char('s')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                send_composer_message(wm, &mut ui, renderer);
+                                ui.render(renderer, wm, &theme_list)?;
+                                wm.clear_all_dirty();
+                                continue;
+                            }
+                            // Enter inserts a newline like a normal editor
+                            KeyCode::Enter => {
+                                ui.message_composer.insert_newline();
+                            }
+                            KeyCode::Backspace => ui.message_composer.backspace(),
+                            KeyCode::Delete => ui.message_composer.delete(),
+                            KeyCode::Left => ui.message_composer.move_left(),
+                            KeyCode::Right => ui.message_composer.move_right(),
+                            KeyCode::Up => ui.message_composer.move_up(),
+                            KeyCode::Down => ui.message_composer.move_down(),
+                            KeyCode::Home => ui.message_composer.move_home(),
+                            KeyCode::End => ui.message_composer.move_end(),
+                            KeyCode::Char('u')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.clear();
+                            }
+                            // Sent-message history (readline-style)
+                            KeyCode::Char('p')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.history_prev();
+                            }
+                            KeyCode::Char('n')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.history_next();
+                            }
+                            KeyCode::Char(c)
+                                if !key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.insert_char(c);
+                            }
+                            _ => {}
+                        }
+                        ui.render(renderer, wm, &theme_list)?;
                         continue;
                     }
 
@@ -1588,6 +1704,29 @@ fn run_wm_main_loop(
                                 ui.close_mode();
                                 wm.force_full_redraw();
                             }
+                            // Compose a message to the selected pane
+                            KeyCode::Char('m') => {
+                                if let Some(entry) = ui.agent_dashboard.selected_entry(&entries) {
+                                    if let Some((tab_id, pane_id)) =
+                                        wm.pane_ids_at(entry.window_index, entry.pane_index)
+                                    {
+                                        ui.close_mode();
+                                        let label = format!(
+                                            "{}:{} · {}: {}",
+                                            entry.window_number,
+                                            entry.window_name,
+                                            entry.pane_number,
+                                            entry.pane_title
+                                        );
+                                        ui.message_composer.open(tab_id, pane_id, label);
+                                        ui.mode = UiMode::MessageComposer;
+                                        push_composer_key_reporting();
+                                        wm.force_full_redraw();
+                                        ui.render(renderer, wm, &theme_list)?;
+                                        continue;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         if ui.mode == UiMode::AgentDashboard {
@@ -1880,6 +2019,22 @@ fn run_wm_main_loop(
                                 ui.render(renderer, wm, &theme_list)?;
                                 continue;
                             }
+                            // Message composer for the focused pane (wtmux: m)
+                            KeyCode::Char('m') => {
+                                ui.close_mode();
+                                wm.prefix_mode = false;
+                                match wm.resolve_target_pane(None) {
+                                    Ok((tab_id, pane_id)) => {
+                                        let label = focused_pane_label(wm);
+                                        ui.message_composer.open(tab_id, pane_id, label);
+                                        ui.mode = UiMode::MessageComposer;
+                                        push_composer_key_reporting();
+                                    }
+                                    Err(e) => renderer.set_status_message(e),
+                                }
+                                ui.render(renderer, wm, &theme_list)?;
+                                continue;
+                            }
                             // Resize pane (tmux: + / -)
                             KeyCode::Char('+') | KeyCode::Char('=') => {
                                 Some(AppAction::ResizePane { grow: true })
@@ -1997,8 +2152,34 @@ fn run_wm_main_loop(
                 Event::Mouse(mouse_event) => {
                     use crossterm::event::{MouseEventKind, MouseButton};
 
-                    // Popup mode: mouse interaction is not routed anywhere
+                    // Message composer: mouse interaction is not routed
+                    if ui.mode == UiMode::MessageComposer {
+                        continue;
+                    }
+
+                    // Popup: the wheel scrolls its scrollback; other mouse
+                    // interaction is not routed
                     if ui.mode == UiMode::Popup {
+                        let scrolled = match ui.popup.as_mut() {
+                            Some(popup) => {
+                                let screen = popup.session.state.active_screen_mut();
+                                match mouse_event.kind {
+                                    MouseEventKind::ScrollUp => {
+                                        screen.scroll_view_up(3);
+                                        true
+                                    }
+                                    MouseEventKind::ScrollDown => {
+                                        screen.scroll_view_down(3);
+                                        true
+                                    }
+                                    _ => false,
+                                }
+                            }
+                            None => false,
+                        };
+                        if scrolled {
+                            ui.render(renderer, wm, &theme_list)?;
+                        }
                         continue;
                     }
 
@@ -2275,6 +2456,12 @@ fn run_wm_main_loop(
                 }
 
                 Event::Paste(text) => {
+                    // Terminal paste lands in the composer while it is open
+                    if ui.mode == UiMode::MessageComposer {
+                        ui.message_composer.insert_str(&text);
+                        ui.render(renderer, wm, &theme_list)?;
+                        continue;
+                    }
                     ui.close_mode();
                     wm.prefix_mode = false;
                     wm.scroll_to_bottom();
@@ -2287,6 +2474,74 @@ fn run_wm_main_loop(
     }
 
     Ok(())
+}
+
+/// Send the message composer buffer to its target pane and close the
+/// composer, reporting the outcome on the status bar.
+fn send_composer_message(
+    wm: &mut WindowManager,
+    ui: &mut WmAppState,
+    renderer: &mut crate::ui::WmRenderer,
+) {
+    let text = ui.message_composer.text();
+    let target = ui.message_composer.take_target();
+    ui.close_mode();
+    pop_composer_key_reporting();
+    wm.force_full_redraw();
+    let Some(target) = target else { return };
+    if text.trim().is_empty() {
+        renderer.set_status_message("empty message; nothing sent".to_string());
+    } else {
+        match wm.send_message_to_pane(target.tab_id, target.pane_id, &text) {
+            Ok(()) => {
+                // Record for Ctrl+P/N recall and drop the pending draft;
+                // on failure the draft is kept for the next open instead.
+                ui.message_composer.record_sent(&text);
+                renderer.set_status_message(format!("sent to {}", target.label));
+            }
+            Err(e) => renderer.set_status_message(format!("send failed: {e}")),
+        }
+    }
+}
+
+/// While the composer is open, ask the host terminal to report Ctrl+Enter
+/// distinctly from Enter (kitty keyboard protocol, disambiguate flag).
+/// Terminals without support ignore the sequence; there Ctrl+S is the send
+/// key. Windows console input reports Ctrl+Enter natively, so this is
+/// unix-only.
+fn push_composer_key_reporting() {
+    #[cfg(unix)]
+    {
+        use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+        let _ = execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
+}
+
+/// Undo [`push_composer_key_reporting`] when the composer closes.
+fn pop_composer_key_reporting() {
+    #[cfg(unix)]
+    {
+        use crossterm::event::PopKeyboardEnhancementFlags;
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
+}
+
+/// Dashboard-style label for the focused pane, shown in the message
+/// composer title.
+fn focused_pane_label(wm: &WindowManager) -> String {
+    wm.agent_overview()
+        .iter()
+        .find(|entry| entry.is_focused)
+        .map(|entry| {
+            format!(
+                "{}:{} · {}: {}",
+                entry.window_number, entry.window_name, entry.pane_number, entry.pane_title
+            )
+        })
+        .unwrap_or_else(|| "focused pane".to_string())
 }
 
 /// Geometry of the display-popup pane: centered, 60% of the terminal,
@@ -2302,11 +2557,13 @@ fn popup_geometry(cols: u16, rows: u16) -> (u16, u16, u16, u16) {
 }
 
 /// Open a display-popup: a floating pane running `command` (or the default
-/// shell) that closes when the process exits. `Prefix, x` force-closes it.
+/// shell). With `hold` the popup stays open after the process exits (any
+/// key closes it); otherwise it closes on exit. `Prefix, x` force-closes.
 fn open_popup(
     wm: &mut WindowManager,
     ui: &mut WmAppState,
     command: Option<&str>,
+    hold: bool,
 ) -> Result<(), String> {
     ui.close_mode(); // drop any existing popup or other modal state
 
@@ -2330,6 +2587,7 @@ fn open_popup(
         .map_err(|e| e.to_string())?;
 
     ui.popup = Some(pane);
+    ui.popup_hold = hold;
     ui.mode = UiMode::Popup;
     Ok(())
 }

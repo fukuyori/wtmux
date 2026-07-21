@@ -1259,6 +1259,45 @@ impl WindowManager {
         Ok((tab_id, pane_id))
     }
 
+    /// Map an `agent_overview` entry's indices to concrete ids.
+    pub fn pane_ids_at(&self, window_index: usize, pane_index: usize) -> Option<(TabId, PaneId)> {
+        let tab_id = *self.tab_order.get(window_index)?;
+        let tab = self.tabs.get(&tab_id)?;
+        let pane_id = *tab.pane_order.get(pane_index)?;
+        Some((tab_id, pane_id))
+    }
+
+    /// Send a composed message to a pane and submit it with Enter.
+    ///
+    /// Newlines become carriage returns (terminal paste semantics). When the
+    /// pane's application has enabled bracketed paste (DECSET 2004) the body
+    /// is wrapped in paste markers, so multi-line text reaches TUIs like
+    /// Claude Code as one literal block instead of per-line submissions.
+    pub fn send_message_to_pane(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        text: &str,
+    ) -> Result<(), String> {
+        let pane = self
+            .tabs
+            .get_mut(&tab_id)
+            .and_then(|tab| tab.panes.get_mut(&pane_id))
+            .ok_or_else(|| format!("pane {tab_id}.{pane_id} not found"))?;
+        let body = text.replace('\n', "\r");
+        let mut bytes = Vec::with_capacity(body.len() + 16);
+        if pane.session.state.modes.bracketed_paste {
+            bytes.extend_from_slice(b"\x1b[200~");
+            bytes.extend_from_slice(body.as_bytes());
+            bytes.extend_from_slice(b"\x1b[201~");
+        } else {
+            bytes.extend_from_slice(body.as_bytes());
+        }
+        bytes.push(b'\r');
+        pane.session.write(&bytes).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Write raw bytes to a specific pane's PTY (send-keys).
     pub fn write_to_pane(
         &mut self,
