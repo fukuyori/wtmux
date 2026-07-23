@@ -91,8 +91,12 @@ if (-not (Test-Path $outputDir)) {
 # Update version in iss file
 $issPath = ".\installer\wtmux.iss"
 $issContent = Get-Content $issPath -Raw
-$issContent = $issContent -replace '#define MyAppVersion "[0-9.]+"', "#define MyAppVersion `"$Version`""
-$issContent | Set-Content $issPath
+$updatedIssContent = $issContent -replace '#define MyAppVersion "[0-9.]+"', "#define MyAppVersion `"$Version`""
+if ($updatedIssContent -ne $issContent) {
+    $issFullPath = (Resolve-Path $issPath).Path
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($issFullPath, $updatedIssContent, $utf8NoBom)
+}
 
 # Build installer (run from installer directory)
 Write-Host "Building installer..." -ForegroundColor Green
