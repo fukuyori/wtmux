@@ -1502,9 +1502,7 @@ fn run_wm_main_loop(
                                 KeyCode::Enter | KeyCode::Char('y') => {
                                     if let Some(text) = ui.copy_mode.copy_selection(wm) {
                                         // Copy to clipboard
-                                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                            let _ = clipboard.set_text(text);
-                                        }
+                                        let _ = copy_to_clipboard(&text);
                                         ui.close_mode();
                                         renderer.render(wm)?;
                                         continue;
@@ -3220,12 +3218,33 @@ fn copy_to_clipboard(text: &str) -> Result<(), ()> {
     copy_to_clipboard_windows(text)
 }
 
+/// Returns a process-wide clipboard handle, reused across calls.
+///
+/// On X11/XWayland, clipboard content is only served for as long as the
+/// owning `arboard::Clipboard` handle stays alive; creating a fresh one per
+/// call and dropping it immediately releases selection ownership right
+/// away, so copies silently disappear even though `set_text` reports Ok.
+#[cfg(not(windows))]
+fn clipboard_handle() -> Option<&'static std::sync::Mutex<Option<arboard::Clipboard>>> {
+    use std::sync::{Mutex, OnceLock};
+    static CLIPBOARD: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
+    let mutex = CLIPBOARD.get_or_init(|| Mutex::new(arboard::Clipboard::new().ok()));
+    {
+        let mut guard = mutex.lock().ok()?;
+        if guard.is_none() {
+            *guard = arboard::Clipboard::new().ok();
+        }
+    }
+    Some(mutex)
+}
+
 /// Copy text to the system clipboard
 #[cfg(not(windows))]
 fn copy_to_clipboard(text: &str) -> Result<(), ()> {
-    arboard::Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
-        .map_err(|_| ())
+    let mutex = clipboard_handle().ok_or(())?;
+    let mut guard = mutex.lock().map_err(|_| ())?;
+    let clipboard = guard.as_mut().ok_or(())?;
+    clipboard.set_text(text.to_string()).map_err(|_| ())
 }
 
 /// Copy text to Windows clipboard

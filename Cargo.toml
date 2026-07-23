@@ -1,6 +1,6 @@
 [package]
 name = "wtmux"
-version = "2.3.1"
+version = "2.3.2"
 edition = "2021"
 rust-version = "1.70"
 description = "A tmux-like terminal multiplexer for Windows, macOS and Linux"
@@ -68,3 +68,25 @@ path = "src/main.rs"
 lto = true
 codegen-units = 1
 strip = true
+
+[package.metadata.deb]
+maintainer = "wtmux contributors"
+copyright = "2024, wtmux contributors"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+A tmux-like terminal multiplexer for Windows, macOS and Linux."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/wtmux", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/wtmux/README.md", "644"],
+    ["config.example.toml", "usr/share/doc/wtmux/config.example.toml", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/wtmux", dest = "/usr/bin/wtmux", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/wtmux/README.md", mode = "644", doc = true },
+    { source = "config.example.toml", dest = "/usr/share/doc/wtmux/config.example.toml", mode = "644", doc = true },
+]

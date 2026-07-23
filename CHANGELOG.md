@@ -1,3 +1,14 @@
+## [2.3.2] - 2026-07-23
+
+### Fixed
+
+- **Clipboard copy losing content on Linux (X11/XWayland)**: mouse-drag
+  copy and copy-mode (`y`/`Enter`) created a fresh clipboard handle per
+  copy and dropped it immediately, which released X11 selection
+  ownership right away — the copy silently disappeared even though it
+  reported success. A single clipboard handle is now kept alive for the
+  life of the process, so copied text stays pasteable.
+
 ## [2.3.1] - 2026-07-21
 
 ### Added

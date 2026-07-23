@@ -4,15 +4,15 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.3.1 Highlights
+## 2.3.2 Highlights
 
-- **`wtmux agents`**: a herdr-style agent monitor CLI — run it in any pane or popup to watch every pane's WORKING / BLOCKED / DONE / IDLE state, refreshed four times a second (`--once` for a single snapshot). WORKING panes animate a Nerd Font circle-slice spinner, here and in the `Prefix + g` dashboard.
+- **Fixed clipboard copy on Linux (X11/XWayland)**: mouse-drag copy and copy-mode (`y`/`Enter`) now keep a single clipboard handle alive for the process's lifetime, instead of releasing selection ownership right after each copy. Previously, copied text could silently vanish the instant the copy finished.
+- From 2.3.1: **`wtmux agents`** — a herdr-style agent monitor CLI — run it in any pane or popup to watch every pane's WORKING / BLOCKED / DONE / IDLE state, refreshed four times a second (`--once` for a single snapshot). WORKING panes animate a Nerd Font circle-slice spinner, here and in the `Prefix + g` dashboard.
 - From 2.3.0: **message composer (`Prefix + m`)** — compose a multi-line message in a floating editor and send it to a pane (e.g. an AI agent like Claude Code). Enter = newline, Ctrl+Enter / Ctrl+S = send, Ctrl+P/N = recall sent messages, unsent drafts are restored on reopen. IME-friendly (Japanese input works inline).
-- From 2.3.0: **held popups** — `display-popup ls` keeps its output visible after the command exits (any key closes; wheel / PageUp scroll; `-E` restores auto-close), and the command prompt accepts vim-style `:!command`.
 
 ## Features
 
@@ -71,6 +71,7 @@ Download from the [Releases](https://github.com/fukuyori/wtmux/releases) page:
 
 **Linux**
 
+- **.deb / .rpm packages** - Build with `scripts/build-linux-packages.sh` (see below)
 - Build from source (see Option 3)
 
 ### Option 2: PowerShell Install Script (Windows)
@@ -133,6 +134,22 @@ keychain profile):
 cargo build --release
 ./scripts/sign-and-notarize-macos.sh
 ```
+
+### Building the Linux Packages
+
+`scripts/build-linux-packages.sh` builds `.deb` and `.rpm` packages from
+`target/release/wtmux` using [`cargo-deb`](https://crates.io/crates/cargo-deb)
+and [`cargo-generate-rpm`](https://crates.io/crates/cargo-generate-rpm)
+(package metadata lives in `Cargo.toml`):
+
+```bash
+cargo install cargo-deb cargo-generate-rpm  # one-time setup
+./scripts/build-linux-packages.sh           # builds both
+./scripts/build-linux-packages.sh --deb     # .deb only
+./scripts/build-linux-packages.sh --rpm     # .rpm only
+```
+
+Output goes to `installer/output/`.
 
 ## Usage
 
@@ -671,7 +688,8 @@ wtmux/
 │   ├── build-inno-installer.ps1
 │   ├── build-msix.ps1
 │   ├── generate-icons.ps1
-│   └── sign-and-notarize-macos.sh  # macOS signed/notarized .pkg build
+│   ├── sign-and-notarize-macos.sh  # macOS signed/notarized .pkg build
+│   └── build-linux-packages.sh     # Linux .deb / .rpm build
 └── src/
     ├── main.rs            # Entry point
     ├── config.rs          # Configuration

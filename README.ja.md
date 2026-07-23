@@ -4,15 +4,15 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.3.1 の主な変更
+## 2.3.2 の主な変更
 
-- **`wtmux agents`**: herdrスタイルのエージェントモニタCLI。任意のペインやポップアップで実行すると、全ペインの WORKING / BLOCKED / DONE / IDLE 状態が毎秒4回更新表示されます（`--once` で1回だけ表示）。WORKING中のペインは Nerd Font の円スライススピナーがアニメーションします（`Prefix + g` ダッシュボードでも同様）。
+- **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正**: マウスドラッグでのコピーやコピーモード（`y`/`Enter`）で、コピーのたびにクリップボードハンドルを作り直して即座に破棄していたため、コピー直後にX11の選択所有権が失われていました。プロセス生存中はハンドルを保持し続けるようにし、コピーした内容が確実に貼り付けられるようになりました。
+- 2.3.1 より: **`wtmux agents`** — herdrスタイルのエージェントモニタCLI。任意のペインやポップアップで実行すると、全ペインの WORKING / BLOCKED / DONE / IDLE 状態が毎秒4回更新表示されます（`--once` で1回だけ表示）。WORKING中のペインは Nerd Font の円スライススピナーがアニメーションします（`Prefix + g` ダッシュボードでも同様）。
 - 2.3.0 より: **メッセージコンポーザ（`Prefix + m`）** — フローティングエディタで複数行メッセージを作成しペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴、未送信の下書きは復元。IME対応（日本語入力がインラインで機能）。
-- 2.3.0 より: **ポップアップの保持** — `display-popup ls` がコマンド終了後も結果を表示したまま（任意キーで閉じる、ホイール / PageUp でスクロール、`-E` で自動クローズ）。コマンドプロンプトで vim風の `:!コマンド` も使用可能。
 
 ## 特徴
 
@@ -67,6 +67,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 **Linux**
 
+- **.deb / .rpm パッケージ** - `scripts/build-linux-packages.sh` でビルド（下記参照）
 - ソースからビルド（方法3を参照）
 
 ### 方法2: PowerShellインストールスクリプト（Windows）
@@ -129,6 +130,22 @@ notarytoolのキーチェーンプロファイルが必要）：
 cargo build --release
 ./scripts/sign-and-notarize-macos.sh
 ```
+
+### Linuxパッケージのビルド
+
+`scripts/build-linux-packages.sh` は [`cargo-deb`](https://crates.io/crates/cargo-deb) と
+[`cargo-generate-rpm`](https://crates.io/crates/cargo-generate-rpm) を使い、
+`target/release/wtmux` から `.deb` と `.rpm` パッケージをビルドします
+（パッケージメタデータは `Cargo.toml` に定義）：
+
+```bash
+cargo install cargo-deb cargo-generate-rpm  # 初回のみ
+./scripts/build-linux-packages.sh           # 両方ビルド
+./scripts/build-linux-packages.sh --deb     # .debのみ
+./scripts/build-linux-packages.sh --rpm     # .rpmのみ
+```
+
+出力先は `installer/output/` です。
 
 ## 使い方
 
@@ -616,7 +633,8 @@ wtmux/
 │   ├── build-inno-installer.ps1
 │   ├── build-msix.ps1
 │   ├── generate-icons.ps1
-│   └── sign-and-notarize-macos.sh  # macOS署名・公証済み.pkgビルド
+│   ├── sign-and-notarize-macos.sh  # macOS署名・公証済み.pkgビルド
+│   └── build-linux-packages.sh     # Linux .deb / .rpm ビルド
 └── src/
     ├── main.rs            # エントリーポイント
     ├── config.rs          # 設定
