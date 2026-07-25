@@ -1371,6 +1371,16 @@ fn run_wm_main_loop(
                             {
                                 ui.message_composer.history_next();
                             }
+                            // Ctrl+V: paste from the system clipboard. Needed for
+                            // terminals that forward Ctrl+V as a key event instead
+                            // of translating it into a bracketed-paste event.
+                            KeyCode::Char('v')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                if let Some(text) = read_clipboard_text() {
+                                    ui.message_composer.insert_str(&text);
+                                }
+                            }
                             KeyCode::Char(c)
                                 if !key_event.modifiers.contains(KeyModifiers::CONTROL) =>
                             {
@@ -3216,6 +3226,14 @@ fn base64_encode(input: &str) -> String {
 #[cfg(windows)]
 fn copy_to_clipboard(text: &str) -> Result<(), ()> {
     copy_to_clipboard_windows(text)
+}
+
+/// Read text from the system clipboard, if any.
+fn read_clipboard_text() -> Option<String> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .ok()
+        .filter(|text| !text.is_empty())
 }
 
 /// Returns a process-wide clipboard handle, reused across calls.

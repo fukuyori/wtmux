@@ -821,7 +821,7 @@ impl WmRenderer {
         }
         write!(stdout, "┤")?;
 
-        let help = "Ctrl+Enter/Ctrl+S:Send Enter:Newline Ctrl+P/N:History Esc:Cancel";
+        let help = "Ctrl+Enter/Ctrl+S:Send Enter:Newline Ctrl+V:Paste Ctrl+P/N:History Esc:Cancel";
         let help = truncate_to_display_width(help, box_width.saturating_sub(3));
         let help_width = str_display_width(&help);
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;

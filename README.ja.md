@@ -4,13 +4,14 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.3.2 の主な変更
+## 2.3.3 の主な変更
 
-- **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正**: マウスドラッグでのコピーやコピーモード（`y`/`Enter`）で、コピーのたびにクリップボードハンドルを作り直して即座に破棄していたため、コピー直後にX11の選択所有権が失われていました。プロセス生存中はハンドルを保持し続けるようにし、コピーした内容が確実に貼り付けられるようになりました。
+- **メッセージコンポーザ（`Prefix + m`）で Ctrl+V 貼り付けができない不具合を修正**: コンポーザは端末のブラケットペーストイベントしか受け付けていなかったため、Ctrl+V をキー入力としてそのまま渡す端末では何も起きませんでした。Ctrl+V でシステムクリップボードを直接読み取り、カーソル位置に挿入するようにしました。
+- 2.3.2 より: **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正**: マウスドラッグでのコピーやコピーモード（`y`/`Enter`）で、コピーのたびにクリップボードハンドルを作り直して即座に破棄していたため、コピー直後にX11の選択所有権が失われていました。プロセス生存中はハンドルを保持し続けるようにし、コピーした内容が確実に貼り付けられるようになりました。
 - 2.3.1 より: **`wtmux agents`** — herdrスタイルのエージェントモニタCLI。任意のペインやポップアップで実行すると、全ペインの WORKING / BLOCKED / DONE / IDLE 状態が毎秒4回更新表示されます（`--once` で1回だけ表示）。WORKING中のペインは Nerd Font の円スライススピナーがアニメーションします（`Prefix + g` ダッシュボードでも同様）。
 - 2.3.0 より: **メッセージコンポーザ（`Prefix + m`）** — フローティングエディタで複数行メッセージを作成しペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴、未送信の下書きは復元。IME対応（日本語入力がインラインで機能）。
 

@@ -1,3 +1,13 @@
+## [2.3.3] - 2026-07-25
+
+### Fixed
+
+- **Ctrl+V not pasting in the message composer (`Prefix + m`)**: the
+  composer only accepted terminal bracketed-paste events, so on
+  terminals that forward Ctrl+V as a key press nothing happened. Ctrl+V
+  now reads the system clipboard directly and inserts the text at the
+  cursor; the composer help line lists the shortcut.
+
 ## [2.3.2] - 2026-07-23
 
 ### Fixed

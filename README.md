@@ -4,13 +4,14 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.3.2 Highlights
+## 2.3.3 Highlights
 
-- **Fixed clipboard copy on Linux (X11/XWayland)**: mouse-drag copy and copy-mode (`y`/`Enter`) now keep a single clipboard handle alive for the process's lifetime, instead of releasing selection ownership right after each copy. Previously, copied text could silently vanish the instant the copy finished.
+- **Fixed Ctrl+V paste in the message composer (`Prefix + m`)**: Ctrl+V now reads the system clipboard directly, so pasting works even on terminals that forward Ctrl+V as a key press instead of a bracketed-paste event.
+- From 2.3.2: **fixed clipboard copy on Linux (X11/XWayland)**: mouse-drag copy and copy-mode (`y`/`Enter`) now keep a single clipboard handle alive for the process's lifetime, instead of releasing selection ownership right after each copy. Previously, copied text could silently vanish the instant the copy finished.
 - From 2.3.1: **`wtmux agents`** — a herdr-style agent monitor CLI — run it in any pane or popup to watch every pane's WORKING / BLOCKED / DONE / IDLE state, refreshed four times a second (`--once` for a single snapshot). WORKING panes animate a Nerd Font circle-slice spinner, here and in the `Prefix + g` dashboard.
 - From 2.3.0: **message composer (`Prefix + m`)** — compose a multi-line message in a floating editor and send it to a pane (e.g. an AI agent like Claude Code). Enter = newline, Ctrl+Enter / Ctrl+S = send, Ctrl+P/N = recall sent messages, unsent drafts are restored on reopen. IME-friendly (Japanese input works inline).
 
