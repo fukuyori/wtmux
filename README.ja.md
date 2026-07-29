@@ -4,16 +4,16 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-2.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.3.3 の主な変更
+## 2.3.4 の主な変更
 
-- **メッセージコンポーザ（`Prefix + m`）で Ctrl+V 貼り付けができない不具合を修正**: コンポーザは端末のブラケットペーストイベントしか受け付けていなかったため、Ctrl+V をキー入力としてそのまま渡す端末では何も起きませんでした。Ctrl+V でシステムクリップボードを直接読み取り、カーソル位置に挿入するようにしました。
-- 2.3.2 より: **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正**: マウスドラッグでのコピーやコピーモード（`y`/`Enter`）で、コピーのたびにクリップボードハンドルを作り直して即座に破棄していたため、コピー直後にX11の選択所有権が失われていました。プロセス生存中はハンドルを保持し続けるようにし、コピーした内容が確実に貼り付けられるようになりました。
-- 2.3.1 より: **`wtmux agents`** — herdrスタイルのエージェントモニタCLI。任意のペインやポップアップで実行すると、全ペインの WORKING / BLOCKED / DONE / IDLE 状態が毎秒4回更新表示されます（`--once` で1回だけ表示）。WORKING中のペインは Nerd Font の円スライススピナーがアニメーションします（`Prefix + g` ダッシュボードでも同様）。
-- 2.3.0 より: **メッセージコンポーザ（`Prefix + m`）** — フローティングエディタで複数行メッセージを作成しペイン（Claude Code等のAIエージェント）に送信。Enter = 改行、Ctrl+Enter / Ctrl+S = 送信、Ctrl+P/N = 送信履歴、未送信の下書きは復元。IME対応（日本語入力がインラインで機能）。
+- **ペインの枠とタイトルを見やすく改善**: ペインタイトルを常に枠線と同じ色で描くようにし（フォーカス中のペインはアクティブ枠色でタイトルも強調されます）、非フォーカスの枠色を全8テーマで各パレットの「コメント色」相当に明るくしました。
+- 2.3.3 より: **メッセージコンポーザ（`Prefix + m`）で Ctrl+V 貼り付けができない不具合を修正** — Ctrl+V でシステムクリップボードを直接読み取るようにし、Ctrl+V をキー入力としてそのまま渡す端末でも貼り付けが機能します。
+- 2.3.2 より: **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正** — クリップボードハンドルをプロセス生存中保持し続けるようにし、コピーした内容が直後に消える問題を解消しました。
+- 2.3.0/2.3.1 より: **エージェント向け機能** — `Prefix + m` のメッセージコンポーザ（複数行メッセージをペインに送信、IME対応）と、全ペインの WORKING / BLOCKED / DONE / IDLE 状態を Nerd Font スピナー付きで監視する `wtmux agents` CLI（`Prefix + g` ダッシュボードでも表示）。
 
 ## 特徴
 

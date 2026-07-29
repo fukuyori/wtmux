@@ -697,7 +697,7 @@ impl ColorScheme {
             status_prefix_fg: Color::new(0, 0, 0),
             
             // Pane borders
-            pane_border: Color::new(80, 80, 80),
+            pane_border: Color::new(130, 130, 130),
             pane_border_active: Color::new(100, 150, 255),
             
             // Selection
@@ -730,7 +730,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(181, 137, 0),
             status_prefix_fg: Color::new(0, 43, 54),
             
-            pane_border: Color::new(7, 54, 66),
+            pane_border: Color::new(101, 123, 131),
             pane_border_active: Color::new(38, 139, 210),
             
             selection_bg: Color::new(38, 139, 210),
@@ -761,7 +761,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(181, 137, 0),
             status_prefix_fg: Color::new(253, 246, 227),
             
-            pane_border: Color::new(238, 232, 213),
+            pane_border: Color::new(147, 161, 161),
             pane_border_active: Color::new(38, 139, 210),
             
             selection_bg: Color::new(38, 139, 210),
@@ -792,7 +792,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(249, 38, 114),
             status_prefix_fg: Color::new(248, 248, 242),
             
-            pane_border: Color::new(60, 60, 54),
+            pane_border: Color::new(117, 113, 94),
             pane_border_active: Color::new(166, 226, 46),
             
             selection_bg: Color::new(73, 72, 62),
@@ -823,7 +823,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(163, 190, 140),
             status_prefix_fg: Color::new(46, 52, 64),
             
-            pane_border: Color::new(59, 66, 82),
+            pane_border: Color::new(97, 110, 136),
             pane_border_active: Color::new(136, 192, 208),
             
             selection_bg: Color::new(76, 86, 106),
@@ -854,7 +854,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(80, 250, 123),
             status_prefix_fg: Color::new(40, 42, 54),
             
-            pane_border: Color::new(68, 71, 90),
+            pane_border: Color::new(98, 114, 164),
             pane_border_active: Color::new(189, 147, 249),
             
             selection_bg: Color::new(68, 71, 90),
@@ -885,7 +885,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(152, 151, 26),
             status_prefix_fg: Color::new(40, 40, 40),
             
-            pane_border: Color::new(60, 56, 54),
+            pane_border: Color::new(146, 131, 116),
             pane_border_active: Color::new(215, 153, 33),
             
             selection_bg: Color::new(102, 92, 84),
@@ -916,7 +916,7 @@ impl ColorScheme {
             status_prefix_bg: Color::new(158, 206, 106),
             status_prefix_fg: Color::new(26, 27, 38),
             
-            pane_border: Color::new(41, 46, 66),
+            pane_border: Color::new(86, 95, 137),
             pane_border_active: Color::new(122, 162, 247),
             
             selection_bg: Color::new(51, 59, 91),

@@ -1,3 +1,16 @@
+## [2.3.4] - 2026-07-29
+
+### Changed
+
+- **Pane border and title visibility**: the pane title is now always
+  drawn in the same color as its surrounding border, so the focused
+  pane's title picks up the active border color instead of a
+  tab-bar-oriented color that could vanish on dark backgrounds. The
+  unfocused border color was also brightened in all eight built-in
+  themes (each theme now uses its palette's "comment" tone), making
+  inactive pane frames and titles easier to distinguish without
+  overpowering the focused pane.
+
 ## [2.3.3] - 2026-07-25
 
 ### Fixed

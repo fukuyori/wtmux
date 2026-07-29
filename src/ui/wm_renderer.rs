@@ -1866,11 +1866,9 @@ impl WmRenderer {
             write!(stdout, "{}", chars.horizontal)?;
         }
         
-        if pane.focused {
-            execute!(stdout, SetForegroundColor(cs.tab_active_fg.to_crossterm()))?;
-        }
+        // The title uses the same color as the surrounding border, so the
+        // focused pane's title picks up the active border color.
         write!(stdout, "{}", display_title)?;
-        execute!(stdout, SetForegroundColor(border_fg))?;
         
         for _ in 0..right_pad {
             write!(stdout, "{}", chars.horizontal)?;
