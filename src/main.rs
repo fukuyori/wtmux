@@ -46,6 +46,7 @@ mod config;
 mod copymode;
 mod tmux_compat;
 mod command_prompt;
+mod keybind;
 
 use std::env;
 use std::io::Write;
@@ -64,6 +65,7 @@ use crate::ui::{
 };
 use crate::wm::{WindowManager, SplitDirection};
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
+use crate::keybind::{BindTable, BoundAction};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum AppAction {
@@ -90,6 +92,7 @@ enum AppAction {
     ResetCursorShape,
     ToggleZoom,
     NextLayout,
+    SelectLayout(crate::wm::layout::LayoutType),
     ResizePane {
         grow: bool,
     },
@@ -165,6 +168,26 @@ fn print_version() {
     eprintln!("wtmux {}", VERSION);
 }
 
+/// Print the effective binding table (`wtmux list-keys`), after `config.toml`
+/// overrides have been applied, in the same syntax `[bind]` accepts.
+fn print_keys(wtmux_config: &WtmuxConfig) {
+    let prefix = PrefixKey::parse(&wtmux_config.prefix_key).unwrap_or(PrefixKey { char: 'b' });
+    let binds = BindTable::build(
+        prefix.char,
+        &wtmux_config.bind,
+        &wtmux_config.bind_root,
+        &wtmux_config.unbind,
+    );
+    for error in binds.errors() {
+        eprintln!("[wtmux] {error}");
+    }
+
+    for (scope, key, command) in binds.describe() {
+        let section = if scope == "root" { "bind_root" } else { "bind" };
+        println!("{section:<9} {key:<12} {command}");
+    }
+}
+
 fn print_help(wtmux_config: &WtmuxConfig) {
     let keybindings = ParsedKeyBindings::from_config(&wtmux_config.keybindings);
     let history_selector = keybindings.history_selector.display_name();
@@ -209,6 +232,9 @@ fn print_help(wtmux_config: &WtmuxConfig) {
     eprintln!("  --no-cwd-prompt-hook  Disable shell prompt hook cwd tracking");
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
+    eprintln!();
+    eprintln!("Commands:");
+    eprintln!("  list-keys (lsk)       List the effective key bindings");
     eprintln!();
     eprintln!(
         "Multi-pane mode keybindings (tmux compatible, {} prefix):",
@@ -293,6 +319,10 @@ fn parse_args() -> Result<Config, String> {
             }
             "-v" | "--version" => {
                 print_version();
+                std::process::exit(0);
+            }
+            "list-keys" | "lsk" => {
+                print_keys(&WtmuxConfig::load());
                 std::process::exit(0);
             }
             // Mode selection
@@ -919,7 +949,20 @@ fn run_terminal_wm(
     // Parse prefix key from config
     let prefix_key = crate::config::PrefixKey::parse(&wtmux_config.prefix_key)
         .unwrap_or(crate::config::PrefixKey { char: 'b' });
-    
+
+    // Built-in bindings overlaid with [bind] / [bind_root] / unbind. Bad
+    // entries are reported and skipped so a typo never costs the whole table.
+    let binds = BindTable::build(
+        prefix_key.char,
+        &wtmux_config.bind,
+        &wtmux_config.bind_root,
+        &wtmux_config.unbind,
+    );
+    for error in binds.errors() {
+        eprintln!("[wtmux] {error}");
+    }
+
+
     // Create window manager
     let mut wm = WindowManager::new(
         cols,
@@ -981,7 +1024,7 @@ fn run_terminal_wm(
 
     // Run main loop
     let hooks = wtmux_config.hooks.clone();
-    let result = run_wm_main_loop(&mut wm, &mut renderer, keybindings, hooks);
+    let result = run_wm_main_loop(&mut wm, &mut renderer, keybindings, binds, hooks);
 
     // Cleanup
     let _ = renderer.cleanup();
@@ -1000,6 +1043,7 @@ fn run_wm_main_loop(
     wm: &mut WindowManager,
     renderer: &mut crate::ui::WmRenderer,
     keybindings: ParsedKeyBindings,
+    binds: BindTable,
     hooks: crate::config::HooksConfig,
 ) -> anyhow::Result<()> {
     // Adaptive polling: 10ms while output is flowing, relaxing to 50ms after
@@ -1880,217 +1924,18 @@ fn run_wm_main_loop(
 
                     // Handle prefix mode
                     if wm.prefix_mode {
-                        let action = match key_event.code {
-                            // Cancel prefix mode (Esc only)
-                            KeyCode::Esc => Some(AppAction::Noop),
-                            // New window (tab)
-                            KeyCode::Char('c') => Some(AppAction::NewTab),
-                            // Kill pane (tmux: x)
-                            KeyCode::Char('x') => Some(AppAction::ClosePane),
-                            // Kill window/tab (tmux: &)
-                            KeyCode::Char('&') => Some(AppAction::CloseTab),
-                            // Split horizontal (tmux: " splits top/bottom)
-                            KeyCode::Char('"') => Some(AppAction::SplitVertical),
-                            // Split vertical (tmux: % splits left/right)
-                            KeyCode::Char('%') => Some(AppAction::SplitHorizontal),
-                            // Next window (tmux: n)
-                            KeyCode::Char('n') => Some(AppAction::NextTab),
-                            // Previous window (tmux: p)
-                            KeyCode::Char('p') => Some(AppAction::PrevTab),
-                            // Last window (tmux: l) - toggle between last two tabs
-                            KeyCode::Char('l') => Some(AppAction::LastTab),
-                            // Move focus between panes (tmux: arrow keys without Ctrl)
-                            // Resize panes (tmux: Ctrl+arrow keys)
-                            KeyCode::Left => {
-                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    Some(AppAction::ResizePaneDirection {
-                                        direction: SplitDirection::Horizontal,
-                                        arrow_up_or_left: true,
-                                    })
-                                } else {
-                                    Some(AppAction::FocusDirection {
-                                        direction: SplitDirection::Horizontal,
-                                        forward: false,
-                                    })
-                                }
-                            }
-                            KeyCode::Right => {
-                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    Some(AppAction::ResizePaneDirection {
-                                        direction: SplitDirection::Horizontal,
-                                        arrow_up_or_left: false,
-                                    })
-                                } else {
-                                    Some(AppAction::FocusDirection {
-                                        direction: SplitDirection::Horizontal,
-                                        forward: true,
-                                    })
-                                }
-                            }
-                            KeyCode::Up => {
-                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    Some(AppAction::ResizePaneDirection {
-                                        direction: SplitDirection::Vertical,
-                                        arrow_up_or_left: true,
-                                    })
-                                } else {
-                                    Some(AppAction::FocusDirection {
-                                        direction: SplitDirection::Vertical,
-                                        forward: false,
-                                    })
-                                }
-                            }
-                            KeyCode::Down => {
-                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                                    Some(AppAction::ResizePaneDirection {
-                                        direction: SplitDirection::Vertical,
-                                        arrow_up_or_left: false,
-                                    })
-                                } else {
-                                    Some(AppAction::FocusDirection {
-                                        direction: SplitDirection::Vertical,
-                                        forward: true,
-                                    })
-                                }
-                            }
-                            // Select window by number (tmux: 0-9) - only when not showing pane numbers
-                            KeyCode::Char(c) if c.is_ascii_digit() => {
-                                let num = c.to_digit(10).unwrap_or(0) as usize;
-                                Some(AppAction::GotoTab(num))
-                            }
-                            // Toggle input broadcast to all panes (tmux: synchronize-panes)
-                            KeyCode::Char('e') => Some(AppAction::ToggleBroadcast),
-                            // Toggle raw output logging on the focused pane
-                            // (tmux: pipe-pane). Shift+P so plain p stays
-                            // "previous window".
-                            KeyCode::Char('P') => Some(AppAction::TogglePipeLog),
-                            // Jump to the next pane needing attention
-                            KeyCode::Char('a') => Some(AppAction::FocusNextAttention),
-                            // Next pane (tmux: o)
-                            KeyCode::Char('o') => Some(AppAction::FocusNextPane),
-                            // Previous pane (tmux: ;)
-                            KeyCode::Char(';') => Some(AppAction::FocusPrevPane),
-                            // Reset cursor shape (tmux: r)
-                            KeyCode::Char('r') => Some(AppAction::ResetCursorShape),
-                            // Zoom pane toggle (tmux: z)
-                            KeyCode::Char('z') => Some(AppAction::ToggleZoom),
-                            // Rename window (tmux: ,)
-                            KeyCode::Char(',') => {
-                                ui.close_mode();
-                                ui.mode = UiMode::Rename;
-                                ui.rename_target = RenameTarget::Window;
-                                if let Some(tab) = wm.active_tab() {
-                                    ui.rename_buffer = tab.name.clone();
-                                }
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Next layout (tmux: Space)
-                            KeyCode::Char(' ') => Some(AppAction::NextLayout),
-                            // Copy mode (tmux: [)
-                            KeyCode::Char('[') => {
-                                ui.close_mode();
-                                ui.copy_mode.enter(wm);
-                                ui.mode = UiMode::CopyMode;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Search mode (Ctrl+B, /)
-                            KeyCode::Char('/') => {
-                                ui.close_mode();
-                                ui.copy_mode.enter(wm);
-                                ui.copy_mode.enter_search(true);
-                                ui.mode = UiMode::CopyMode;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Theme/color scheme selector (Ctrl+B, t)
-                            KeyCode::Char('t') => {
-                                ui.close_mode();
-                                ui.mode = UiMode::ThemeSelector;
-                                ui.theme_selector_index = 0;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Window selector (tmux: w)
-                            KeyCode::Char('w') => {
-                                ui.close_mode();
-                                ui.window_selector.open(wm);
-                                ui.mode = UiMode::WindowSelector;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Command prompt (tmux: :)
-                            KeyCode::Char(':') => {
-                                ui.close_mode();
-                                ui.mode = UiMode::CommandPrompt;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Agent dashboard (herdr-style pane state list)
-                            KeyCode::Char('g') => {
-                                ui.close_mode();
-                                ui.agent_dashboard.open(wm);
-                                ui.mode = UiMode::AgentDashboard;
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Message composer for the focused pane (wtmux: m)
-                            KeyCode::Char('m') => {
-                                ui.close_mode();
-                                wm.prefix_mode = false;
-                                match wm.resolve_target_pane(None) {
-                                    Ok((tab_id, pane_id)) => {
-                                        let label = focused_pane_label(wm);
-                                        ui.message_composer.open(tab_id, pane_id, label);
-                                        ui.mode = UiMode::MessageComposer;
-                                        push_composer_key_reporting();
-                                    }
-                                    Err(e) => renderer.set_status_message(e),
-                                }
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Resize pane (tmux: + / -)
-                            KeyCode::Char('+') | KeyCode::Char('=') => {
-                                Some(AppAction::ResizePane { grow: true })
-                            }
-                            KeyCode::Char('-') => Some(AppAction::ResizePane { grow: false }),
-                            // Swap pane with next (tmux: })
-                            KeyCode::Char('}') => Some(AppAction::SwapPaneNext),
-                            // Swap pane with previous (tmux: {)
-                            KeyCode::Char('{') => Some(AppAction::SwapPanePrev),
-                            // Display pane numbers (tmux: q)
-                            KeyCode::Char('q') => {
-                                ui.close_mode();
-                                ui.mode = UiMode::PaneNumbers;
-                                ui.pane_numbers_started = std::time::Instant::now();
-                                wm.prefix_mode = false;
-                                ui.render(renderer, wm, &theme_list)?;
-                                continue;
-                            }
-                            // Detach (tmux: d) - for now just show message
-                            KeyCode::Char('d') => Some(AppAction::Noop),
-                            // Send prefix key to application (e.g., Ctrl+B Ctrl+B sends Ctrl+B)
-                            KeyCode::Char(c) if c == wm.prefix_key.char => {
-                                let ctrl_code = (c as u8) - b'a' + 1;
-                                Some(AppAction::SendPrefixToPane { byte: ctrl_code })
-                            }
-                            _ => Some(AppAction::Noop),
-                        };
-
                         wm.prefix_mode = false;
-                        if let Some(action) = action {
-                            apply_app_action(wm, action);
+                        let bound = binds
+                            .lookup_prefix(&key_event)
+                            .unwrap_or(BoundAction::Noop);
+                        if apply_ui_action(bound, &mut ui, wm, renderer) {
+                            ui.render(renderer, wm, &theme_list)?;
+                        } else {
+                            if let Some(action) = app_action_for(bound, wm) {
+                                apply_app_action(wm, action);
+                            }
+                            renderer.render(wm)?;
                         }
-                        renderer.render(wm)?;
                         continue;
                     }
 
@@ -2101,6 +1946,23 @@ fn run_wm_main_loop(
                         wm.prefix_mode = true;
                         renderer.render(wm)?;
                         continue;
+                    }
+
+                    // Prefix-less bindings from [bind_root]. Checked before
+                    // the key reaches the PTY, so a root binding shadows
+                    // whatever the shell would have done with that key.
+                    if !binds.root_is_empty() {
+                        if let Some(bound) = binds.lookup_root(&key_event) {
+                            if apply_ui_action(bound, &mut ui, wm, renderer) {
+                                ui.render(renderer, wm, &theme_list)?;
+                            } else {
+                                if let Some(action) = app_action_for(bound, wm) {
+                                    apply_app_action(wm, action);
+                                }
+                                renderer.render(wm)?;
+                            }
+                            continue;
+                        }
                     }
 
                     if keybindings.history_selector.matches(&key_event)
@@ -2762,6 +2624,125 @@ fn open_rename_pane(ui: &mut WmAppState, wm: &WindowManager) {
     ui.rename_buffer = wm.focused_pane_title().unwrap_or_default();
 }
 
+/// Translate a key binding into the `AppAction` that carries it out.
+///
+/// Returns `None` for bindings that open a modal UI (see [`apply_ui_action`])
+/// and for ones with nothing to do.
+fn app_action_for(bound: BoundAction, wm: &WindowManager) -> Option<AppAction> {
+    use BoundAction as B;
+    let action = match bound {
+        B::Noop | B::Detach => return None,
+        B::NewWindow => AppAction::NewTab,
+        B::KillPane => AppAction::ClosePane,
+        B::KillWindow => AppAction::CloseTab,
+        B::SplitVertical => AppAction::SplitVertical,
+        B::SplitHorizontal => AppAction::SplitHorizontal,
+        B::NextWindow => AppAction::NextTab,
+        B::PrevWindow => AppAction::PrevTab,
+        B::LastWindow => AppAction::LastTab,
+        B::SelectWindow(index) => AppAction::GotoTab(index),
+        B::SelectPaneDir { direction, forward } => AppAction::FocusDirection { direction, forward },
+        B::ResizePaneDir {
+            direction,
+            arrow_up_or_left,
+        } => AppAction::ResizePaneDirection {
+            direction,
+            arrow_up_or_left,
+        },
+        B::NextPane => AppAction::FocusNextPane,
+        B::PrevPane => AppAction::FocusPrevPane,
+        B::ToggleZoom => AppAction::ToggleZoom,
+        B::NextLayout => AppAction::NextLayout,
+        B::SelectLayout(layout) => AppAction::SelectLayout(layout),
+        B::ResizePane { grow } => AppAction::ResizePane { grow },
+        B::SwapPaneNext => AppAction::SwapPaneNext,
+        B::SwapPanePrev => AppAction::SwapPanePrev,
+        B::ToggleBroadcast => AppAction::ToggleBroadcast,
+        B::TogglePipeLog => AppAction::TogglePipeLog,
+        B::NextAttention => AppAction::FocusNextAttention,
+        B::ResetCursorShape => AppAction::ResetCursorShape,
+        B::Paste => AppAction::PasteFromClipboard,
+        B::SendPrefix => {
+            let ch = wm.prefix_key.char;
+            AppAction::SendPrefixToPane {
+                byte: (ch as u8).wrapping_sub(b'a').wrapping_add(1),
+            }
+        }
+        // The `Ui*` variants; handled by `apply_ui_action`.
+        _ => return None,
+    };
+    Some(action)
+}
+
+/// Run a binding that opens a modal UI, returning whether it did so.
+///
+/// These cannot go through `apply_app_action` because they mutate the event
+/// loop's own `WmAppState`; the caller re-renders through `ui.render` instead
+/// of `renderer.render`.
+fn apply_ui_action(
+    bound: BoundAction,
+    ui: &mut WmAppState,
+    wm: &mut WindowManager,
+    renderer: &mut crate::ui::WmRenderer,
+) -> bool {
+    use BoundAction as B;
+    if !bound.is_ui() {
+        return false;
+    }
+
+    ui.close_mode();
+    match bound {
+        B::UiRenameWindow => {
+            ui.mode = UiMode::Rename;
+            ui.rename_target = RenameTarget::Window;
+            if let Some(tab) = wm.active_tab() {
+                ui.rename_buffer = tab.name.clone();
+            }
+        }
+        B::UiCopyMode => {
+            ui.copy_mode.enter(wm);
+            ui.mode = UiMode::CopyMode;
+        }
+        B::UiSearch => {
+            ui.copy_mode.enter(wm);
+            ui.copy_mode.enter_search(true);
+            ui.mode = UiMode::CopyMode;
+        }
+        B::UiThemeSelector => {
+            ui.mode = UiMode::ThemeSelector;
+            ui.theme_selector_index = 0;
+        }
+        B::UiWindowSelector => {
+            ui.window_selector.open(wm);
+            ui.mode = UiMode::WindowSelector;
+        }
+        B::UiCommandPrompt => {
+            ui.mode = UiMode::CommandPrompt;
+        }
+        B::UiAgentDashboard => {
+            ui.agent_dashboard.open(wm);
+            ui.mode = UiMode::AgentDashboard;
+        }
+        B::UiMessageComposer => match wm.resolve_target_pane(None) {
+            Ok((tab_id, pane_id)) => {
+                let label = focused_pane_label(wm);
+                ui.message_composer.open(tab_id, pane_id, label);
+                ui.mode = UiMode::MessageComposer;
+                push_composer_key_reporting();
+            }
+            Err(e) => renderer.set_status_message(e),
+        },
+        B::UiDisplayPanes => {
+            ui.mode = UiMode::PaneNumbers;
+            ui.pane_numbers_started = std::time::Instant::now();
+        }
+        // `is_ui()` above admits exactly the arms handled here.
+        _ => unreachable!("non-UI action reached apply_ui_action: {bound:?}"),
+    }
+
+    true
+}
+
 fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
     match action {
         AppAction::Noop => {}
@@ -2818,6 +2799,9 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
         }
         AppAction::NextLayout => {
             wm.next_layout();
+        }
+        AppAction::SelectLayout(layout) => {
+            wm.set_layout_preset(layout);
         }
         AppAction::ResizePane { grow } => {
             wm.resize_pane(grow);

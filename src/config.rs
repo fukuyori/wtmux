@@ -38,6 +38,7 @@
 //! - `gruvbox-dark` - Retro groove colors
 //! - `tokyo-night` - VS Code Tokyo Night theme
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -57,8 +58,17 @@ pub struct Config {
     pub color_scheme: String,
     /// Inject a prompt hook into supported shells to publish the pane cwd.
     pub cwd_prompt_hook: bool,
+    /// Default bindings to remove, as key names (`unbind-key`).
+    ///
+    /// Being a plain array this must appear before any `[table]` in
+    /// `config.toml`, or TOML will read it as a key of the preceding table.
+    pub unbind: Vec<String>,
     /// Global keybinding settings
     pub keybindings: KeyBindingsConfig,
+    /// Prefix-mode bindings: key name -> command (`bind-key`).
+    pub bind: BTreeMap<String, String>,
+    /// Prefix-less bindings: key name -> command (`bind-key -n`).
+    pub bind_root: BTreeMap<String, String>,
     /// Tab bar settings
     pub tab_bar: TabBarConfig,
     /// Status bar settings
@@ -81,7 +91,10 @@ impl Default for Config {
             prefix_key: "C-b".to_string(),
             color_scheme: "default".to_string(),
             cwd_prompt_hook: false,
+            unbind: Vec::new(),
             keybindings: KeyBindingsConfig::default(),
+            bind: BTreeMap::new(),
+            bind_root: BTreeMap::new(),
             tab_bar: TabBarConfig::default(),
             status_bar: StatusBarConfig::default(),
             pane: PaneConfig::default(),

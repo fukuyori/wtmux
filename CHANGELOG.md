@@ -1,3 +1,41 @@
+## [3.0.0] - 2026-07-30
+
+### Added
+
+- **Configurable key bindings (`[bind]` / `[bind_root]` / `unbind`)**:
+  every key in the prefix table can now be reassigned or removed from
+  `config.toml`, the way tmux's `bind-key` works, and prefix-less
+  bindings (tmux's `bind-key -n`) are supported through `[bind_root]`:
+
+  ```toml
+  unbind = ["d"]                 # array must precede the [sections]
+
+  [bind]
+  "M-4" = "select-layout main-vertical"
+  "|"   = "split-window -h"
+  "z"   = ""                     # empty value unbinds
+
+  [bind_root]
+  "C-M-Left" = "select-pane -L"
+  ```
+
+  Commands use tmux names where an equivalent exists (`new-window`,
+  `split-window -h`, `resize-pane -Z`, `select-layout <preset>`,
+  `swap-pane -D`, ...) plus wtmux-only ones (`agent-dashboard`,
+  `compose-message`, `next-attention`, `reset-cursor`). A malformed
+  entry is skipped on its own with the reason printed to stderr, rather
+  than discarding the whole table.
+- **`wtmux list-keys` (alias `lsk`)**: prints the effective binding
+  table, after config overrides, in the same syntax `[bind]` accepts.
+
+### Changed
+
+- Prefix bindings now match modifiers instead of ignoring them, so
+  `Prefix, C-x` no longer triggers the binding for `x` unless nothing
+  more specific matches. Holding Ctrl through the whole sequence
+  (`C-b C-n`) still reaches the bare binding, and character bindings
+  remain case-sensitive (`P` is distinct from `p`).
+
 ## [2.3.4] - 2026-07-29
 
 ### Changed

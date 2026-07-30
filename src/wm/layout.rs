@@ -57,6 +57,18 @@ impl LayoutType {
         }
     }
 
+    /// The tmux preset name, i.e. the inverse of [`LayoutType::parse`].
+    pub fn name(self) -> &'static str {
+        match self {
+            LayoutType::Custom => "custom",
+            LayoutType::EvenHorizontal => "even-horizontal",
+            LayoutType::EvenVertical => "even-vertical",
+            LayoutType::MainHorizontal => "main-horizontal",
+            LayoutType::MainVertical => "main-vertical",
+            LayoutType::Tiled => "tiled",
+        }
+    }
+
     /// Get next layout type
     pub fn next(self) -> Self {
         match self {

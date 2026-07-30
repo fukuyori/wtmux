@@ -4,16 +4,17 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
-## 2.3.4 Highlights
+## 3.0.0 Highlights
 
-- **More visible pane borders and titles**: pane titles are now drawn in the same color as their border (the focused pane's title picks up the active border color), and the unfocused border color was brightened in all eight built-in themes using each palette's "comment" tone.
-- From 2.3.3: **fixed Ctrl+V paste in the message composer (`Prefix + m`)** — Ctrl+V now reads the system clipboard directly, so pasting works even on terminals that forward Ctrl+V as a key press instead of a bracketed-paste event.
-- From 2.3.2: **fixed clipboard copy on Linux (X11/XWayland)** — mouse-drag copy and copy-mode (`y`/`Enter`) now keep a single clipboard handle alive for the process's lifetime, so copied text no longer silently vanishes.
-- From 2.3.0/2.3.1: **agent workflow tools** — the `Prefix + m` message composer (multi-line floating editor for sending messages to a pane, IME-friendly) and `wtmux agents`, a monitor CLI showing every pane's WORKING / BLOCKED / DONE / IDLE state with a Nerd Font spinner, also visible in the `Prefix + g` dashboard.
+- **Configurable key bindings** — every key in the prefix table can now be reassigned or removed from `config.toml` the way tmux's `bind-key` does, and prefix-less bindings (tmux's `bind-key -n`) are supported through `[bind_root]`. See [Custom Key Bindings](#custom-key-bindings).
+- **`wtmux list-keys`** (alias `lsk`) — print the effective binding table, after config overrides, in the same syntax `[bind]` accepts.
+- **Prefix bindings now respect modifiers**, so `Prefix, C-x` no longer triggers the binding for `x` unless nothing more specific matches. Holding Ctrl through the whole sequence (`C-b C-n`) still works.
+- From 2.3.4: **more visible pane borders and titles** — pane titles are drawn in the same color as their border, and the unfocused border color was brightened in all eight built-in themes.
+- From 2.3.0-2.3.3: **agent workflow tools** — the `Prefix + m` message composer (multi-line floating editor for sending messages to a pane, IME-friendly) and `wtmux agents`, a monitor CLI showing every pane's WORKING / BLOCKED / DONE / IDLE state with a Nerd Font spinner, also visible in the `Prefix + g` dashboard.
 
 ## Features
 
@@ -189,6 +190,7 @@ wtmux --help
 | `--no-cwd-prompt-hook` | Disable shell prompt hook cwd tracking |
 | `-v, --version` | Show version |
 | `-h, --help` | Show help |
+| `list-keys` (`lsk`) | List the effective key bindings |
 
 The Windows-only options are hidden on macOS / Linux. There, the default
 shell is `$SHELL` (falling back to `/bin/sh`); use `-s` or the `shell`
@@ -197,7 +199,8 @@ config key to override it.
 ## Keybindings
 
 Prefix commands use `Ctrl+B` by default (same as tmux), and the prefix key can be changed with `prefix_key`.
-The tables below show the default keybindings.
+The tables below show the default keybindings; every one of them can be
+reassigned or removed — see [Custom Key Bindings](#custom-key-bindings).
 
 ### Windows (Tabs)
 
@@ -288,7 +291,7 @@ commands (tmux abbreviations in parentheses):
 | `next-window` / `previous-window` / `last-window` (`next` / `prev` / `last`) | Switch window |
 | `select-window -t <n>` (`selectw`) | Select window by number |
 | `rename-window <name>` (`renamew`) | Rename window |
-| `select-layout <preset>` (`selectl`) | Apply layout preset |
+| `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` (`selectl`) | Apply layout preset |
 | `resize-pane -Z` | Toggle pane zoom |
 | `set synchronize-panes [on\|off]` | Input broadcast |
 | `pipe-pane` | Toggle pane output logging |
@@ -398,6 +401,10 @@ same directory.
 # Disabled by default to avoid interfering with custom prompts.
 # cwd_prompt_hook = false
 
+# Remove built-in bindings (tmux: unbind-key).
+# Being an array, this must appear before the [sections] below.
+# unbind = ["d", "P"]
+
 # Color scheme
 # Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
@@ -414,6 +421,17 @@ color_scheme = "tokyo-night"
 # selection_up = "S-Up"
 # selection_down = "S-Down"
 # copy_selection = "C-S-c"      # Also accepts "Ctrl+Shift+C"
+
+# Bindings pressed after the prefix key (tmux: bind-key)
+[bind]
+# "M-4" = "select-layout main-vertical"
+# "M-5" = "select-layout tiled"
+# "C-o" = "swap-pane -D"
+# "z"   = ""                    # empty string unbinds
+
+# Bindings pressed without the prefix (tmux: bind-key -n)
+[bind_root]
+# "C-M-t" = "select-layout tiled"
 
 # Tab bar settings
 [tab_bar]
@@ -445,6 +463,58 @@ lines = 10000
 
 The `[keybindings]` section currently controls these non-prefix shortcuts:
 the history selector (`Ctrl+R` by default), scrollback navigation, keyboard selection, and copy-selection.
+
+### Custom Key Bindings
+
+`[bind]`, `[bind_root]` and `unbind` assign commands to keys the way tmux's
+`bind-key` does. Every built-in binding can be overridden or removed.
+
+```toml
+unbind = ["d"]                 # drop the default Ctrl+B, d (array goes before any [section])
+
+[bind]                         # pressed after the prefix key
+"M-1" = "select-layout even-horizontal"
+"M-4" = "select-layout main-vertical"
+"M-5" = "select-layout tiled"
+"|"   = "split-window -h"
+"C-o" = "swap-pane -D"
+"z"   = ""                     # empty string unbinds, same as `unbind`
+
+[bind_root]                    # pressed without the prefix
+"C-M-Left"  = "select-pane -L"
+"C-M-Right" = "select-pane -R"
+```
+
+**Key names**: a single character (`c`, `%`, `4`), or one of `Space`, `Enter`,
+`Esc`, `Tab`, `Backspace`, `Delete`, `Insert`, `Up`, `Down`, `Left`, `Right`,
+`Home`, `End`, `PageUp`, `PageDown`, `F1`-`F12`. Prefix with `C-` (Ctrl),
+`M-` (Alt) or `S-` (Shift); the `Ctrl+` / `Alt+` / `Shift+` spellings also work.
+Character case is significant, so `P` and `p` are different keys.
+
+**Commands**:
+
+| Group | Commands |
+|-------|----------|
+| Windows | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
+| Panes | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
+| Sizing | `resize-pane -Z` (zoom) / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
+| Layout | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
+| Modes | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
+| Other | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
+
+**Notes**:
+
+- `[bind_root]` keys are intercepted before reaching the shell and take precedence over `[keybindings]`
+- A malformed entry is skipped on its own, with the reason printed to stderr at startup
+- `wtmux list-keys` (alias `lsk`) prints the effective table in the same syntax `[bind]` accepts
+
+```
+$ wtmux list-keys
+bind      Space        next-layout
+bind      Alt+4        select-layout main-vertical
+bind      c            new-window
+bind_root Ctrl+Alt+Left select-pane -L
+```
 
 ### Font Settings
 
@@ -654,6 +724,7 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Backend | PTY | ConPTY (Windows) / POSIX pty (macOS, Linux) |
 | Windows/Panes | ✓ | ✓ |
 | Keybindings | ✓ | ✓ (compatible) |
+| Configurable bindings | ✓ (`bind-key`) | ✓ (`[bind]` / `[bind_root]`) |
 | Copy mode | ✓ | ✓ |
 | Search | ✓ | ✓ |
 | Layout presets | ✓ | ✓ |

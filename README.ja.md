@@ -4,16 +4,17 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-2.3.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
-## 2.3.4 の主な変更
+## 3.0.0 の主な変更
 
-- **ペインの枠とタイトルを見やすく改善**: ペインタイトルを常に枠線と同じ色で描くようにし（フォーカス中のペインはアクティブ枠色でタイトルも強調されます）、非フォーカスの枠色を全8テーマで各パレットの「コメント色」相当に明るくしました。
-- 2.3.3 より: **メッセージコンポーザ（`Prefix + m`）で Ctrl+V 貼り付けができない不具合を修正** — Ctrl+V でシステムクリップボードを直接読み取るようにし、Ctrl+V をキー入力としてそのまま渡す端末でも貼り付けが機能します。
-- 2.3.2 より: **Linux（X11/XWayland）でのクリップボードコピーの不具合を修正** — クリップボードハンドルをプロセス生存中保持し続けるようにし、コピーした内容が直後に消える問題を解消しました。
-- 2.3.0/2.3.1 より: **エージェント向け機能** — `Prefix + m` のメッセージコンポーザ（複数行メッセージをペインに送信、IME対応）と、全ペインの WORKING / BLOCKED / DONE / IDLE 状態を Nerd Font スピナー付きで監視する `wtmux agents` CLI（`Prefix + g` ダッシュボードでも表示）。
+- **キーバインドを設定ファイルで変更可能に** — プレフィックス配下の全キーを tmux の `bind-key` と同じように `config.toml` で再割り当て・解除できるようになりました。プレフィックス不要のキー（tmux の `bind-key -n`）も `[bind_root]` で設定できます。「[キーバインドのカスタマイズ](#キーバインドのカスタマイズ)」を参照。
+- **`wtmux list-keys`**（省略形 `lsk`）— 設定適用後の全バインドを `[bind]` と同じ記法で一覧表示します。
+- **プレフィックス配下で修飾キーを判定するようになりました** — `Prefix, C-x` がより適切なバインドのない場合を除き `x` のバインドを発動しなくなります。Ctrl を押しっぱなしにする操作（`C-b C-n`）は従来どおり動作します。
+- 2.3.4 より: **ペインの枠とタイトルを見やすく改善** — ペインタイトルを枠線と同じ色で描くようにし、非フォーカスの枠色を全8テーマで明るくしました。
+- 2.3.0〜2.3.3 より: **エージェント向け機能** — `Prefix + m` のメッセージコンポーザ（複数行メッセージをペインに送信、IME対応）と、全ペインの WORKING / BLOCKED / DONE / IDLE 状態を Nerd Font スピナー付きで監視する `wtmux agents` CLI（`Prefix + g` ダッシュボードでも表示）。
 
 ## 特徴
 
@@ -185,6 +186,7 @@ wtmux --help
 | `--no-cwd-prompt-hook` | シェルの cwd 追跡用プロンプトフックを無効化 |
 | `-v, --version` | バージョン表示 |
 | `-h, --help` | ヘルプ表示 |
+| `list-keys`（`lsk`） | 設定適用後のキーバインド一覧を表示 |
 
 Windows専用オプションは macOS / Linux では非表示になります。macOS / Linux の
 デフォルトシェルは `$SHELL`（未設定時は `/bin/sh`）で、`-s` オプションまたは
@@ -193,7 +195,8 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 ## キーバインド
 
 プレフィックス付きコマンドは、デフォルトでは `Ctrl+B` を使用します（tmuxと同じ）。
-プレフィックスキーは `prefix_key` で変更できます。以下の表はデフォルト設定のキーです。
+プレフィックスキーは `prefix_key` で変更できます。以下の表はデフォルト設定のキーで、
+いずれも設定ファイルで変更・解除できます（「[キーバインドのカスタマイズ](#キーバインドのカスタマイズ)」参照）。
 
 ### ウィンドウ（タブ）
 
@@ -285,7 +288,7 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `next-window` / `previous-window` / `last-window`（`next` / `prev` / `last`） | ウィンドウ切り替え |
 | `select-window -t <n>`（`selectw`） | 番号でウィンドウ選択 |
 | `rename-window <名前>`（`renamew`） | ウィンドウ名変更 |
-| `select-layout <プリセット>`（`selectl`） | レイアウト適用 |
+| `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>`（`selectl`） | レイアウト適用 |
 | `resize-pane -Z` | ペインズーム切り替え |
 | `set synchronize-panes [on\|off]` | 入力ブロードキャスト |
 | `pipe-pane` | ペイン出力ログの切り替え |
@@ -345,6 +348,10 @@ wtmuxは設定ディレクトリ内の `config.toml` から設定を読み込み
 # プロンプトへの副作用を避けるため標準では無効です。
 # cwd_prompt_hook = false
 
+# 既定バインドの解除（tmux: unbind-key）
+# 配列なので、以下の [セクション] より前に置く必要があります
+# unbind = ["d", "P"]
+
 # カラースキーム
 # 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
@@ -361,6 +368,17 @@ color_scheme = "tokyo-night"
 # selection_up = "S-Up"
 # selection_down = "S-Down"
 # copy_selection = "C-S-c"      # "Ctrl+Shift+C" 形式でも指定可能
+
+# プレフィックス配下のキーバインド（tmux: bind-key）
+[bind]
+# "M-4" = "select-layout main-vertical"
+# "M-5" = "select-layout tiled"
+# "C-o" = "swap-pane -D"
+# "z"   = ""                    # 空文字で解除
+
+# プレフィックス不要のキーバインド（tmux: bind-key -n）
+[bind_root]
+# "C-M-t" = "select-layout tiled"
 
 # タブバー設定
 [tab_bar]
@@ -392,6 +410,58 @@ lines = 10000
 
 `[keybindings]` セクションでは、履歴検索（デフォルト `Ctrl+R`）、スクロールバック移動、
 キーボード選択、選択コピーのプレフィックス外ショートカットを変更できます。
+
+### キーバインドのカスタマイズ
+
+`[bind]` / `[bind_root]` / `unbind` で、tmux の `bind-key` と同じようにキーへ
+コマンドを割り当てられます。既定のキーバインドはすべて上書き・解除が可能です。
+
+```toml
+unbind = ["d"]                 # 既定の Ctrl+B, d を解除（配列は [セクション] より前に）
+
+[bind]                         # プレフィックスの後に押すキー
+"M-1" = "select-layout even-horizontal"
+"M-4" = "select-layout main-vertical"
+"M-5" = "select-layout tiled"
+"|"   = "split-window -h"
+"C-o" = "swap-pane -D"
+"z"   = ""                     # 空文字で解除（unbind と同じ）
+
+[bind_root]                    # プレフィックスなしで押すキー
+"C-M-Left"  = "select-pane -L"
+"C-M-Right" = "select-pane -R"
+```
+
+**キー名**: 1文字（`c`、`%`、`4`）、または `Space` `Enter` `Esc` `Tab`
+`Backspace` `Delete` `Insert` `Up` `Down` `Left` `Right` `Home` `End`
+`PageUp` `PageDown` `F1`〜`F12`。修飾子は `C-`（Ctrl）、`M-`（Alt）、
+`S-`（Shift）を前置します（`Ctrl+` `Alt+` `Shift+` 形式も可）。
+文字キーは大文字・小文字を区別するため、`P` と `p` は別のキーです。
+
+**コマンド**:
+
+| 分類 | コマンド |
+|------|---------|
+| ウィンドウ | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
+| ペイン | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
+| サイズ | `resize-pane -Z`（ズーム） / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
+| レイアウト | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
+| モード | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
+| その他 | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
+
+**注意点**:
+
+- `[bind_root]` のキーはシェルに渡る前に横取りされ、`[keybindings]` より優先されます
+- 設定ミスがあってもそのエントリだけを飛ばし、起動時に stderr へ理由を表示します
+- `wtmux list-keys`（省略形 `lsk`）で、設定適用後の全バインドを `[bind]` と同じ記法で確認できます
+
+```
+$ wtmux list-keys
+bind      Space        next-layout
+bind      Alt+4        select-layout main-vertical
+bind      c            new-window
+bind_root Ctrl+Alt+Left select-pane -L
+```
 
 ### フォント設定
 
@@ -599,6 +669,7 @@ wtmuxは包括的なマウスサポートを提供しています。
 | バックエンド | PTY | ConPTY（Windows）/ POSIX pty（macOS・Linux） |
 | ウィンドウ/ペイン | ✓ | ✓ |
 | キーバインド | ✓ | ✓（互換） |
+| キーバインド設定 | ✓（`bind-key`） | ✓（`[bind]` / `[bind_root]`） |
 | コピーモード | ✓ | ✓ |
 | 検索 | ✓ | ✓ |
 | レイアウトプリセット | ✓ | ✓ |

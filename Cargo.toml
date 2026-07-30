@@ -1,6 +1,6 @@
 [package]
 name = "wtmux"
-version = "2.3.4"
+version = "3.0.0"
 edition = "2021"
 rust-version = "1.70"
 description = "A tmux-like terminal multiplexer for Windows, macOS and Linux"

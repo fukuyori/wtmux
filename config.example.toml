@@ -28,6 +28,10 @@
 # Disabled by default to avoid interfering with custom prompts.
 # cwd_prompt_hook = false
 
+# Remove built-in bindings (tmux: unbind-key). Being a plain array this must
+# stay above every [section] below, or TOML reads it as part of one.
+# unbind = ["d", "P"]
+
 # ==============================================================================
 # Appearance
 # ==============================================================================
@@ -50,6 +54,52 @@ color_scheme = "default"
 # selection_up = "S-Up"
 # selection_down = "S-Down"
 # copy_selection = "C-S-c"
+
+# ==============================================================================
+# Key Bindings (tmux: bind-key)
+# ==============================================================================
+#
+# Key names: a single character ("c", "%", "4"), or a name — Space, Enter, Esc,
+# Tab, Backspace, Delete, Insert, Up/Down/Left/Right, Home, End, PageUp,
+# PageDown, F1-F12. Prefix with modifiers: C- (Ctrl), M- (Alt), S- (Shift);
+# "Ctrl+", "Alt+", "Shift+" work too. Character case is what distinguishes
+# "p" from "P", so S- on a character is just shorthand for upper case.
+#
+# Commands (tmux names, with wtmux additions):
+#   new-window  kill-pane  kill-window  detach-client
+#   split-window [-h]      next-window  previous-window  last-window
+#   select-window -t <n>   next-pane    previous-pane
+#   select-pane -L|-R|-U|-D
+#   resize-pane -Z | -L|-R|-U|-D | + | -
+#   select-layout <even-horizontal|even-vertical|main-horizontal|
+#                  main-vertical|tiled>
+#   next-layout   swap-pane -U|-D       set synchronize-panes   pipe-pane
+#   copy-mode  search  choose-window  choose-theme  command-prompt
+#   display-panes  rename-window  paste-buffer  send-prefix
+#   agent-dashboard  compose-message  next-attention  reset-cursor
+#   none          (bind the key to nothing)
+#
+# `wtmux list-keys` prints the table these settings produce, in this syntax.
+
+# Pressed after the prefix key.
+[bind]
+# "M-1" = "select-layout even-horizontal"
+# "M-2" = "select-layout even-vertical"
+# "M-3" = "select-layout main-horizontal"
+# "M-4" = "select-layout main-vertical"
+# "M-5" = "select-layout tiled"
+# "C-o" = "swap-pane -D"
+# "|"   = "split-window -h"
+# ""    = unbinds the key, same as listing it in `unbind` above
+# "z"   = ""
+
+# Pressed on their own, with no prefix (tmux: bind-key -n). Empty by default;
+# anything listed here is taken before the key reaches the shell, and takes
+# precedence over [keybindings] above.
+[bind_root]
+# "C-M-t"     = "select-layout tiled"
+# "C-M-Left"  = "select-pane -L"
+# "C-M-Right" = "select-pane -R"
 
 # ==============================================================================
 # Tab Bar
