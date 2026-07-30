@@ -1050,8 +1050,23 @@ impl WindowManager {
         }
     }
 
+    /// Scroll the focused pane to the top of its scrollback history.
+    pub fn scroll_to_top(&mut self) {
+        if let Some(state) = self.focused_state_mut() {
+            let screen = state.active_screen_mut();
+            screen.scroll_offset = screen.scrollback.len();
+            screen.mark_all_dirty();
+        }
+    }
+
+    /// Mutable terminal state of the focused pane in the active tab.
+    pub fn focused_state_mut(&mut self) -> Option<&mut crate::core::term::TerminalState> {
+        self.active_tab_mut()?
+            .focused_pane_mut()
+            .map(|pane| &mut pane.session.state)
+    }
+
     /// Clear selection in focused pane
-    #[allow(dead_code)]
     pub fn clear_selection(&mut self) {
         if let Some(tab) = self.active_tab_mut() {
             if let Some(pane) = tab.focused_pane_mut() {
@@ -1705,6 +1720,38 @@ mod tests {
 
     fn test_manager(width: u16) -> WindowManager {
         WindowManager::new(width, 24, None, None, PrefixKey { char: 'b' }, true)
+    }
+
+    /// The global `[keybindings]` handlers in the wm event loop drive
+    /// scrolling through these methods; they must act on the focused pane.
+    #[test]
+    fn scrollback_methods_target_the_focused_pane() {
+        let mut wm = test_manager(80);
+
+        {
+            let screen = wm
+                .focused_state_mut()
+                .expect("focused pane")
+                .active_screen_mut();
+            for _ in 0..30 {
+                screen.scrollback.push_back(crate::core::term::Row::new(80));
+            }
+        }
+        let offset = |wm: &mut WindowManager| {
+            wm.focused_state_mut().unwrap().active_screen().scroll_offset
+        };
+
+        wm.handle_scroll(10);
+        assert_eq!(offset(&mut wm), 10);
+        wm.scroll_to_top();
+        assert_eq!(offset(&mut wm), 30);
+        wm.handle_scroll(-10);
+        assert_eq!(offset(&mut wm), 20);
+        wm.scroll_to_bottom();
+        assert_eq!(offset(&mut wm), 0);
+        // Scrolling clamps to the available history.
+        wm.handle_scroll(100);
+        assert_eq!(offset(&mut wm), 30);
     }
 
     #[test]

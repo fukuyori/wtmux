@@ -14,6 +14,7 @@
 //!
 //! [bind_root]
 //! "M-t" = "select-layout tiled"
+//! "S-PageUp" = "scroll-up"
 //! ```
 
 use std::collections::BTreeMap;
@@ -66,6 +67,22 @@ pub enum BoundAction {
     Paste,
     SendPrefix,
     Detach,
+    // ── Terminal-interaction actions (the `[keybindings]` feature set) ───
+    /// Scroll the focused pane's view up through scrollback by `n` lines.
+    ScrollUp(usize),
+    /// Scroll the focused pane's view down by `n` lines.
+    ScrollDown(usize),
+    /// Jump to the top of the focused pane's scrollback.
+    ScrollTop,
+    /// Return the focused pane to the live view.
+    ScrollBottom,
+    /// Start or extend the keyboard selection in the focused pane.
+    ExtendSelection {
+        direction: SplitDirection,
+        arrow_up_or_left: bool,
+    },
+    /// Copy the current selection to the system clipboard.
+    CopySelection,
     // ── Actions that open a modal UI ─────────────────────────────────────
     UiRenameWindow,
     UiCopyMode,
@@ -76,6 +93,7 @@ pub enum BoundAction {
     UiAgentDashboard,
     UiMessageComposer,
     UiDisplayPanes,
+    UiHistorySelector,
 }
 
 impl BoundAction {
@@ -93,6 +111,7 @@ impl BoundAction {
                 | BoundAction::UiAgentDashboard
                 | BoundAction::UiMessageComposer
                 | BoundAction::UiDisplayPanes
+                | BoundAction::UiHistorySelector
         )
     }
 }
@@ -334,6 +353,19 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
         "reset-cursor" => BoundAction::ResetCursorShape,
         "pipe-pane" | "pipep" => BoundAction::TogglePipeLog,
         "paste-buffer" | "pasteb" => BoundAction::Paste,
+        "scroll-up" => BoundAction::ScrollUp(scroll_lines(&args)?),
+        "scroll-down" => BoundAction::ScrollDown(scroll_lines(&args)?),
+        "scroll-top" => BoundAction::ScrollTop,
+        "scroll-bottom" => BoundAction::ScrollBottom,
+        "extend-selection" => match direction_flag(&args) {
+            Some((direction, arrow_up_or_left)) => BoundAction::ExtendSelection {
+                direction,
+                arrow_up_or_left,
+            },
+            None => return Err("usage: extend-selection -L|-R|-U|-D".to_string()),
+        },
+        "copy-selection" => BoundAction::CopySelection,
+        "history-selector" => BoundAction::UiHistorySelector,
         "send-prefix" => BoundAction::SendPrefix,
         "detach-client" | "detach" => BoundAction::Detach,
         "set" | "set-option" | "setw" | "set-window-option" => {
@@ -354,6 +386,18 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
 fn arg_after<'a>(args: &[&'a str], flag: &str) -> Option<&'a str> {
     let index = args.iter().position(|a| *a == flag)?;
     args.get(index + 1).copied()
+}
+
+/// Optional line count for `scroll-up` / `scroll-down`, defaulting to 10.
+fn scroll_lines(args: &[&str]) -> Result<usize, String> {
+    match args.first() {
+        None => Ok(10),
+        Some(n) => n
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| format!("invalid line count: {n}")),
+    }
 }
 
 /// `(direction, arrow_up_or_left)` for the tmux `-L/-R/-U/-D` flags.
@@ -536,6 +580,15 @@ fn describe_action(action: BoundAction) -> String {
         B::Paste => "paste-buffer".into(),
         B::SendPrefix => "send-prefix".into(),
         B::Detach => "detach-client".into(),
+        B::ScrollUp(n) => format!("scroll-up {n}"),
+        B::ScrollDown(n) => format!("scroll-down {n}"),
+        B::ScrollTop => "scroll-top".into(),
+        B::ScrollBottom => "scroll-bottom".into(),
+        B::ExtendSelection {
+            direction,
+            arrow_up_or_left,
+        } => format!("extend-selection {}", dir_flag(direction, arrow_up_or_left)),
+        B::CopySelection => "copy-selection".into(),
         B::UiRenameWindow => "rename-window".into(),
         B::UiCopyMode => "copy-mode".into(),
         B::UiSearch => "search".into(),
@@ -545,6 +598,7 @@ fn describe_action(action: BoundAction) -> String {
         B::UiAgentDashboard => "agent-dashboard".into(),
         B::UiMessageComposer => "compose-message".into(),
         B::UiDisplayPanes => "display-panes".into(),
+        B::UiHistorySelector => "history-selector".into(),
     }
 }
 
@@ -810,6 +864,60 @@ mod tests {
         );
         assert!(parse_action("select-layout bogus").is_err());
         assert!(parse_action("no-such-command").is_err());
+    }
+
+    #[test]
+    fn parses_terminal_interaction_commands() {
+        assert_eq!(parse_action("scroll-up").unwrap(), BoundAction::ScrollUp(10));
+        assert_eq!(parse_action("scroll-up 5").unwrap(), BoundAction::ScrollUp(5));
+        assert_eq!(
+            parse_action("scroll-down 3").unwrap(),
+            BoundAction::ScrollDown(3)
+        );
+        assert_eq!(parse_action("scroll-top").unwrap(), BoundAction::ScrollTop);
+        assert_eq!(
+            parse_action("scroll-bottom").unwrap(),
+            BoundAction::ScrollBottom
+        );
+        assert_eq!(
+            parse_action("extend-selection -L").unwrap(),
+            BoundAction::ExtendSelection {
+                direction: SplitDirection::Horizontal,
+                arrow_up_or_left: true,
+            }
+        );
+        assert_eq!(
+            parse_action("copy-selection").unwrap(),
+            BoundAction::CopySelection
+        );
+        assert_eq!(
+            parse_action("history-selector").unwrap(),
+            BoundAction::UiHistorySelector
+        );
+        assert!(BoundAction::UiHistorySelector.is_ui());
+        assert!(parse_action("scroll-up nope").is_err());
+        assert!(parse_action("scroll-up 0").is_err());
+        assert!(parse_action("extend-selection").is_err());
+    }
+
+    #[test]
+    fn terminal_interaction_commands_round_trip() {
+        for command in [
+            "scroll-up 10",
+            "scroll-down 3",
+            "scroll-top",
+            "scroll-bottom",
+            "extend-selection -R",
+            "copy-selection",
+            "history-selector",
+        ] {
+            let action = parse_action(command).unwrap();
+            assert_eq!(
+                parse_action(&describe_action(action)).unwrap(),
+                action,
+                "{command} does not round-trip through describe_action",
+            );
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -409,7 +409,7 @@ same directory.
 # Available: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
 
-# Global keybindings outside the prefix mode
+# Legacy global keybindings (prefer [bind_root] below)
 [keybindings]
 # history_selector = "C-r"      # Also accepts "Ctrl+R"
 # scrollback_up = "S-PageUp"
@@ -429,9 +429,12 @@ color_scheme = "tokyo-night"
 # "C-o" = "swap-pane -D"
 # "z"   = ""                    # empty string unbinds
 
-# Bindings pressed without the prefix (tmux: bind-key -n)
+# Bindings pressed without the prefix (tmux: bind-key -n) — the recommended
+# place for scrollback / selection / copy keys
 [bind_root]
-# "C-M-t" = "select-layout tiled"
+# "S-PageUp" = "scroll-up"
+# "C-S-c"    = "copy-selection"
+# "C-M-t"    = "select-layout tiled"
 
 # Tab bar settings
 [tab_bar]
@@ -461,8 +464,13 @@ lines = 10000
 # on_agent_done = ""
 ```
 
-The `[keybindings]` section currently controls these non-prefix shortcuts:
-the history selector (`Ctrl+R` by default), scrollback navigation, keyboard selection, and copy-selection.
+The `[keybindings]` section is the legacy way to remap these non-prefix
+shortcuts: the history selector (`Ctrl+R` by default), scrollback navigation,
+keyboard selection, and copy-selection. It keeps working, but the same
+functions are also available as bindable commands (`scroll-up`,
+`extend-selection`, `copy-selection`, `history-selector`, ...) — prefer
+binding them in `[bind_root]`, which allows any key, supports unbinding, and
+takes precedence over `[keybindings]`.
 
 ### Custom Key Bindings
 
@@ -500,6 +508,7 @@ Character case is significant, so `P` and `p` are different keys.
 | Sizing | `resize-pane -Z` (zoom) / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
 | Layout | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
 | Modes | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
+| Terminal | `scroll-up [n]` / `scroll-down [n]` / `scroll-top` / `scroll-bottom` / `extend-selection -L\|-R\|-U\|-D` / `copy-selection` / `history-selector` |
 | Other | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
 
 **Notes**:

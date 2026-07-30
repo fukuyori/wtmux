@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -356,7 +356,7 @@ wtmuxは設定ディレクトリ内の `config.toml` から設定を読み込み
 # 利用可能: default, solarized-dark, solarized-light, monokai, nord, dracula, gruvbox-dark, tokyo-night
 color_scheme = "tokyo-night"
 
-# プレフィックス外のグローバルキーバインド
+# プレフィックス外のグローバルキーバインド（旧方式・下の [bind_root] を推奨）
 [keybindings]
 # history_selector = "C-r"      # "Ctrl+R" 形式でも指定可能
 # scrollback_up = "S-PageUp"
@@ -377,8 +377,11 @@ color_scheme = "tokyo-night"
 # "z"   = ""                    # 空文字で解除
 
 # プレフィックス不要のキーバインド（tmux: bind-key -n）
+# スクロールバック・選択・コピーのキーはこちらで設定するのが推奨です
 [bind_root]
-# "C-M-t" = "select-layout tiled"
+# "S-PageUp" = "scroll-up"
+# "C-S-c"    = "copy-selection"
+# "C-M-t"    = "select-layout tiled"
 
 # タブバー設定
 [tab_bar]
@@ -408,8 +411,11 @@ lines = 10000
 # on_agent_done = ""
 ```
 
-`[keybindings]` セクションでは、履歴検索（デフォルト `Ctrl+R`）、スクロールバック移動、
-キーボード選択、選択コピーのプレフィックス外ショートカットを変更できます。
+`[keybindings]` セクションは、履歴検索（デフォルト `Ctrl+R`）、スクロールバック移動、
+キーボード選択、選択コピーのショートカットを変更する旧方式です。互換のため残っていますが、
+同じ機能はコマンド（`scroll-up` / `extend-selection` / `copy-selection` /
+`history-selector` など）としてもバインドできるので、キーを自由に選べて解除もできる
+`[bind_root]` での設定を推奨します（競合時は `[bind_root]` が優先されます）。
 
 ### キーバインドのカスタマイズ
 
@@ -447,6 +453,7 @@ unbind = ["d"]                 # 既定の Ctrl+B, d を解除（配列は [セ�
 | サイズ | `resize-pane -Z`（ズーム） / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
 | レイアウト | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
 | モード | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
+| ターミナル操作 | `scroll-up [n]` / `scroll-down [n]` / `scroll-top` / `scroll-bottom` / `extend-selection -L\|-R\|-U\|-D` / `copy-selection` / `history-selector` |
 | その他 | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
 
 **注意点**:

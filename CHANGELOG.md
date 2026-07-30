@@ -1,3 +1,21 @@
+## [3.0.1] - 2026-07-30
+
+### Added
+
+- **Terminal-interaction commands for `[bind]` / `[bind_root]`**:
+  `scroll-up [n]`, `scroll-down [n]`, `scroll-top`, `scroll-bottom`,
+  `extend-selection -L|-R|-U|-D`, `copy-selection` and
+  `history-selector` expose the `[keybindings]` feature set as bindable
+  commands, so scrollback / selection / copy keys can be freely chosen
+  (and unbound) in `[bind_root]`. `[keybindings]` keeps working as a
+  legacy layer; `[bind_root]` entries take precedence over it.
+
+### Fixed
+
+- The `[keybindings]` shortcuts (scrollback navigation, keyboard
+  selection, copy-selection) now work in the default multi-pane mode;
+  previously they were only wired up in `--simple` mode.
+
 ## [3.0.0] - 2026-07-30
 
 ### Added

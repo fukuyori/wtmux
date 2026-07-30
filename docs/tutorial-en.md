@@ -407,8 +407,10 @@ color_scheme = "tokyo-night"
 # Prefix key and non-prefix shortcuts
 # prefix_key = "C-b"
 
-[keybindings]
-# history_selector = "C-r"
+# Prefix-less bindings (recommended for scrollback / selection keys)
+[bind_root]
+# "S-PageUp" = "scroll-up"
+# "C-r"      = "history-selector"
 
 # Tab bar
 [tab_bar]

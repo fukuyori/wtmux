@@ -407,8 +407,10 @@ color_scheme = "tokyo-night"
 # プレフィックスキーとプレフィックス外ショートカット
 # prefix_key = "C-b"
 
-[keybindings]
-# history_selector = "C-r"
+# プレフィックスなしのキーバインド（スクロール等はこちらで設定推奨）
+[bind_root]
+# "S-PageUp" = "scroll-up"
+# "C-r"      = "history-selector"
 
 # タブバー
 [tab_bar]

@@ -40,7 +40,11 @@
 # Available: default, solarized, monokai, nord, dracula, gruvbox, tokyo-night
 color_scheme = "default"
 
-# Global keybindings outside the prefix mode.
+# Legacy global keybindings (kept for backward compatibility).
+#
+# Prefer [bind_root] below: the same functions exist as bindable commands
+# (scroll-up, extend-selection, copy-selection, history-selector, ...) with
+# free key choice and unbinding. [bind_root] entries win over these.
 # Accepted formats: "C-r", "S-PageUp", "C-S-c"
 # Also accepted: "Ctrl+R", "Shift+PageUp", "Ctrl+Shift+C"
 [keybindings]
@@ -77,6 +81,8 @@ color_scheme = "default"
 #   copy-mode  search  choose-window  choose-theme  command-prompt
 #   display-panes  rename-window  paste-buffer  send-prefix
 #   agent-dashboard  compose-message  next-attention  reset-cursor
+#   scroll-up [n]  scroll-down [n]  scroll-top  scroll-bottom   (default n: 10)
+#   extend-selection -L|-R|-U|-D    copy-selection  history-selector
 #   none          (bind the key to nothing)
 #
 # `wtmux list-keys` prints the table these settings produce, in this syntax.
@@ -96,10 +102,24 @@ color_scheme = "default"
 # Pressed on their own, with no prefix (tmux: bind-key -n). Empty by default;
 # anything listed here is taken before the key reaches the shell, and takes
 # precedence over [keybindings] above.
+#
+# This is the recommended place for scrollback / selection / copy keys.
+# The examples below reproduce the [keybindings] defaults; adjust the keys
+# if your terminal grabs them first (e.g. WezTerm uses Shift+PageUp itself).
 [bind_root]
-# "C-M-t"     = "select-layout tiled"
-# "C-M-Left"  = "select-pane -L"
-# "C-M-Right" = "select-pane -R"
+# "S-PageUp"   = "scroll-up"
+# "S-PageDown" = "scroll-down"
+# "S-Home"     = "scroll-top"
+# "S-End"      = "scroll-bottom"
+# "S-Left"     = "extend-selection -L"
+# "S-Right"    = "extend-selection -R"
+# "S-Up"       = "extend-selection -U"
+# "S-Down"     = "extend-selection -D"
+# "C-S-c"      = "copy-selection"
+# "C-r"        = "history-selector"
+# "C-M-t"      = "select-layout tiled"
+# "C-M-Left"   = "select-pane -L"
+# "C-M-Right"  = "select-pane -R"
 
 # ==============================================================================
 # Tab Bar

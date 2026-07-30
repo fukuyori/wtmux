@@ -105,6 +105,12 @@ enum AppAction {
     ToggleBroadcast,
     FocusNextAttention,
     TogglePipeLog,
+    ScrollUp(usize),
+    ScrollDown(usize),
+    ScrollTop,
+    ScrollBottom,
+    ExtendSelection(KeyCode),
+    CopySelection,
 }
 
 impl From<ContextMenuAction> for AppAction {
@@ -1976,6 +1982,76 @@ fn run_wm_main_loop(
                         continue;
                     }
 
+                    // ── Global [keybindings]: scrollback / selection / copy ────────
+                    // Same semantics as the single-pane loop, applied to the
+                    // focused pane. Consumed before the key reaches the PTY.
+                    if keybindings.scrollback_up.matches(&key_event) {
+                        wm.handle_scroll(10);
+                        renderer.render(wm)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_down.matches(&key_event) {
+                        wm.handle_scroll(-10);
+                        renderer.render(wm)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_top.matches(&key_event) {
+                        wm.scroll_to_top();
+                        renderer.render(wm)?;
+                        continue;
+                    }
+                    if keybindings.scrollback_bottom.matches(&key_event) {
+                        wm.scroll_to_bottom();
+                        renderer.render(wm)?;
+                        continue;
+                    }
+
+                    let selection_direction = if keybindings.selection_left.matches(&key_event) {
+                        Some(KeyCode::Left)
+                    } else if keybindings.selection_right.matches(&key_event) {
+                        Some(KeyCode::Right)
+                    } else if keybindings.selection_up.matches(&key_event) {
+                        Some(KeyCode::Up)
+                    } else if keybindings.selection_down.matches(&key_event) {
+                        Some(KeyCode::Down)
+                    } else {
+                        None
+                    };
+                    if let Some(direction) = selection_direction {
+                        if let Some(state) = wm.focused_state_mut() {
+                            handle_selection_key(state, direction);
+                            state.active_screen_mut().mark_all_dirty();
+                        }
+                        renderer.render(wm)?;
+                        continue;
+                    }
+
+                    if keybindings.copy_selection.matches(&key_event) {
+                        if let Some(text) = wm
+                            .focused_state_mut()
+                            .and_then(|state| state.get_selected_text())
+                        {
+                            if !text.is_empty() {
+                                let _ = copy_to_clipboard(&text);
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Escape clears an existing selection instead of reaching
+                    // the shell.
+                    if key_event.code == KeyCode::Esc {
+                        let cleared = wm.focused_state_mut().is_some_and(|state| {
+                            let had_selection = state.selection.is_some();
+                            state.clear_selection();
+                            had_selection
+                        });
+                        if cleared {
+                            renderer.render(wm)?;
+                            continue;
+                        }
+                    }
+
                     // ── Keystroke tracker (cmd.exe fallback for history) ──────────
                     // Update the tracker BEFORE sending the key to the PTY so that
                     // get_current_line() can read the buffer on Enter.
@@ -2024,8 +2100,11 @@ fn run_wm_main_loop(
                         wm.take_confirmed_command();
                     }
 
-                    // Reset scroll to bottom on any key input (return to live view)
+                    // Reset scroll to bottom on any key input (return to live
+                    // view) and drop any leftover selection, matching the
+                    // single-pane loop.
                     wm.scroll_to_bottom();
+                    wm.clear_selection();
 
                     // Send key to focused pane
                     let bytes = KeyMapper::map_key(&key_event);
@@ -2668,6 +2747,20 @@ fn app_action_for(bound: BoundAction, wm: &WindowManager) -> Option<AppAction> {
                 byte: (ch as u8).wrapping_sub(b'a').wrapping_add(1),
             }
         }
+        B::ScrollUp(lines) => AppAction::ScrollUp(lines),
+        B::ScrollDown(lines) => AppAction::ScrollDown(lines),
+        B::ScrollTop => AppAction::ScrollTop,
+        B::ScrollBottom => AppAction::ScrollBottom,
+        B::ExtendSelection {
+            direction,
+            arrow_up_or_left,
+        } => AppAction::ExtendSelection(match (direction, arrow_up_or_left) {
+            (SplitDirection::Horizontal, true) => KeyCode::Left,
+            (SplitDirection::Horizontal, false) => KeyCode::Right,
+            (SplitDirection::Vertical, true) => KeyCode::Up,
+            (SplitDirection::Vertical, false) => KeyCode::Down,
+        }),
+        B::CopySelection => AppAction::CopySelection,
         // The `Ui*` variants; handled by `apply_ui_action`.
         _ => return None,
     };
@@ -2735,6 +2828,11 @@ fn apply_ui_action(
         B::UiDisplayPanes => {
             ui.mode = UiMode::PaneNumbers;
             ui.pane_numbers_started = std::time::Instant::now();
+        }
+        B::UiHistorySelector => {
+            let selector = ui.history_selector_mut();
+            selector.show();
+            ui.mode = UiMode::HistorySelector;
         }
         // `is_ui()` above admits exactly the arms handled here.
         _ => unreachable!("non-UI action reached apply_ui_action: {bound:?}"),
@@ -2836,6 +2934,34 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
                 info!("pipe log toggle failed");
             }
         },
+        AppAction::ScrollUp(lines) => {
+            wm.handle_scroll(lines.min(i16::MAX as usize) as i16);
+        }
+        AppAction::ScrollDown(lines) => {
+            wm.handle_scroll(-(lines.min(i16::MAX as usize) as i16));
+        }
+        AppAction::ScrollTop => {
+            wm.scroll_to_top();
+        }
+        AppAction::ScrollBottom => {
+            wm.scroll_to_bottom();
+        }
+        AppAction::ExtendSelection(direction) => {
+            if let Some(state) = wm.focused_state_mut() {
+                handle_selection_key(state, direction);
+                state.active_screen_mut().mark_all_dirty();
+            }
+        }
+        AppAction::CopySelection => {
+            if let Some(text) = wm
+                .focused_state_mut()
+                .and_then(|state| state.get_selected_text())
+            {
+                if !text.is_empty() {
+                    let _ = copy_to_clipboard(&text);
+                }
+            }
+        }
     }
 }
 
