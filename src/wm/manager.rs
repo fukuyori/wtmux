@@ -520,6 +520,21 @@ impl WindowManager {
         }
     }
 
+    /// Take a pending OSC 52 clipboard payload from any pane, if one
+    /// arrived since the last call. When several panes raced, the last
+    /// writer wins (matching how terminals treat the shared clipboard).
+    pub fn take_osc52(&mut self) -> Option<String> {
+        let mut payload = None;
+        for tab in self.tabs.values_mut() {
+            for pane in tab.panes.values_mut() {
+                if let Some(text) = pane.session.state.osc52.take() {
+                    payload = Some(text);
+                }
+            }
+        }
+        payload
+    }
+
     /// Process output for all tabs and handle closed panes.
     /// Returns true when pane content or tab layout changed and a render is needed.
     pub fn process_output(&mut self) -> bool {
@@ -1056,6 +1071,27 @@ impl WindowManager {
             let screen = state.active_screen_mut();
             screen.scroll_offset = screen.scrollback.len();
             screen.mark_all_dirty();
+        }
+    }
+
+    /// Identity of the focused pane: (active tab id, focused pane id).
+    pub fn focused_pane_id(&self) -> Option<(TabId, PaneId)> {
+        let tab = self.active_tab()?;
+        tab.focused_pane().map(|pane| (self.active_tab, pane.id))
+    }
+
+    /// Send a focus-in (`CSI I`) or focus-out (`CSI O`) report to the given
+    /// pane if it enabled focus reporting (DECSET 1004).
+    pub fn notify_pane_focus(&mut self, tab_id: TabId, pane_id: PaneId, gained: bool) {
+        if let Some(pane) = self
+            .tabs
+            .get_mut(&tab_id)
+            .and_then(|tab| tab.panes.get_mut(&pane_id))
+        {
+            if pane.session.state.modes.focus_reporting {
+                let report: &[u8] = if gained { b"\x1b[I" } else { b"\x1b[O" };
+                let _ = pane.session.write(report);
+            }
         }
     }
 

@@ -1,3 +1,26 @@
+## [3.2.0] - 2026-08-01
+
+### Added
+
+- **win32-input-mode passthrough (DECSET 9001)**: wtmux now honors the
+  win32-input-mode request every pane's conhost issues at startup and
+  forwards the original Win32 key records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`)
+  instead of lossy legacy VT bytes. Applications that read the console
+  with `ReadConsoleInputW` now receive full modifier state — notably
+  Shift+Enter / Ctrl+Enter / Alt+Enter, which legacy VT collapses to
+  plain Enter — as well as key-release events. A pane's kitty keyboard
+  flags take priority over win32-input-mode when both are active.
+  Verified end-to-end through ConPTY by the
+  `conpty_win32_input_roundtrip_repro` harness. (#2)
+- **OSC 52 clipboard (write-only)**: applications in panes — nvim, or
+  tmux/CLI tools inside ssh and WSL — can set the host clipboard with
+  `OSC 52 ; c ; <base64>`. Read requests (`?`) are deliberately not
+  answered so child programs cannot silently read the clipboard. (#2)
+- **Focus reporting (DECSET 1004)**: panes that enable mode 1004
+  receive `CSI I` / `CSI O` when the host terminal gains or loses focus
+  and when wtmux's own pane focus moves between panes, like tmux's
+  `focus-events`. (#2)
+
 ## [3.1.0] - 2026-08-01
 
 ### Added

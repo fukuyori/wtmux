@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -34,6 +34,8 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 - **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
 - **Mouse passthrough** - TUI apps receive mouse events (hold Shift for wtmux selection)
 - **Kitty keyboard protocol** - panes support the *disambiguate escape codes* and *report event types* enhancements (`CSI u`), so apps like neovim, helix or fish (in WSL/ssh) can distinguish Ctrl+I from Tab, Shift+Enter from Enter, and receive key-release events
+- **win32-input-mode passthrough** - Win32-API console apps in panes receive full key records (Shift+Enter, Ctrl+Enter, key releases) via DECSET 9001, just like under Windows Terminal
+- **OSC 52 clipboard & focus events** - apps in panes (including over ssh/WSL) can set the host clipboard, and receive `CSI I`/`CSI O` focus reports (DECSET 1004) on host-focus and pane-focus changes
 - **Nerd Font / Powerline support** - oh-my-posh, Starship, and Powerline prompts render correctly
 - **Shell integration** - OSC 133/633 for accurate command history with modern prompts
 

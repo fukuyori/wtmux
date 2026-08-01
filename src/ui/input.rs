@@ -5,6 +5,19 @@
 //! This reader keeps the rest of the app on crossterm event types while
 //! handling UTF-16 surrogate pairs locally.
 
+/// Raw Win32 key record backing the most recent `Event::Key`, used to
+/// re-encode input in win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) for
+/// panes whose conhost requested it (DECSET 9001).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawKeyEvent {
+    pub virtual_key: u16,
+    pub scan_code: u16,
+    pub unicode_char: u16,
+    pub key_down: bool,
+    pub control_key_state: u32,
+    pub repeat_count: u16,
+}
+
 #[cfg(not(windows))]
 pub fn poll(timeout: std::time::Duration) -> std::io::Result<bool> {
     crossterm::event::poll(timeout)
@@ -13,6 +26,13 @@ pub fn poll(timeout: std::time::Duration) -> std::io::Result<bool> {
 #[cfg(not(windows))]
 pub fn read() -> std::io::Result<crossterm::event::Event> {
     crossterm::event::read()
+}
+
+/// Raw records behind the most recent key event (usually one; two for a
+/// surrogate pair). Empty on non-Windows platforms.
+#[cfg(not(windows))]
+pub fn last_raw_keys() -> Vec<RawKeyEvent> {
+    Vec::new()
 }
 
 #[cfg(windows)]
@@ -43,6 +63,18 @@ mod windows_input {
 
     thread_local! {
         static READER: RefCell<Option<WindowsInputReader>> = RefCell::new(None);
+        /// Raw records behind the most recent key event returned by
+        /// `read()`. The event loop is single-threaded, so at the moment
+        /// it handles an `Event::Key` this is exactly that key's record(s).
+        static LAST_RAW_KEYS: RefCell<Vec<super::RawKeyEvent>> = RefCell::new(Vec::new());
+    }
+
+    pub fn last_raw_keys() -> Vec<super::RawKeyEvent> {
+        LAST_RAW_KEYS.with(|cell| cell.borrow().clone())
+    }
+
+    fn set_last_raw_keys(records: Vec<super::RawKeyEvent>) {
+        LAST_RAW_KEYS.with(|cell| *cell.borrow_mut() = records);
     }
 
     pub fn poll(timeout: Duration) -> io::Result<bool> {
@@ -67,6 +99,9 @@ mod windows_input {
     struct WindowsInputReader {
         input: windows::Win32::Foundation::HANDLE,
         surrogate: Option<u16>,
+        /// Raw record of the pending high surrogate, so a completed pair
+        /// can be replayed as both records in win32-input-mode.
+        surrogate_raw: Option<super::RawKeyEvent>,
         mouse_left: bool,
         mouse_right: bool,
         mouse_middle: bool,
@@ -80,6 +115,7 @@ mod windows_input {
             Ok(Self {
                 input,
                 surrogate: None,
+                surrogate_raw: None,
                 mouse_left: false,
                 mouse_right: false,
                 mouse_middle: false,
@@ -163,14 +199,33 @@ mod windows_input {
             let modifiers = key_modifiers(key.dwControlKeyState);
             let virtual_key = key.wVirtualKeyCode;
             let unicode = unsafe { key.uChar.UnicodeChar };
+            let raw = super::RawKeyEvent {
+                virtual_key,
+                scan_code: key.wVirtualScanCode,
+                unicode_char: unicode,
+                key_down,
+                control_key_state: key.dwControlKeyState,
+                repeat_count: key.wRepeatCount.max(1),
+            };
 
             if (0xD800..=0xDFFF).contains(&unicode) {
+                if key_down && (0xD800..=0xDBFF).contains(&unicode) {
+                    self.surrogate_raw = Some(raw);
+                }
                 let ch = self.handle_surrogate(unicode, key_down)?;
+                // Completed pair: expose both records so win32-input-mode
+                // panes receive the full UTF-16 sequence.
+                let records = match self.surrogate_raw.take() {
+                    Some(high) => vec![high, raw],
+                    None => vec![raw],
+                };
+                set_last_raw_keys(records);
                 return Some(Event::Key(KeyEvent::new(KeyCode::Char(ch), modifiers)));
             }
 
             if key_down {
                 self.surrogate = None;
+                self.surrogate_raw = None;
             }
 
             let code = match virtual_key {
@@ -205,6 +260,7 @@ mod windows_input {
             } else {
                 KeyEventKind::Release
             };
+            set_last_raw_keys(vec![raw]);
             Some(Event::Key(KeyEvent::new_with_kind(code, modifiers, kind)))
         }
 
@@ -360,6 +416,7 @@ mod windows_input {
             let mut reader = WindowsInputReader {
                 input: Default::default(),
                 surrogate: None,
+                surrogate_raw: None,
                 mouse_left: false,
                 mouse_right: false,
                 mouse_middle: false,
@@ -389,4 +446,4 @@ mod windows_input {
 }
 
 #[cfg(windows)]
-pub use windows_input::{poll, read};
+pub use windows_input::{last_raw_keys, poll, read};

@@ -1097,6 +1097,11 @@ fn run_wm_main_loop(
     let state_report_poll = Duration::from_millis(200);
     let mut last_state_report_poll = std::time::Instant::now();
 
+    // Focus reporting (DECSET 1004): panes that enabled it get CSI I / CSI O
+    // when wtmux's pane focus moves, like tmux's focus-events. Host terminal
+    // focus is forwarded in the event handler below.
+    let mut last_focus = wm.focused_pane_id();
+
     loop {
         // Check if any session is still running
         if !wm.is_running() {
@@ -1131,10 +1136,30 @@ fn run_wm_main_loop(
         // Process output and closed panes/tabs.
         let mut needs_render = wm.process_output();
 
+        // OSC 52: a child asked to set the host clipboard
+        if let Some(text) = wm.take_osc52() {
+            let _ = copy_to_clipboard(&text);
+        }
+
+        // Focus reporting: tell panes when wtmux's focus moved between them
+        let current_focus = wm.focused_pane_id();
+        if current_focus != last_focus {
+            if let Some((tab_id, pane_id)) = last_focus {
+                wm.notify_pane_focus(tab_id, pane_id, false);
+            }
+            if let Some((tab_id, pane_id)) = current_focus {
+                wm.notify_pane_focus(tab_id, pane_id, true);
+            }
+            last_focus = current_focus;
+        }
+
         // Popup pane output / lifecycle
         if let Some(popup) = ui.popup.as_mut() {
             if popup.session.process_output().unwrap_or(false) && ui.mode == UiMode::Popup {
                 needs_render = true;
+            }
+            if let Some(text) = popup.session.state.osc52.take() {
+                let _ = copy_to_clipboard(&text);
             }
             if !popup.session.is_running() {
                 if ui.popup_hold {
@@ -1263,23 +1288,14 @@ fn run_wm_main_loop(
                         if key_event.kind == crossterm::event::KeyEventKind::Release {
                             if ui.mode == UiMode::Popup {
                                 let bytes = ui.popup.as_ref().and_then(|popup| {
-                                    let state = &popup.session.state;
-                                    KeyMapper::map_with_flags(
-                                        &key_event,
-                                        &state.modes,
-                                        state.kitty_flags(),
-                                    )
+                                    KeyMapper::map_for_pane(&key_event, &popup.session.state)
                                 });
                                 if let (Some(bytes), Some(popup)) = (bytes, ui.popup.as_mut()) {
                                     let _ = popup.session.write(&bytes);
                                 }
                             } else if ui.mode == UiMode::Normal && !wm.prefix_mode {
                                 let bytes = wm.focused_state().and_then(|state| {
-                                    KeyMapper::map_with_flags(
-                                        &key_event,
-                                        &state.modes,
-                                        state.kitty_flags(),
-                                    )
+                                    KeyMapper::map_for_pane(&key_event, state)
                                 });
                                 if let Some(bytes) = bytes {
                                     let _ = wm.write(&bytes);
@@ -1342,13 +1358,8 @@ fn run_wm_main_loop(
                             continue;
                         }
                         if let Some(popup) = ui.popup.as_mut() {
-                            let state = &popup.session.state;
-                            let bytes = KeyMapper::map_with_flags(
-                                &key_event,
-                                &state.modes,
-                                state.kitty_flags(),
-                            )
-                            .unwrap_or_default();
+                            let bytes = KeyMapper::map_for_pane(&key_event, &popup.session.state)
+                                .unwrap_or_default();
                             if !bytes.is_empty() {
                                 // Typing returns the view to the live bottom,
                                 // like regular panes
@@ -2157,17 +2168,11 @@ fn run_wm_main_loop(
                     wm.scroll_to_bottom();
                     wm.clear_selection();
 
-                    // Send key to focused pane, honoring its terminal modes
-                    // and kitty keyboard flags
+                    // Send key to focused pane, honoring its terminal modes,
+                    // kitty keyboard flags, and win32-input-mode request
                     let bytes = wm
                         .focused_state()
-                        .and_then(|state| {
-                            KeyMapper::map_with_flags(
-                                &key_event,
-                                &state.modes,
-                                state.kitty_flags(),
-                            )
-                        })
+                        .and_then(|state| KeyMapper::map_for_pane(&key_event, state))
                         .unwrap_or_default();
                     if !bytes.is_empty() {
                         let _ = wm.write(&bytes);
@@ -2493,7 +2498,18 @@ fn run_wm_main_loop(
                     let _ = wm.paste(&text);
                 }
 
-                _ => {}
+                // Host terminal focus: forward to the focused pane
+                // (DECSET 1004)
+                Event::FocusGained => {
+                    if let Some((tab_id, pane_id)) = wm.focused_pane_id() {
+                        wm.notify_pane_focus(tab_id, pane_id, true);
+                    }
+                }
+                Event::FocusLost => {
+                    if let Some((tab_id, pane_id)) = wm.focused_pane_id() {
+                        wm.notify_pane_focus(tab_id, pane_id, false);
+                    }
+                }
             }
         }
     }
@@ -3072,6 +3088,11 @@ fn run_main_loop(
 
         status_publisher.publish(&tmux_compat::PaneSnapshot::from_session(session));
 
+        // OSC 52: the child asked to set the host clipboard
+        if let Some(text) = session.state.osc52.take() {
+            let _ = copy_to_clipboard(&text);
+        }
+
         // Process input events
         let poll_timeout = if idle_ticks > 50 { idle_poll } else { active_poll };
         if input::poll(poll_timeout)? {
@@ -3086,11 +3107,9 @@ fn run_main_loop(
                     // forwarded when the pane enabled kitty event reporting
                     if key_event.kind != KeyEventKind::Press {
                         if key_event.kind == crossterm::event::KeyEventKind::Release {
-                            if let Some(bytes) = KeyMapper::map_with_flags(
-                                &key_event,
-                                &session.state.modes,
-                                session.state.kitty_flags(),
-                            ) {
+                            if let Some(bytes) =
+                                KeyMapper::map_for_pane(&key_event, &session.state)
+                            {
                                 let _ = session.write(&bytes);
                             }
                         }
@@ -3177,11 +3196,7 @@ fn run_main_loop(
                     }
 
                     // Map key to bytes and send to PTY
-                    if let Some(bytes) = KeyMapper::map_with_flags(
-                        &key_event,
-                        &session.state.modes,
-                        session.state.kitty_flags(),
-                    ) {
+                    if let Some(bytes) = KeyMapper::map_for_pane(&key_event, &session.state) {
                         if let Err(e) = session.write(&bytes) {
                             error!("Failed to write to PTY: {}", e);
                         }
@@ -3300,7 +3315,17 @@ fn run_main_loop(
                     }
                 }
 
-                _ => {}
+                // Host terminal focus: forward to the pane (DECSET 1004)
+                Event::FocusGained => {
+                    if session.state.modes.focus_reporting {
+                        let _ = session.write(b"\x1b[I");
+                    }
+                }
+                Event::FocusLost => {
+                    if session.state.modes.focus_reporting {
+                        let _ = session.write(b"\x1b[O");
+                    }
+                }
             }
         }
     }

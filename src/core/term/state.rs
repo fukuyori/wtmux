@@ -39,6 +39,10 @@ pub struct TerminalState {
     pub bell: bool,
     /// Kitty keyboard protocol flag stacks (CSI = / > / < / ? u).
     pub kitty_keyboard: KittyKeyboardState,
+    /// Decoded OSC 52 clipboard payload from the child, waiting to be
+    /// written to the host clipboard. Consumed (`take()`) by the event
+    /// loop, which owns clipboard access.
+    pub osc52: Option<String>,
 }
 
 /// Kitty keyboard protocol progressive-enhancement flag stacks.
@@ -95,6 +99,7 @@ impl TerminalState {
             keystroke_tracker: KeystrokeTracker::default(),
             bell: false,
             kitty_keyboard: KittyKeyboardState::default(),
+            osc52: None,
         }
     }
 
@@ -801,7 +806,9 @@ impl TerminalState {
                 }
                 self.active_screen_mut().mark_all_dirty();
             }
+            1004 => self.modes.focus_reporting = enable,
             2004 => self.modes.bracketed_paste = enable,
+            9001 => self.modes.win32_input = enable,
             
             // Mouse tracking modes
             1000 => self.modes.mouse_tracking = enable,
@@ -1529,6 +1536,12 @@ pub struct TerminalModes {
     pub insert_mode: bool,
     pub linefeed_newline: bool,
     pub bracketed_paste: bool,
+    /// 1004 - Focus reporting (CSI I on focus in, CSI O on focus out)
+    pub focus_reporting: bool,
+    /// 9001 - win32-input-mode: the child's conhost asked for key input as
+    /// full Win32 key records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), which preserves
+    /// modifier state legacy VT cannot express (e.g. Shift+Enter)
+    pub win32_input: bool,
     
     // Mouse tracking modes
     /// 1000 - X10 mouse reporting (click only)
@@ -1553,6 +1566,8 @@ impl Default for TerminalModes {
             insert_mode: false,
             linefeed_newline: false,
             bracketed_paste: false,
+            focus_reporting: false,
+            win32_input: false,
             mouse_tracking: false,
             mouse_button_tracking: false,
             mouse_any_event: false,

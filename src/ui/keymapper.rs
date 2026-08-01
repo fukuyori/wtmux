@@ -45,6 +45,50 @@ impl From<KeyModifiers> for Modifiers {
 pub struct KeyMapper;
 
 impl KeyMapper {
+    /// Map a key event for a pane, honoring — in priority order — the
+    /// pane's kitty keyboard flags, its conhost's win32-input-mode request
+    /// (DECSET 9001), and its legacy terminal modes.
+    ///
+    /// Kitty wins over win32-input-mode: raw `CSI u` bytes pass through
+    /// conhost verbatim to the VT app that asked for them, whereas conhost
+    /// cannot re-encode decoded win32 records back into kitty sequences.
+    pub fn map_for_pane(
+        event: &KeyEvent,
+        state: &crate::core::term::TerminalState,
+    ) -> Option<Vec<u8>> {
+        let kitty_flags = state.kitty_flags();
+        if kitty_flags & KITTY_DISAMBIGUATE == 0 && state.modes.win32_input {
+            let records = crate::ui::input::last_raw_keys();
+            if !records.is_empty() {
+                return Some(Self::encode_win32_input(&records));
+            }
+        }
+        Self::map_with_flags(event, &state.modes, kitty_flags)
+    }
+
+    /// win32-input-mode encoding: `CSI Vk;Sc;Uc;Kd;Cs;Rc _` per record.
+    /// conhost reconstructs the exact KEY_EVENT_RECORDs, so Win32-API
+    /// readers in the pane see full modifier state (e.g. Shift+Enter) and
+    /// key releases, which legacy VT encoding cannot express.
+    fn encode_win32_input(records: &[crate::ui::input::RawKeyEvent]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for r in records {
+            out.extend_from_slice(
+                format!(
+                    "\x1b[{};{};{};{};{};{}_",
+                    r.virtual_key,
+                    r.scan_code,
+                    r.unicode_char,
+                    u8::from(r.key_down),
+                    r.control_key_state,
+                    r.repeat_count.max(1),
+                )
+                .as_bytes(),
+            );
+        }
+        out
+    }
+
     /// Map a key event honoring the pane's kitty keyboard flags.
     ///
     /// With the disambiguate flag unset this defers to the legacy encoding
@@ -677,6 +721,44 @@ mod tests {
         // Neither do plain Enter/Tab/Backspace (their presses were legacy)
         let enter_up = key_release(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(KeyMapper::map_with_flags(&enter_up, &modes, f), None);
+    }
+
+    #[test]
+    fn win32_input_encoding_matches_conpty_format() {
+        // Shift+Enter keydown: VK_RETURN(13), scan 28, '\r', down,
+        // SHIFT_PRESSED(0x10), repeat 1
+        let down = crate::ui::input::RawKeyEvent {
+            virtual_key: 13,
+            scan_code: 28,
+            unicode_char: 13,
+            key_down: true,
+            control_key_state: 0x10,
+            repeat_count: 1,
+        };
+        let up = crate::ui::input::RawKeyEvent {
+            key_down: false,
+            ..down
+        };
+        assert_eq!(
+            KeyMapper::encode_win32_input(&[down, up]),
+            b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_".to_vec()
+        );
+    }
+
+    #[test]
+    fn kitty_flags_take_priority_over_win32_input_mode() {
+        use crate::core::term::TerminalState;
+
+        let mut state = TerminalState::new(80, 24);
+        state.modes.win32_input = true;
+        state.kitty_push(KITTY_DISAMBIGUATE);
+
+        // Pane-requested kitty encoding must win over conhost's 9001 request
+        let ctrl_a = key_event(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_for_pane(&ctrl_a, &state),
+            Some(b"\x1b[97;5u".to_vec())
+        );
     }
 
     #[test]

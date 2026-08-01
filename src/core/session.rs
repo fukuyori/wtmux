@@ -1179,6 +1179,145 @@ Start-Sleep -Milliseconds 300
         );
     }
 
+    /// PowerShell probe for `conpty_win32_input_roundtrip_repro`: reads raw
+    /// KEY_EVENT_RECORDs via ReadConsoleInputW (the way Win32-API TUI apps
+    /// do) and reports each record's VK / unicode / keydown / control state.
+    #[cfg(windows)]
+    const WIN32_INPUT_PROBE_PS1: &str = r##"
+$ErrorActionPreference = 'Stop'
+$sig = @'
+using System;
+using System.Runtime.InteropServices;
+public static class RecProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEY_EVENT_RECORD {
+        public int bKeyDown;
+        public ushort wRepeatCount;
+        public ushort wVirtualKeyCode;
+        public ushort wVirtualScanCode;
+        public ushort UnicodeChar;
+        public uint dwControlKeyState;
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUT_RECORD {
+        [FieldOffset(0)] public ushort EventType;
+        [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+    }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr h, uint mode);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool ReadConsoleInputW(IntPtr h, [Out] INPUT_RECORD[] buf, uint len, out uint read);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool WriteFile(IntPtr h, byte[] buf, uint n, out uint written, IntPtr overlapped);
+}
+'@
+Add-Type -TypeDefinition $sig
+$access = [uint32]3221225472
+$conin  = [RecProbe]::CreateFileW('CONIN$',  $access, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+$conout = [RecProbe]::CreateFileW('CONOUT$', $access, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+function EmitText([string]$s) {
+    $b = [System.Text.Encoding]::ASCII.GetBytes($s)
+    $w = 0
+    [void][RecProbe]::WriteFile($conout, $b, $b.Length, [ref]$w, [IntPtr]::Zero)
+}
+[void][RecProbe]::SetConsoleMode($conin, 0)
+EmitText "READY`r`n"
+$buf = New-Object 'RecProbe+INPUT_RECORD[]' 1
+$done = $false
+for ($i = 0; $i -lt 256 -and -not $done; $i++) {
+    $n = 0
+    if (-not [RecProbe]::ReadConsoleInputW($conin, $buf, 1, [ref]$n)) { break }
+    if ($n -gt 0 -and $buf[0].EventType -eq 1) {
+        $k = $buf[0].KeyEvent
+        EmitText ("K vk=" + $k.wVirtualKeyCode + " uc=" + $k.UnicodeChar + " kd=" + $k.bKeyDown + " cs=" + $k.dwControlKeyState + "`r`n")
+        if ($k.UnicodeChar -eq 90 -and $k.bKeyDown -eq 1) { $done = $true }
+    }
+}
+EmitText "DONE`r`n"
+Start-Sleep -Milliseconds 300
+"##;
+
+    /// Diagnostic harness: verify win32-input-mode key records survive the
+    /// ConPTY hop into a Win32-API reader (issue #2, item 1).
+    ///
+    /// - conhost must announce win32-input-mode support on startup
+    ///   (`CSI ? 9001 h` in the ConPTY output) — that request is what makes
+    ///   wtmux switch the pane to win32-input encoding.
+    /// - a Shift+Enter down/up written as `CSI 13;28;13;1;16;1 _` must reach
+    ///   the child as KEY_EVENT_RECORDs with VK_RETURN and SHIFT_PRESSED —
+    ///   modifier state that legacy VT `\r` cannot carry.
+    ///
+    /// Run with: cargo test conpty_win32_input_roundtrip_repro -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_win32_input_roundtrip_repro() {
+        let dir = std::env::temp_dir().join("wtmux_conpty_repro");
+        std::fs::create_dir_all(&dir).expect("create repro dir");
+        let script_path = dir.join("win32_input_probe.ps1");
+        std::fs::write(&script_path, WIN32_INPUT_PROBE_PS1).expect("write probe script");
+
+        let pty = crate::core::pty::ConPty::new(
+            100,
+            30,
+            Some(&format!(
+                "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+                script_path.display()
+            )),
+        )
+        .expect("spawn conpty");
+
+        let mut captured: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 4096];
+        let start = std::time::Instant::now();
+        let mut wrote_key = false;
+        while start.elapsed().as_secs() < 60 {
+            match pty.read(&mut buf) {
+                Ok(0) => {
+                    if !pty.is_running() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Ok(n) => {
+                    captured.extend_from_slice(&buf[..n]);
+                    if !wrote_key && bytes_contain(&captured, b"READY") {
+                        // Shift+Enter down + up in win32-input-mode, then 'Z'
+                        pty.write(b"\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_Z")
+                            .expect("write win32 key");
+                        wrote_key = true;
+                    }
+                    if bytes_contain(&captured, b"DONE") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        std::fs::write(dir.join("captured_win32_input.bin"), &captured).expect("dump capture");
+
+        let text = String::from_utf8_lossy(&captured);
+        println!("--- captured ({} bytes) ---", captured.len());
+        println!("{}", text);
+
+        let conhost_requested = bytes_contain(&captured, b"\x1b[?9001h");
+        let shift_enter_seen = text
+            .lines()
+            .any(|l| l.contains("vk=13") && l.contains("kd=1") && l.contains("cs=16"));
+        println!("conhost requested win32-input-mode (CSI ?9001h): {}", conhost_requested);
+        println!("child saw VK_RETURN with SHIFT_PRESSED: {}", shift_enter_seen);
+        assert!(
+            conhost_requested,
+            "conhost never sent CSI ?9001h — pane gating would not engage"
+        );
+        assert!(
+            shift_enter_seen,
+            "win32-input record did not reach the child intact"
+        );
+    }
+
     /// Closed-loop render harness: ConPTY bytes → session grid → WmRenderer
     /// output → a simulated host terminal. Compares the host terminal's final
     /// cells against the session grid to catch corruption introduced by the

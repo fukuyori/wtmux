@@ -21,7 +21,9 @@ use super::state::{AttrFlags, Color, TerminalState};
 
 /// Maximum bytes accumulated for an OSC string body.  A program that never
 /// sends a terminator (BEL/ST) must not be able to grow memory unboundedly.
-const MAX_OSC_LEN: usize = 4096;
+/// Sized to admit realistic OSC 52 clipboard payloads (base64, ~192 KiB of
+/// text) while staying bounded.
+const MAX_OSC_LEN: usize = 256 * 1024;
 
 /// Maximum characters kept from an OSC 0/1/2 title.
 const MAX_TITLE_LEN: usize = 256;
@@ -862,6 +864,34 @@ impl VtParser {
         }
     }
 
+    /// Decode standard base64 (RFC 4648, `+/` alphabet, optional `=`
+    /// padding). Whitespace is skipped; any other invalid byte aborts the
+    /// decode. Small enough to not warrant a dependency.
+    fn decode_base64(data: &str) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(data.len() / 4 * 3);
+        let mut acc: u32 = 0;
+        let mut bits = 0u8;
+        for &b in data.as_bytes() {
+            let value = match b {
+                b'A'..=b'Z' => b - b'A',
+                b'a'..=b'z' => b - b'a' + 26,
+                b'0'..=b'9' => b - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => continue,
+                b' ' | b'\t' | b'\r' | b'\n' => continue,
+                _ => return None,
+            };
+            acc = (acc << 6) | value as u32;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        }
+        Some(out)
+    }
+
     fn execute_osc(&mut self, state: &mut TerminalState) {
         // Parse OSC: "code;text"
         if let Some(pos) = self.osc_string.find(';') {
@@ -900,6 +930,23 @@ impl VtParser {
                 // OSC 633 additionally has E (set custom property) which we ignore.
                 "133" | "633" => {
                     self.handle_shell_integration(text, state);
+                }
+                // ── OSC 52: clipboard (write-only) ────────────────────────
+                // Format: 52 ; <selection> ; <base64 data>
+                // Lets apps in panes (nvim, tmux inside ssh/WSL, ...) set the
+                // host clipboard. Reads ("?") are ignored: answering would
+                // let any child program silently exfiltrate the clipboard.
+                "52" => {
+                    if let Some(sep) = text.find(';') {
+                        let data = &text[sep + 1..];
+                        if data != "?" {
+                            if let Some(bytes) = Self::decode_base64(data) {
+                                if let Ok(text) = String::from_utf8(bytes) {
+                                    state.osc52 = Some(text);
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1263,6 +1310,67 @@ mod tests {
         assert_eq!(state.active_cursor().col, 9);
         // And it must not have touched the kitty stack
         assert_eq!(state.kitty_flags(), 0);
+    }
+
+    #[test]
+    fn decset_1004_toggles_focus_reporting() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        assert!(!state.modes.focus_reporting);
+        feed_str(&mut parser, &mut state, "\x1b[?1004h");
+        assert!(state.modes.focus_reporting);
+        feed_str(&mut parser, &mut state, "\x1b[?1004l");
+        assert!(!state.modes.focus_reporting);
+    }
+
+    #[test]
+    fn osc52_write_sets_clipboard_payload() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // BEL-terminated: "hello" = aGVsbG8=
+        feed_str(&mut parser, &mut state, "\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(state.osc52.take().as_deref(), Some("hello"));
+
+        // ST-terminated, multi-byte UTF-8: "こんにちは"
+        feed_str(&mut parser, &mut state, "\x1b]52;c;44GT44KT44Gr44Gh44Gv\x1b\\");
+        assert_eq!(state.osc52.take().as_deref(), Some("こんにちは"));
+    }
+
+    #[test]
+    fn osc52_query_and_garbage_are_ignored() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Read request: never answered, never stored
+        feed_str(&mut parser, &mut state, "\x1b]52;c;?\x07");
+        assert!(state.osc52.is_none());
+
+        // Invalid base64: dropped
+        feed_str(&mut parser, &mut state, "\x1b]52;c;@@invalid@@\x07");
+        assert!(state.osc52.is_none());
+
+        // Missing data field entirely: dropped
+        feed_str(&mut parser, &mut state, "\x1b]52;c\x07");
+        assert!(state.osc52.is_none());
+    }
+
+    #[test]
+    fn base64_decoder_handles_padding_and_whitespace() {
+        assert_eq!(
+            VtParser::decode_base64("aGVsbG8="),
+            Some(b"hello".to_vec())
+        );
+        assert_eq!(VtParser::decode_base64("aGk="), Some(b"hi".to_vec()));
+        assert_eq!(VtParser::decode_base64("aA=="), Some(b"h".to_vec()));
+        // Whitespace (as emitted by some base64 encoders) is skipped
+        assert_eq!(
+            VtParser::decode_base64("aGVs\r\nbG8="),
+            Some(b"hello".to_vec())
+        );
+        assert_eq!(VtParser::decode_base64(""), Some(Vec::new()));
+        assert_eq!(VtParser::decode_base64("a!b"), None);
     }
 
     #[test]
