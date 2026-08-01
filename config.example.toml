@@ -47,6 +47,8 @@ color_scheme = "default"
 # free key choice and unbinding. [bind_root] entries win over these.
 # Accepted formats: "C-r", "S-PageUp", "C-S-c"
 # Also accepted: "Ctrl+R", "Shift+PageUp", "Ctrl+Shift+C"
+# Set an entry to "none" to disable that shortcut entirely, e.g. so the
+# key reaches the shell instead: scrollback_up = "none"
 [keybindings]
 # history_selector = "C-r"
 # scrollback_up = "S-PageUp"

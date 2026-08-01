@@ -138,6 +138,9 @@ pub struct WmRenderer {
     /// falls back to a non-Nerd-Font bold, causing PUA glyphs to render
     /// with wrong cell widths.
     pub suppress_bold: bool,
+    /// A run with an OSC 8 hyperlink was emitted and not yet closed;
+    /// the next link-less run (or the end of the row) closes it.
+    hyperlink_open: std::cell::Cell<bool>,
     /// Transient message shown over the status bar (command prompt results)
     status_message: Option<(String, std::time::Instant)>,
 }
@@ -193,6 +196,7 @@ impl WmRenderer {
             cursor: CursorPresenter::default(),
             suppress_bold: false,
             status_message: None,
+            hyperlink_open: std::cell::Cell::new(false),
         }
     }
 
@@ -205,6 +209,7 @@ impl WmRenderer {
             cursor: CursorPresenter::default(),
             suppress_bold: false,
             status_message: None,
+            hyperlink_open: std::cell::Cell::new(false),
         }
     }
 
@@ -1789,6 +1794,13 @@ impl WmRenderer {
             self.apply_render_row_style(stdout, style)
         })?;
 
+        // Close a hyperlink left open by the row's last run so borders and
+        // the cleared tail never become clickable.
+        if self.hyperlink_open.get() {
+            write!(stdout, "\x1b]8;;\x1b\\")?;
+            self.hyperlink_open.set(false);
+        }
+
         if rendered_width < clear_width {
             // Re-anchor before padding: if the host rendered a grapheme wider
             // or narrower than our accounting, the cursor has drifted and the
@@ -1933,6 +1945,22 @@ impl WmRenderer {
     /// Apply cell attributes with selection highlighting
     fn apply_attrs_with_selection<W: Write>(&self, stdout: &mut W, attrs: &CellAttrs, selected: bool) -> io::Result<()> {
         let cs = &self.color_scheme;
+
+        // OSC 8 hyperlink state for this run. Re-opening the same target on
+        // consecutive runs is harmless; a link-less run closes any open one.
+        match &attrs.hyperlink {
+            Some(link) => {
+                let id = link.id.as_deref().unwrap_or("");
+                let params = if id.is_empty() { String::new() } else { format!("id={id}") };
+                write!(stdout, "\x1b]8;{};{}\x1b\\", params, link.uri)?;
+                self.hyperlink_open.set(true);
+            }
+            None if self.hyperlink_open.get() => {
+                write!(stdout, "\x1b]8;;\x1b\\")?;
+                self.hyperlink_open.set(false);
+            }
+            None => {}
+        }
 
         // Batch all SGR codes into a single escape sequence for efficiency.
         // Instead of multiple execute!() calls (each a separate write), we build

@@ -44,6 +44,8 @@ pub struct Renderer {
     prev_buffer: Vec<Vec<RenderCell>>,
     /// Current terminal size
     size: (u16, u16),
+    /// A run with an OSC 8 hyperlink was emitted and not yet closed.
+    hyperlink_open: std::cell::Cell<bool>,
 }
 
 impl Default for Renderer {
@@ -59,6 +61,7 @@ impl Renderer {
             initialized: false,
             prev_buffer: Vec::new(),
             size: (0, 0),
+            hyperlink_open: std::cell::Cell::new(false),
         }
     }
 
@@ -454,12 +457,33 @@ impl Renderer {
         render_row_stream(stdout, row, |col_idx, cell| style_for(col_idx, cell), |stdout, (attrs, selected)| {
             self.apply_attrs(stdout, attrs, *selected)
         })?;
+        // Close a hyperlink left open by the row's last run.
+        if self.hyperlink_open.get() {
+            write!(stdout, "\x1b]8;;\x1b\\")?;
+            self.hyperlink_open.set(false);
+        }
         Ok(())
     }
 
     /// Apply cell attributes (batches all SGR codes into one escape sequence)
     fn apply_attrs<W: Write>(&self, stdout: &mut W, attrs: &CellAttrs, is_selected: bool) -> io::Result<()> {
         use crate::core::term::Color as TermColor;
+
+        // OSC 8 hyperlink state for this run
+        match &attrs.hyperlink {
+            Some(link) => {
+                let id = link.id.as_deref().unwrap_or("");
+                let params = if id.is_empty() { String::new() } else { format!("id={id}") };
+                write!(stdout, "\x1b]8;{};{}\x1b\\", params, link.uri)?;
+                self.hyperlink_open.set(true);
+            }
+            None if self.hyperlink_open.get() => {
+                write!(stdout, "\x1b]8;;\x1b\\")?;
+                self.hyperlink_open.set(false);
+            }
+            None => {}
+        }
+
         let mut sgr = String::with_capacity(48);
         sgr.push_str("\x1b[0"); // Reset
 

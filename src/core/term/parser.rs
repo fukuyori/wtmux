@@ -17,7 +17,7 @@
 //! through [`VtParser::feed_char`] so the state machine can consume them
 //! silently when inside a DCS/APC/SOS/PM string body.
 
-use super::state::{AttrFlags, Color, TerminalState, UnderlineStyle};
+use super::state::{AttrFlags, Color, Hyperlink, TerminalState, UnderlineStyle};
 
 /// Maximum bytes accumulated for an OSC string body.  A program that never
 /// sends a terminator (BEL/ST) must not be able to grow memory unboundedly.
@@ -998,6 +998,31 @@ impl VtParser {
                         state.current_path = path;
                     }
                 }
+                // ── OSC 8: hyperlink ──────────────────────────────────────
+                // `OSC 8 ; params ; URI ST` opens a link, `OSC 8 ; ; ST`
+                // closes it. Cells written in between carry the target and
+                // the renderer re-emits it to the host terminal. Control
+                // characters are stripped so a URI can never smuggle escape
+                // sequences into the render stream.
+                "8" => {
+                    let (params, uri) = match text.find(';') {
+                        Some(p) => (&text[..p], &text[p + 1..]),
+                        None => ("", text),
+                    };
+                    if uri.is_empty() {
+                        state.current_attrs.hyperlink = None;
+                    } else {
+                        let uri: String =
+                            uri.chars().filter(|c| !c.is_control()).take(2048).collect();
+                        let id: Option<String> = params
+                            .split(':')
+                            .find_map(|kv| kv.strip_prefix("id="))
+                            .filter(|v| !v.is_empty())
+                            .map(|v| v.chars().filter(|c| !c.is_control()).take(256).collect());
+                        state.current_attrs.hyperlink =
+                            Some(std::sync::Arc::new(Hyperlink { id, uri }));
+                    }
+                }
                 "9" => {
                     if let Some(path) = osc9_9_to_path(text) {
                         state.current_path = path;
@@ -1475,6 +1500,50 @@ mod tests {
         feed_str(&mut parser, &mut state, "\x1b[0m\x1b[38;5;42;48;2;1;2;3m");
         assert_eq!(state.current_attrs.fg, Color::Indexed(42));
         assert_eq!(state.current_attrs.bg, Color::Rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn osc8_hyperlink_attaches_to_cells_and_closes() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        feed_str(
+            &mut parser,
+            &mut state,
+            "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\plain",
+        );
+
+        let cells = &state.active_screen().rows[0].cells;
+        let link = cells[0].attrs.hyperlink.as_ref().expect("cell 0 linked");
+        assert_eq!(link.uri, "https://example.com");
+        assert_eq!(link.id, None);
+        // All four "link" cells share the same Arc
+        assert!(std::sync::Arc::ptr_eq(
+            link,
+            cells[3].attrs.hyperlink.as_ref().expect("cell 3 linked")
+        ));
+        // "plain" cells carry no link
+        assert!(cells[4].attrs.hyperlink.is_none());
+    }
+
+    #[test]
+    fn osc8_id_parameter_and_sgr_orthogonality() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // BEL-terminated, with id param; SGR 0 in the middle must NOT
+        // close the link (links are orthogonal to SGR state)
+        feed_str(&mut parser, &mut state, "\x1b]8;id=foo;https://e.co\x07a\x1b[0mb");
+        let cells = &state.active_screen().rows[0].cells;
+        assert_eq!(
+            cells[0].attrs.hyperlink.as_ref().expect("a linked").id.as_deref(),
+            Some("foo")
+        );
+        assert!(cells[1].attrs.hyperlink.is_some(), "SGR 0 must not close the link");
+
+        // Erasing a linked cell strips the link from the blank
+        feed_str(&mut parser, &mut state, "\x1b[1;1H\x1b[2X");
+        assert!(state.active_screen().rows[0].cells[0].attrs.hyperlink.is_none());
     }
 
     #[test]

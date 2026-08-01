@@ -297,7 +297,23 @@ impl KeyBinding {
         Some(Self { code, modifiers })
     }
 
+    /// A binding that never matches any key. Produced by setting a
+    /// `[keybindings]` entry to `"none"` (or `"off"` / `"disabled"`).
+    pub fn disabled() -> Self {
+        Self {
+            code: KeyCode::Null,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.code == KeyCode::Null
+    }
+
     pub fn matches(&self, event: &KeyEvent) -> bool {
+        if self.is_disabled() {
+            return false;
+        }
         let supported_modifiers = KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT;
         if event.modifiers & supported_modifiers != self.modifiers {
             return false;
@@ -322,6 +338,7 @@ impl KeyBinding {
         }
 
         parts.push(match self.code {
+            KeyCode::Null => "none".to_string(),
             KeyCode::Char(' ') => "Space".to_string(),
             KeyCode::Char(ch) if ch.is_ascii_alphabetic() => ch.to_ascii_uppercase().to_string(),
             KeyCode::Char(ch) => ch.to_string(),
@@ -380,6 +397,15 @@ impl ParsedKeyBindings {
 }
 
 fn parse_or_default(setting_name: &str, configured: &str, default: &str) -> KeyBinding {
+    // Explicit opt-out: `scrollback_up = "none"` disables the shortcut
+    // entirely instead of falling back to the default.
+    if matches!(
+        configured.trim().to_ascii_lowercase().as_str(),
+        "none" | "off" | "disabled"
+    ) {
+        return KeyBinding::disabled();
+    }
+
     if let Some(binding) = KeyBinding::parse(configured) {
         return binding;
     }
@@ -557,6 +583,28 @@ mod tests {
     fn matches_char_keys_case_insensitively() {
         let binding = KeyBinding::parse("Ctrl+Shift+C").unwrap();
         assert!(binding.matches(&key_event(KeyCode::Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)));
+    }
+
+    #[test]
+    fn keybinding_none_disables_the_shortcut() {
+        let config = KeyBindingsConfig {
+            scrollback_up: "none".to_string(),
+            copy_selection: "OFF".to_string(),
+            ..KeyBindingsConfig::default()
+        };
+        let parsed = ParsedKeyBindings::from_config(&config);
+
+        assert!(parsed.scrollback_up.is_disabled());
+        assert!(!parsed
+            .scrollback_up
+            .matches(&key_event(KeyCode::PageUp, KeyModifiers::SHIFT)));
+        assert!(parsed.copy_selection.is_disabled());
+        assert_eq!(parsed.scrollback_up.display_name(), "none");
+
+        // Untouched entries keep their defaults
+        assert!(parsed
+            .scrollback_down
+            .matches(&key_event(KeyCode::PageDown, KeyModifiers::SHIFT)));
     }
 
     #[test]

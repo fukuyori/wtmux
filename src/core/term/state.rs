@@ -1358,6 +1358,8 @@ impl Cell {
         self.grapheme.clear();
         self.width = 1;
         self.attrs = attrs.clone();
+        // Erased blanks must not stay clickable.
+        self.attrs.hyperlink = None;
     }
 
     pub fn continuation(attrs: &CellAttrs) -> Self {
@@ -1387,6 +1389,16 @@ impl Cell {
     }
 }
 
+/// OSC 8 hyperlink target. Cells written while a link is open share one
+/// allocation via `Arc`, so the per-cell cost is a single pointer.
+#[derive(Debug, PartialEq)]
+pub struct Hyperlink {
+    /// Optional `id=` parameter; terminals use it to treat separate
+    /// segments (e.g. a link split across wrapped lines) as one link.
+    pub id: Option<String>,
+    pub uri: String,
+}
+
 /// Cell attributes
 #[derive(Clone, Default, PartialEq)]
 pub struct CellAttrs {
@@ -1399,6 +1411,8 @@ pub struct CellAttrs {
     /// Underline color (SGR 58 / 59). `Color::Default` follows the
     /// foreground color, matching kitty/xterm semantics.
     pub underline_color: Color,
+    /// Active OSC 8 hyperlink, if any.
+    pub hyperlink: Option<std::sync::Arc<Hyperlink>>,
 }
 
 /// Extended underline styles (kitty's `4:x` SGR subparameters, adopted by
@@ -1415,7 +1429,11 @@ pub enum UnderlineStyle {
 
 impl CellAttrs {
     pub fn reset(&mut self) {
+        // SGR 0 must not terminate an OSC 8 hyperlink — links are only
+        // closed by `OSC 8 ; ; ST` (they are orthogonal to SGR state).
+        let hyperlink = self.hyperlink.take();
         *self = Self::default();
+        self.hyperlink = hyperlink;
     }
 }
 

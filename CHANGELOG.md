@@ -1,3 +1,19 @@
+## [3.2.2] - 2026-08-01
+
+### Added
+
+- **`[keybindings]` entries can be disabled with `"none"`** (also
+  `"off"` / `"disabled"`), letting the key pass through to the shell
+  instead of falling back to the default shortcut.
+- **OSC 8 hyperlinks**: links emitted by applications in panes (`ls
+  --hyperlink`, gcc/rustc diagnostics, delta, starship, …) are stored
+  per cell — including the `id=` grouping parameter — and re-emitted
+  to the host terminal, so they stay Ctrl+clickable in Windows
+  Terminal / WezTerm. URIs are sanitized (control characters stripped,
+  length-capped) so a malicious child cannot smuggle escape sequences
+  into the render stream, erased cells never stay clickable, and
+  SGR 0 correctly leaves links open (they are orthogonal to SGR).
+
 ## [3.2.1] - 2026-08-01
 
 ### Added
