@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -34,6 +34,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 - **Kitty キーボードプロトコル** - ペイン内アプリが *disambiguate escape codes* / *report event types* 拡張（`CSI u`）を利用可能。neovim や WSL/ssh 内の helix・fish などが Ctrl+I と Tab、Shift+Enter と Enter を区別でき、キーリリースイベントも受け取れます
 - **win32-input-mode パススルー** - Win32 API でコンソールを読むアプリにも完全なキーレコード（Shift+Enter、Ctrl+Enter、キーリリース）を転送（DECSET 9001）。Windows Terminal 直下と同じ入力忠実度
 - **OSC 52 クリップボード & フォーカスイベント** - ペイン内アプリ（ssh/WSL 先を含む）からホストのクリップボードへコピー可能。フォーカス変化は `CSI I`/`CSI O` で通知（DECSET 1004、ペイン切り替えにも反応）
+- **拡張下線** - 波線・二重線・点線・破線の下線スタイルと下線色（SGR `4:x` / `58`）に対応。nvim/helix の LSP 診断が意図どおり表示されます
 
 ## スクリーンショット
 

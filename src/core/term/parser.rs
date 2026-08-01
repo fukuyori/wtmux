@@ -17,7 +17,7 @@
 //! through [`VtParser::feed_char`] so the state machine can consume them
 //! silently when inside a DCS/APC/SOS/PM string body.
 
-use super::state::{AttrFlags, Color, TerminalState};
+use super::state::{AttrFlags, Color, TerminalState, UnderlineStyle};
 
 /// Maximum bytes accumulated for an OSC string body.  A program that never
 /// sends a terminator (BEL/ST) must not be able to grow memory unboundedly.
@@ -66,8 +66,16 @@ impl Response {
 pub struct VtParser {
     state: ParserState,
     params: Vec<u16>,
+    /// Colon-separated subparameters attached to each entry of `params`
+    /// (same length as `params`). E.g. `CSI 4:3 m` → params `[4]`,
+    /// subparams `[[3]]`. Kept separate so legacy semicolon parameters
+    /// keep their position-based meaning.
+    subparams: Vec<Vec<u16>>,
     intermediates: Vec<u8>,
     current_param: Option<u16>,
+    /// The parameter currently being accumulated was introduced by `:`
+    /// and belongs to the previous main parameter.
+    current_is_sub: bool,
     osc_string: String,
 }
 
@@ -107,9 +115,31 @@ impl VtParser {
         Self {
             state: ParserState::Ground,
             params: Vec::with_capacity(16),
+            subparams: Vec::with_capacity(16),
             intermediates: Vec::with_capacity(4),
             current_param: None,
+            current_is_sub: false,
             osc_string: String::new(),
+        }
+    }
+
+    /// File the completed parameter as a main parameter or as a
+    /// subparameter of the previous one, per `current_is_sub`.
+    fn push_param(&mut self, value: u16) {
+        if self.current_is_sub {
+            match self.subparams.last_mut() {
+                // Bound subparam count; hostile input must not grow memory
+                Some(subs) if subs.len() < 16 => subs.push(value),
+                Some(_) => {}
+                // Leading ':' with no main parameter: treat as main
+                None => {
+                    self.params.push(value);
+                    self.subparams.push(Vec::new());
+                }
+            }
+        } else {
+            self.params.push(value);
+            self.subparams.push(Vec::new());
         }
     }
 
@@ -241,8 +271,10 @@ impl VtParser {
     fn enter_escape(&mut self) {
         self.state = ParserState::Escape;
         self.params.clear();
+        self.subparams.clear();
         self.intermediates.clear();
         self.current_param = None;
+        self.current_is_sub = false;
     }
 
     fn ground(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
@@ -261,8 +293,10 @@ impl VtParser {
             b'[' => {
                 self.state = ParserState::CsiEntry;
                 self.params.clear();
+                self.subparams.clear();
                 self.intermediates.clear();
                 self.current_param = None;
+                self.current_is_sub = false;
             }
             b']' => {
                 self.state = ParserState::OscString;
@@ -352,7 +386,12 @@ impl VtParser {
                 self.state = ParserState::CsiParam;
             }
             b';' => {
-                self.params.push(0);
+                self.push_param(0);
+                self.state = ParserState::CsiParam;
+            }
+            b':' => {
+                self.push_param(0);
+                self.current_is_sub = true;
                 self.state = ParserState::CsiParam;
             }
             // Private / parameter-prefix bytes.
@@ -387,25 +426,28 @@ impl VtParser {
                 );
             }
             b';' => {
-                self.params.push(self.current_param.unwrap_or(0));
-                self.current_param = None;
+                let value = self.current_param.take().unwrap_or(0);
+                self.push_param(value);
+                self.current_is_sub = false;
             }
             b':' => {
-                // Subparameter separator (used in SGR)
-                // For simplicity, treat as regular separator
-                self.params.push(self.current_param.unwrap_or(0));
-                self.current_param = None;
+                // Subparameter separator: the value accumulated so far is
+                // filed normally, and the NEXT value becomes a subparameter
+                // of the last main parameter (e.g. SGR 4:3, 58:2::r:g:b).
+                let value = self.current_param.take().unwrap_or(0);
+                self.push_param(value);
+                self.current_is_sub = true;
             }
             0x20..=0x2F => {
                 if let Some(p) = self.current_param.take() {
-                    self.params.push(p);
+                    self.push_param(p);
                 }
                 self.intermediates.push(byte);
                 self.state = ParserState::CsiIntermediate;
             }
             0x40..=0x7E => {
                 if let Some(p) = self.current_param.take() {
-                    self.params.push(p);
+                    self.push_param(p);
                 }
                 return self.execute_csi(byte, state);
             }
@@ -650,7 +692,7 @@ impl VtParser {
 
             // SGR - Select Graphic Rendition
             (false, false, b'm') => {
-                self.execute_sgr(params, state);
+                self.execute_sgr(params, &self.subparams, state);
                 None
             }
 
@@ -748,21 +790,43 @@ impl VtParser {
         response
     }
 
-    fn execute_sgr(&self, params: &[u16], state: &mut TerminalState) {
+    fn execute_sgr(&self, params: &[u16], subparams: &[Vec<u16>], state: &mut TerminalState) {
         if params.is_empty() {
             state.current_attrs.reset();
             return;
         }
 
-        let mut iter = params.iter().peekable();
-
-        while let Some(&param) = iter.next() {
+        let empty: Vec<u16> = Vec::new();
+        let mut i = 0;
+        while i < params.len() {
+            let param = params[i];
+            let subs = subparams.get(i).unwrap_or(&empty);
             match param {
                 0 => state.current_attrs.reset(),
                 1 => state.current_attrs.flags |= AttrFlags::BOLD,
                 2 => state.current_attrs.flags |= AttrFlags::DIM,
                 3 => state.current_attrs.flags |= AttrFlags::ITALIC,
-                4 => state.current_attrs.flags |= AttrFlags::UNDERLINE,
+                4 => {
+                    // Underline, optionally styled via subparameter (4:0
+                    // off, 4:1 single, 4:2 double, 4:3 curly, 4:4 dotted,
+                    // 4:5 dashed)
+                    match subs.first().copied() {
+                        Some(0) => {
+                            state.current_attrs.flags &= !AttrFlags::UNDERLINE;
+                            state.current_attrs.underline_style = UnderlineStyle::Single;
+                        }
+                        style => {
+                            state.current_attrs.flags |= AttrFlags::UNDERLINE;
+                            state.current_attrs.underline_style = match style {
+                                Some(2) => UnderlineStyle::Double,
+                                Some(3) => UnderlineStyle::Curly,
+                                Some(4) => UnderlineStyle::Dotted,
+                                Some(5) => UnderlineStyle::Dashed,
+                                _ => UnderlineStyle::Single,
+                            };
+                        }
+                    }
+                }
                 5 => state.current_attrs.flags |= AttrFlags::BLINK,
                 7 => state.current_attrs.flags |= AttrFlags::INVERSE,
                 8 => state.current_attrs.flags |= AttrFlags::HIDDEN,
@@ -770,7 +834,10 @@ impl VtParser {
 
                 22 => state.current_attrs.flags &= !(AttrFlags::BOLD | AttrFlags::DIM),
                 23 => state.current_attrs.flags &= !AttrFlags::ITALIC,
-                24 => state.current_attrs.flags &= !AttrFlags::UNDERLINE,
+                24 => {
+                    state.current_attrs.flags &= !AttrFlags::UNDERLINE;
+                    state.current_attrs.underline_style = UnderlineStyle::Single;
+                }
                 25 => state.current_attrs.flags &= !AttrFlags::BLINK,
                 27 => state.current_attrs.flags &= !AttrFlags::INVERSE,
                 28 => state.current_attrs.flags &= !AttrFlags::HIDDEN,
@@ -781,24 +848,9 @@ impl VtParser {
                     state.current_attrs.fg = Color::Indexed((param - 30) as u8);
                 }
                 38 => {
-                    // Extended foreground
-                    if let Some(&mode) = iter.next() {
-                        match mode {
-                            5 => {
-                                // 256 color
-                                if let Some(&n) = iter.next() {
-                                    state.current_attrs.fg = Color::Indexed(n as u8);
-                                }
-                            }
-                            2 => {
-                                // RGB
-                                let r = iter.next().copied().unwrap_or(0) as u8;
-                                let g = iter.next().copied().unwrap_or(0) as u8;
-                                let b = iter.next().copied().unwrap_or(0) as u8;
-                                state.current_attrs.fg = Color::Rgb(r, g, b);
-                            }
-                            _ => {}
-                        }
+                    if let Some((color, consumed)) = Self::extended_color(params, i, subs) {
+                        state.current_attrs.fg = color;
+                        i += consumed;
                     }
                 }
                 39 => state.current_attrs.fg = Color::Default,
@@ -808,25 +860,21 @@ impl VtParser {
                     state.current_attrs.bg = Color::Indexed((param - 40) as u8);
                 }
                 48 => {
-                    // Extended background
-                    if let Some(&mode) = iter.next() {
-                        match mode {
-                            5 => {
-                                if let Some(&n) = iter.next() {
-                                    state.current_attrs.bg = Color::Indexed(n as u8);
-                                }
-                            }
-                            2 => {
-                                let r = iter.next().copied().unwrap_or(0) as u8;
-                                let g = iter.next().copied().unwrap_or(0) as u8;
-                                let b = iter.next().copied().unwrap_or(0) as u8;
-                                state.current_attrs.bg = Color::Rgb(r, g, b);
-                            }
-                            _ => {}
-                        }
+                    if let Some((color, consumed)) = Self::extended_color(params, i, subs) {
+                        state.current_attrs.bg = color;
+                        i += consumed;
                     }
                 }
                 49 => state.current_attrs.bg = Color::Default,
+
+                // Underline color (kitty/xterm extension)
+                58 => {
+                    if let Some((color, consumed)) = Self::extended_color(params, i, subs) {
+                        state.current_attrs.underline_color = color;
+                        i += consumed;
+                    }
+                }
+                59 => state.current_attrs.underline_color = Color::Default,
 
                 // Bright foreground
                 90..=97 => {
@@ -839,6 +887,43 @@ impl VtParser {
 
                 _ => {}
             }
+            i += 1;
+        }
+    }
+
+    /// Decode the color argument of SGR 38 / 48 / 58 at `params[i]`.
+    ///
+    /// Handles the colon form carried in `subs` (`38:5:n`, `38:2:r:g:b`,
+    /// and the ITU-T variant with a color-space id `38:2::r:g:b`) as well
+    /// as the legacy semicolon form (`38;5;n`, `38;2;r;g;b`), whose extra
+    /// arguments occupy the following main parameters. Returns the color
+    /// and how many extra MAIN parameters were consumed (0 for the colon
+    /// form).
+    fn extended_color(params: &[u16], i: usize, subs: &[u16]) -> Option<(Color, usize)> {
+        if !subs.is_empty() {
+            let color = match subs[0] {
+                5 => Color::Indexed(subs.get(1).copied().unwrap_or(0) as u8),
+                2 => {
+                    // `2:r:g:b` (3 args) or `2:<colorspace>:r:g:b` (4+ args)
+                    let rgb: &[u16] = if subs.len() >= 5 { &subs[2..5] } else { subs.get(1..4)? };
+                    Color::Rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8)
+                }
+                _ => return None,
+            };
+            return Some((color, 0));
+        }
+        match params.get(i + 1)? {
+            5 => {
+                let n = params.get(i + 2).copied().unwrap_or(0) as u8;
+                Some((Color::Indexed(n), 2))
+            }
+            2 => {
+                let r = params.get(i + 2).copied().unwrap_or(0) as u8;
+                let g = params.get(i + 3).copied().unwrap_or(0) as u8;
+                let b = params.get(i + 4).copied().unwrap_or(0) as u8;
+                Some((Color::Rgb(r, g, b), 4))
+            }
+            _ => None,
         }
     }
 
@@ -1322,6 +1407,74 @@ mod tests {
         assert!(state.modes.focus_reporting);
         feed_str(&mut parser, &mut state, "\x1b[?1004l");
         assert!(!state.modes.focus_reporting);
+    }
+
+    #[test]
+    fn sgr_underline_styles_via_subparameters() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Curly underline
+        feed_str(&mut parser, &mut state, "\x1b[4:3m");
+        assert!(state.current_attrs.flags.contains(AttrFlags::UNDERLINE));
+        assert_eq!(state.current_attrs.underline_style, UnderlineStyle::Curly);
+        // Crucially, the '3' subparameter must NOT be read as SGR 3 (italic)
+        assert!(!state.current_attrs.flags.contains(AttrFlags::ITALIC));
+
+        // 4:0 turns underline off
+        feed_str(&mut parser, &mut state, "\x1b[4:0m");
+        assert!(!state.current_attrs.flags.contains(AttrFlags::UNDERLINE));
+
+        // Plain 4 = single; 24 clears and resets style
+        feed_str(&mut parser, &mut state, "\x1b[4:5m\x1b[24m\x1b[4m");
+        assert!(state.current_attrs.flags.contains(AttrFlags::UNDERLINE));
+        assert_eq!(state.current_attrs.underline_style, UnderlineStyle::Single);
+
+        // Subparams followed by a normal parameter in one sequence
+        feed_str(&mut parser, &mut state, "\x1b[0m\x1b[4:2;31m");
+        assert_eq!(state.current_attrs.underline_style, UnderlineStyle::Double);
+        assert_eq!(state.current_attrs.fg, Color::Indexed(1));
+    }
+
+    #[test]
+    fn sgr_underline_color() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Colon form, ITU variant with empty colorspace id
+        feed_str(&mut parser, &mut state, "\x1b[58:2::255:10:20m");
+        assert_eq!(state.current_attrs.underline_color, Color::Rgb(255, 10, 20));
+
+        // Colon form, 256-color — and it must not leak into BLINK (SGR 5)
+        feed_str(&mut parser, &mut state, "\x1b[0m\x1b[58:5:196m");
+        assert_eq!(state.current_attrs.underline_color, Color::Indexed(196));
+        assert!(!state.current_attrs.flags.contains(AttrFlags::BLINK));
+
+        // Legacy semicolon form
+        feed_str(&mut parser, &mut state, "\x1b[0m\x1b[58;2;1;2;3m");
+        assert_eq!(state.current_attrs.underline_color, Color::Rgb(1, 2, 3));
+
+        // 59 resets to default (follow foreground)
+        feed_str(&mut parser, &mut state, "\x1b[59m");
+        assert_eq!(state.current_attrs.underline_color, Color::Default);
+    }
+
+    #[test]
+    fn sgr_extended_colors_colon_and_semicolon_forms() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        feed_str(&mut parser, &mut state, "\x1b[38:2:255:0:128m");
+        assert_eq!(state.current_attrs.fg, Color::Rgb(255, 0, 128));
+        feed_str(&mut parser, &mut state, "\x1b[38:5:100m");
+        assert_eq!(state.current_attrs.fg, Color::Indexed(100));
+        feed_str(&mut parser, &mut state, "\x1b[48:2::9:8:7m");
+        assert_eq!(state.current_attrs.bg, Color::Rgb(9, 8, 7));
+
+        // Legacy semicolon forms must keep working
+        feed_str(&mut parser, &mut state, "\x1b[0m\x1b[38;5;42;48;2;1;2;3m");
+        assert_eq!(state.current_attrs.fg, Color::Indexed(42));
+        assert_eq!(state.current_attrs.bg, Color::Rgb(1, 2, 3));
     }
 
     #[test]

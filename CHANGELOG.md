@@ -1,3 +1,22 @@
+## [3.2.1] - 2026-08-01
+
+### Added
+
+- **Extended underlines (SGR `4:x`, 58, 59)**: curly / double / dotted /
+  dashed underline styles and independent underline colors
+  (`58:5:n` / `58:2::r:g:b`, colon and legacy semicolon forms) are now
+  parsed per cell and re-emitted to the host terminal. nvim's LSP
+  diagnostics (curly underlines) and modern prompts render correctly in
+  Windows Terminal / WezTerm.
+
+### Fixed
+
+- **SGR colon subparameters are now parsed correctly.** Previously `:`
+  was treated like `;`, so `4:3` (curly underline) was misread as
+  "underline + italic" and `58:5:196` (underline color) accidentally
+  enabled blink. The CSI parser now tracks subparameters separately,
+  which also hardens it against other `:`-form sequences.
+
 ## [3.2.0] - 2026-08-01
 
 ### Added

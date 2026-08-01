@@ -465,7 +465,16 @@ impl Renderer {
 
         if attrs.flags.contains(AttrFlags::BOLD)          { sgr.push_str(";1"); }
         if attrs.flags.contains(AttrFlags::ITALIC)        { sgr.push_str(";3"); }
-        if attrs.flags.contains(AttrFlags::UNDERLINE)     { sgr.push_str(";4"); }
+        if attrs.flags.contains(AttrFlags::UNDERLINE) {
+            use crate::core::term::UnderlineStyle;
+            match attrs.underline_style {
+                UnderlineStyle::Single => sgr.push_str(";4"),
+                UnderlineStyle::Double => sgr.push_str(";4:2"),
+                UnderlineStyle::Curly => sgr.push_str(";4:3"),
+                UnderlineStyle::Dotted => sgr.push_str(";4:4"),
+                UnderlineStyle::Dashed => sgr.push_str(";4:5"),
+            }
+        }
         if attrs.flags.contains(AttrFlags::BLINK)         { sgr.push_str(";5"); }
         if attrs.flags.contains(AttrFlags::STRIKETHROUGH) { sgr.push_str(";9"); }
         // XOR: show reverse if either INVERSE flag or selected, but not both
@@ -491,6 +500,11 @@ impl Renderer {
                 else             { let _ = write!(sgr, ";48;5;{}", idx); }
             }
             TermColor::Rgb(r, g, b) => { let _ = write!(sgr, ";48;2;{};{};{}", r, g, b); }
+        }
+        match attrs.underline_color {
+            TermColor::Default => {}
+            TermColor::Indexed(idx) => { let _ = write!(sgr, ";58:5:{}", idx); }
+            TermColor::Rgb(r, g, b) => { let _ = write!(sgr, ";58:2::{}:{}:{}", r, g, b); }
         }
 
         sgr.push('m');

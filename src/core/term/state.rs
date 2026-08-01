@@ -1393,6 +1393,24 @@ pub struct CellAttrs {
     pub fg: Color,
     pub bg: Color,
     pub flags: AttrFlags,
+    /// Shape of the underline while `AttrFlags::UNDERLINE` is set
+    /// (SGR `4:1`..`4:5`).
+    pub underline_style: UnderlineStyle,
+    /// Underline color (SGR 58 / 59). `Color::Default` follows the
+    /// foreground color, matching kitty/xterm semantics.
+    pub underline_color: Color,
+}
+
+/// Extended underline styles (kitty's `4:x` SGR subparameters, adopted by
+/// xterm, Windows Terminal and WezTerm).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum UnderlineStyle {
+    #[default]
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
 }
 
 impl CellAttrs {
