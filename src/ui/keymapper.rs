@@ -3,9 +3,17 @@
 //! Converts key events to VT sequences for PTY input.
 
 use bitflags::bitflags;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use crate::core::term::TerminalModes;
+
+/// Kitty keyboard protocol: disambiguate escape codes (progressive
+/// enhancement bit 1).
+pub const KITTY_DISAMBIGUATE: u8 = 0b01;
+/// Kitty keyboard protocol: report event types — key releases (bit 2).
+pub const KITTY_REPORT_EVENT_TYPES: u8 = 0b10;
 
 bitflags! {
     /// Modifier keys
@@ -37,10 +45,181 @@ impl From<KeyModifiers> for Modifiers {
 pub struct KeyMapper;
 
 impl KeyMapper {
-    /// Map a crossterm KeyEvent to bytes for PTY (simplified, without modes)
-    pub fn map_key(event: &KeyEvent) -> Vec<u8> {
-        let modes = TerminalModes::default();
-        Self::map(event, &modes).unwrap_or_default()
+    /// Map a key event honoring the pane's kitty keyboard flags.
+    ///
+    /// With the disambiguate flag unset this defers to the legacy encoding
+    /// (and drops key releases, matching previous behavior). With it set,
+    /// keys that would be ambiguous in legacy encoding are reported as
+    /// `CSI code ; mods u`, and — with the report-event-types flag — key
+    /// releases of escape-coded keys are reported as `CSI code ; mods:3 u`.
+    pub fn map_with_flags(
+        event: &KeyEvent,
+        modes: &TerminalModes,
+        kitty_flags: u8,
+    ) -> Option<Vec<u8>> {
+        if kitty_flags & KITTY_DISAMBIGUATE == 0 {
+            if event.kind == KeyEventKind::Release {
+                return None;
+            }
+            return Self::map(event, modes);
+        }
+        Self::map_kitty(event, kitty_flags)
+    }
+
+    /// Kitty "disambiguate escape codes" encoding.
+    ///
+    /// Per spec: plain Enter/Tab/Backspace keep their legacy bytes (so a
+    /// shell survives a crashed client), text-producing keys (plain or
+    /// shift-only) keep sending text, functional keys keep their legacy
+    /// CSI encodings, and everything else — Esc, ctrl/alt-modified keys,
+    /// modified Enter/Tab/Backspace — becomes `CSI code ; mods u`.
+    fn map_kitty(event: &KeyEvent, flags: u8) -> Option<Vec<u8>> {
+        let mods = Modifiers::from(event.modifiers);
+        let release = event.kind == KeyEventKind::Release;
+        if release && flags & KITTY_REPORT_EVENT_TYPES == 0 {
+            return None;
+        }
+
+        match event.code {
+            KeyCode::Char(ch) => {
+                if mods.intersects(Modifiers::CTRL | Modifiers::ALT) {
+                    // Key identity is the unshifted codepoint.
+                    let code = ch.to_lowercase().next().unwrap_or(ch) as u32;
+                    Some(Self::csi_u(code, mods, release))
+                } else if release {
+                    // Text-producing keys only report releases under the
+                    // "report all keys as escape codes" flag, which wtmux
+                    // does not offer.
+                    None
+                } else {
+                    Some(Self::map_char(ch, mods))
+                }
+            }
+            KeyCode::Esc => Some(Self::csi_u(27, mods, release)),
+            KeyCode::Enter => Self::kitty_legacy_text_key(13, vec![0x0D], mods, release),
+            KeyCode::Tab => Self::kitty_legacy_text_key(9, vec![0x09], mods, release),
+            KeyCode::BackTab => {
+                Some(Self::csi_u(9, mods | Modifiers::SHIFT, release))
+            }
+            KeyCode::Backspace => Self::kitty_legacy_text_key(127, vec![0x7F], mods, release),
+
+            // Functional keys keep their (unambiguous) legacy CSI forms;
+            // DECCKM application mode is ignored while the protocol is on.
+            KeyCode::Up => Some(Self::kitty_letter_key(b'A', mods, release)),
+            KeyCode::Down => Some(Self::kitty_letter_key(b'B', mods, release)),
+            KeyCode::Right => Some(Self::kitty_letter_key(b'C', mods, release)),
+            KeyCode::Left => Some(Self::kitty_letter_key(b'D', mods, release)),
+            KeyCode::Home => Some(Self::kitty_letter_key(b'H', mods, release)),
+            KeyCode::End => Some(Self::kitty_letter_key(b'F', mods, release)),
+            KeyCode::PageUp => Some(Self::kitty_tilde_key(5, mods, release)),
+            KeyCode::PageDown => Some(Self::kitty_tilde_key(6, mods, release)),
+            KeyCode::Insert => Some(Self::kitty_tilde_key(2, mods, release)),
+            KeyCode::Delete => Some(Self::kitty_tilde_key(3, mods, release)),
+            KeyCode::F(n) => Self::kitty_function_key(n, mods, release),
+
+            _ => None,
+        }
+    }
+
+    /// `CSI code ; mods u`, with `:3` event-type suffix on release.
+    fn csi_u(code: u32, mods: Modifiers, release: bool) -> Vec<u8> {
+        let mod_field = Self::modifier_code(mods);
+        if release {
+            format!("\x1b[{};{}:3u", code, mod_field)
+        } else if mod_field > 1 {
+            format!("\x1b[{};{}u", code, mod_field)
+        } else {
+            format!("\x1b[{}u", code)
+        }
+        .into_bytes()
+    }
+
+    /// Enter / Tab / Backspace: legacy bytes when pressed plain, `CSI u`
+    /// when modified. Plain releases are not reported (their presses were
+    /// legacy bytes a client could not pair them with).
+    fn kitty_legacy_text_key(
+        code: u32,
+        legacy: Vec<u8>,
+        mods: Modifiers,
+        release: bool,
+    ) -> Option<Vec<u8>> {
+        if mods.is_empty() {
+            if release {
+                None
+            } else {
+                Some(legacy)
+            }
+        } else {
+            Some(Self::csi_u(code, mods, release))
+        }
+    }
+
+    /// Arrow / Home / End style keys: `CSI X`, `CSI 1;mods X`, or
+    /// `CSI 1;mods:3 X` on release.
+    fn kitty_letter_key(letter: u8, mods: Modifiers, release: bool) -> Vec<u8> {
+        let mod_field = Self::modifier_code(mods);
+        if release {
+            format!("\x1b[1;{}:3{}", mod_field, letter as char).into_bytes()
+        } else if mod_field > 1 {
+            format!("\x1b[1;{}{}", mod_field, letter as char).into_bytes()
+        } else {
+            vec![0x1B, b'[', letter]
+        }
+    }
+
+    /// Tilde-coded keys: `CSI n~`, `CSI n;mods~`, or `CSI n;mods:3~`.
+    fn kitty_tilde_key(code: u8, mods: Modifiers, release: bool) -> Vec<u8> {
+        let mod_field = Self::modifier_code(mods);
+        if release {
+            format!("\x1b[{};{}:3~", code, mod_field).into_bytes()
+        } else if mod_field > 1 {
+            format!("\x1b[{};{}~", code, mod_field).into_bytes()
+        } else {
+            format!("\x1b[{}~", code).into_bytes()
+        }
+    }
+
+    /// Function keys under the kitty protocol. F1/F2/F4 keep SS3 for a
+    /// plain press and the `CSI 1;mods P/Q/S` form otherwise. Modified F3
+    /// uses the kitty-specific `CSI 13;mods~` because the xterm form
+    /// (`CSI 1;mods R`) collides with the cursor position report.
+    fn kitty_function_key(n: u8, mods: Modifiers, release: bool) -> Option<Vec<u8>> {
+        let plain_press = mods.is_empty() && !release;
+        match n {
+            1 | 2 | 4 => {
+                let letter = match n {
+                    1 => b'P',
+                    2 => b'Q',
+                    _ => b'S',
+                };
+                if plain_press {
+                    Some(vec![0x1B, b'O', letter])
+                } else {
+                    Some(Self::kitty_letter_key(letter, mods, release))
+                }
+            }
+            3 => {
+                if plain_press {
+                    Some(vec![0x1B, b'O', b'R'])
+                } else {
+                    Some(Self::kitty_tilde_key(13, mods, release))
+                }
+            }
+            5..=12 => {
+                let code = match n {
+                    5 => 15,
+                    6 => 17,
+                    7 => 18,
+                    8 => 19,
+                    9 => 20,
+                    10 => 21,
+                    11 => 23,
+                    _ => 24,
+                };
+                Some(Self::kitty_tilde_key(code, mods, release))
+            }
+            _ => None,
+        }
     }
 
     /// Map a crossterm KeyEvent to bytes for PTY
@@ -353,6 +532,153 @@ mod tests {
         assert_eq!(KeyMapper::map(&event, &modes), Some(b"\x1b[15~".to_vec()));
     }
     
+    fn key_release(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new_with_kind(code, mods, KeyEventKind::Release)
+    }
+
+    #[test]
+    fn kitty_flags_zero_defers_to_legacy_and_drops_releases() {
+        let modes = TerminalModes::default();
+        let press = key_event(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_with_flags(&press, &modes, 0),
+            Some(vec![0x03])
+        );
+        let release = key_release(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(KeyMapper::map_with_flags(&release, &modes, 0), None);
+    }
+
+    #[test]
+    fn kitty_disambiguate_encodes_ambiguous_keys() {
+        let modes = TerminalModes::default();
+        let f = KITTY_DISAMBIGUATE;
+
+        // Esc becomes CSI 27 u
+        let esc = key_event(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&esc, &modes, f),
+            Some(b"\x1b[27u".to_vec())
+        );
+
+        // Ctrl+I is now distinct from Tab
+        let ctrl_i = key_event(KeyCode::Char('i'), KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_with_flags(&ctrl_i, &modes, f),
+            Some(b"\x1b[105;5u".to_vec())
+        );
+        let tab = key_event(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(KeyMapper::map_with_flags(&tab, &modes, f), Some(vec![0x09]));
+
+        // Shift+Enter / Ctrl+Enter are distinct from Enter
+        let enter = key_event(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&enter, &modes, f),
+            Some(vec![0x0D])
+        );
+        let shift_enter = key_event(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(
+            KeyMapper::map_with_flags(&shift_enter, &modes, f),
+            Some(b"\x1b[13;2u".to_vec())
+        );
+        let ctrl_enter = key_event(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_with_flags(&ctrl_enter, &modes, f),
+            Some(b"\x1b[13;5u".to_vec())
+        );
+
+        // Alt+x uses CSI u instead of the ESC prefix
+        let alt_x = key_event(KeyCode::Char('x'), KeyModifiers::ALT);
+        assert_eq!(
+            KeyMapper::map_with_flags(&alt_x, &modes, f),
+            Some(b"\x1b[120;3u".to_vec())
+        );
+
+        // Text-producing keys (plain / shift-only) still send text
+        let plain = key_event(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&plain, &modes, f),
+            Some(b"a".to_vec())
+        );
+        let shifted = key_event(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        assert_eq!(
+            KeyMapper::map_with_flags(&shifted, &modes, f),
+            Some(b"A".to_vec())
+        );
+
+        // Functional keys keep their legacy CSI encodings
+        let up = key_event(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&up, &modes, f),
+            Some(b"\x1b[A".to_vec())
+        );
+        let ctrl_up = key_event(KeyCode::Up, KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_with_flags(&ctrl_up, &modes, f),
+            Some(b"\x1b[1;5A".to_vec())
+        );
+
+        // Modified F3 avoids the CSI 1;mods R / CPR collision
+        let shift_f3 = key_event(KeyCode::F(3), KeyModifiers::SHIFT);
+        assert_eq!(
+            KeyMapper::map_with_flags(&shift_f3, &modes, f),
+            Some(b"\x1b[13;2~".to_vec())
+        );
+
+        // Without the event-types flag, releases are dropped
+        let esc_up = key_release(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(KeyMapper::map_with_flags(&esc_up, &modes, f), None);
+    }
+
+    #[test]
+    fn kitty_disambiguate_ignores_application_cursor_mode() {
+        let modes = TerminalModes {
+            application_cursor: true,
+            ..TerminalModes::default()
+        };
+        let up = key_event(KeyCode::Up, KeyModifiers::NONE);
+        // Legacy path honors DECCKM…
+        assert_eq!(
+            KeyMapper::map_with_flags(&up, &modes, 0),
+            Some(b"\x1bOA".to_vec())
+        );
+        // …the kitty path does not (fixed encodings)
+        assert_eq!(
+            KeyMapper::map_with_flags(&up, &modes, KITTY_DISAMBIGUATE),
+            Some(b"\x1b[A".to_vec())
+        );
+    }
+
+    #[test]
+    fn kitty_event_types_reports_releases_of_escape_coded_keys() {
+        let modes = TerminalModes::default();
+        let f = KITTY_DISAMBIGUATE | KITTY_REPORT_EVENT_TYPES;
+
+        let ctrl_a_up = key_release(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(
+            KeyMapper::map_with_flags(&ctrl_a_up, &modes, f),
+            Some(b"\x1b[97;5:3u".to_vec())
+        );
+
+        let esc_up = key_release(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&esc_up, &modes, f),
+            Some(b"\x1b[27;1:3u".to_vec())
+        );
+
+        let up_release = key_release(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            KeyMapper::map_with_flags(&up_release, &modes, f),
+            Some(b"\x1b[1;1:3A".to_vec())
+        );
+
+        // Text keys do not report releases without the report-all flag
+        let a_up = key_release(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(KeyMapper::map_with_flags(&a_up, &modes, f), None);
+        // Neither do plain Enter/Tab/Backspace (their presses were legacy)
+        let enter_up = key_release(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(KeyMapper::map_with_flags(&enter_up, &modes, f), None);
+    }
+
     #[test]
     fn test_mouse_encoding_x10() {
         // X10 mode: \x1b[MCbCxCy (cb + 32, x + 32, y + 32)

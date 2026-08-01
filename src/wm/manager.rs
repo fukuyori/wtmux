@@ -1059,6 +1059,13 @@ impl WindowManager {
         }
     }
 
+    /// Terminal state of the focused pane in the active tab.
+    pub fn focused_state(&self) -> Option<&crate::core::term::TerminalState> {
+        self.active_tab()?
+            .focused_pane()
+            .map(|pane| &pane.session.state)
+    }
+
     /// Mutable terminal state of the focused pane in the active tab.
     pub fn focused_state_mut(&mut self) -> Option<&mut crate::core::term::TerminalState> {
         self.active_tab_mut()?

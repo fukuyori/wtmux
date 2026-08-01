@@ -1034,6 +1034,151 @@ mod tests {
         println!("corrupted rounds: {}/5", corrupted);
     }
 
+    /// PowerShell probe used by `conpty_kitty_roundtrip_repro`: opens the
+    /// real console (CONIN$/CONOUT$ — under `cargo test` the std handles are
+    /// the harness's pipes, not the ConPTY), switches stdin to raw
+    /// VT-input mode, announces kitty sequences on the output path, then
+    /// hex-dumps whatever raw bytes arrive on the input path.
+    #[cfg(windows)]
+    const KITTY_PROBE_PS1: &str = r##"
+$ErrorActionPreference = 'Stop'
+$sig = @'
+using System;
+using System.Runtime.InteropServices;
+public static class VtProbe {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr h, out uint mode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr h, uint mode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool ReadFile(IntPtr h, byte[] buf, uint n, out uint read, IntPtr overlapped);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool WriteFile(IntPtr h, byte[] buf, uint n, out uint written, IntPtr overlapped);
+}
+'@
+Add-Type -TypeDefinition $sig
+
+# GENERIC_READ|GENERIC_WRITE; decimal because Windows PowerShell wraps
+# 0xC0000000 to a negative Int32
+$access = [uint32]3221225472
+$conin  = [VtProbe]::CreateFileW('CONIN$',  $access, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+$conout = [VtProbe]::CreateFileW('CONOUT$', $access, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+
+function EmitText([string]$s) {
+    $b = [System.Text.Encoding]::ASCII.GetBytes($s)
+    $w = 0
+    [void][VtProbe]::WriteFile($conout, $b, $b.Length, [ref]$w, [IntPtr]::Zero)
+}
+
+$mode = 0
+[void][VtProbe]::GetConsoleMode($conin, [ref]$mode)
+# raw: clear PROCESSED_INPUT|LINE_INPUT|ECHO_INPUT (0x7), set VIRTUAL_TERMINAL_INPUT (0x200)
+$mode = ($mode -band (-bnot 7)) -bor 0x200
+[void][VtProbe]::SetConsoleMode($conin, $mode)
+
+$esc = [char]27
+EmitText ("CHILD-TO-HOST[" + $esc + "[>1u" + $esc + "[?u]END`r`n")
+EmitText "READY`r`n"
+
+$buf = New-Object byte[] 512
+$hex = ''
+for ($i = 0; $i -lt 64; $i++) {
+    $n = 0
+    if (-not [VtProbe]::ReadFile($conin, $buf, $buf.Length, [ref]$n, [IntPtr]::Zero)) { break }
+    if ($n -gt 0) {
+        $hex += ((0..($n-1) | ForEach-Object { $buf[$_].ToString('X2') }) -join ' ') + ' '
+        if ($buf[0..($n-1)] -contains 90) { break }
+    }
+}
+EmitText ("HOST-TO-CHILD[" + $hex.Trim() + "]END`r`n")
+EmitText "DONE`r`n"
+Start-Sleep -Milliseconds 300
+"##;
+
+    #[cfg(windows)]
+    fn bytes_contain(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// Diagnostic harness: verify kitty keyboard protocol bytes survive the
+    /// ConPTY hop in both directions on this machine's conhost.
+    ///
+    /// - child → wtmux: the probe writes `CSI > 1 u` and `CSI ? u` to its
+    ///   console; they must reach the bytes wtmux reads from the ConPTY
+    ///   verbatim (otherwise panes can never request/query the protocol).
+    /// - wtmux → child: the test writes a kitty-encoded key
+    ///   (`CSI 97;5 u`, Ctrl+A) into the ConPTY input; the raw VT-input
+    ///   child must receive exactly those bytes.
+    ///
+    /// Run with: cargo test conpty_kitty_roundtrip_repro -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_kitty_roundtrip_repro() {
+        let dir = std::env::temp_dir().join("wtmux_conpty_repro");
+        std::fs::create_dir_all(&dir).expect("create repro dir");
+        let script_path = dir.join("kitty_probe.ps1");
+        std::fs::write(&script_path, KITTY_PROBE_PS1).expect("write probe script");
+
+        let pty = crate::core::pty::ConPty::new(
+            100,
+            30,
+            Some(&format!(
+                "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+                script_path.display()
+            )),
+        )
+        .expect("spawn conpty");
+
+        let mut captured: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 4096];
+        let start = std::time::Instant::now();
+        let mut wrote_key = false;
+        while start.elapsed().as_secs() < 60 {
+            match pty.read(&mut buf) {
+                Ok(0) => {
+                    if !pty.is_running() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Ok(n) => {
+                    captured.extend_from_slice(&buf[..n]);
+                    if !wrote_key && bytes_contain(&captured, b"READY") {
+                        // Ctrl+A in kitty encoding, then the 'Z' sentinel
+                        pty.write(b"\x1b[97;5uZ").expect("write kitty key");
+                        wrote_key = true;
+                    }
+                    if bytes_contain(&captured, b"DONE") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        std::fs::write(dir.join("captured_kitty.bin"), &captured).expect("dump capture");
+
+        let text = String::from_utf8_lossy(&captured);
+        println!("--- captured ({} bytes) ---", captured.len());
+        println!("{}", text);
+
+        let child_to_host =
+            bytes_contain(&captured, b"\x1b[>1u") && bytes_contain(&captured, b"\x1b[?u");
+        let host_to_child = text.contains("1B 5B 39 37 3B 35 75");
+        println!("child->wtmux passthrough (CSI >1u + CSI ?u): {}", child_to_host);
+        println!("wtmux->child passthrough (CSI 97;5u raw): {}", host_to_child);
+        assert!(
+            child_to_host,
+            "conhost stripped the kitty enable/query on the output path"
+        );
+        assert!(
+            host_to_child,
+            "conhost mangled the kitty key encoding on the input path"
+        );
+    }
+
     /// Closed-loop render harness: ConPTY bytes → session grid → WmRenderer
     /// output → a simulated host terminal. Compares the host terminal's final
     /// cells against the session grid to catch corruption introduced by the

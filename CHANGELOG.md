@@ -1,3 +1,35 @@
+## [3.1.0] - 2026-08-01
+
+### Added
+
+- **Kitty keyboard protocol (panes)**: applications running inside a
+  pane can now enable the kitty keyboard protocol's *disambiguate
+  escape codes* (flag 1) and *report event types* (flag 2) progressive
+  enhancements via `CSI = u` / `CSI > u` / `CSI < u`, and query support
+  with `CSI ? u`. With flag 1 active, Esc, Ctrl/Alt-modified keys and
+  modified Enter/Tab/Backspace are reported unambiguously as
+  `CSI code;mods u` (e.g. Ctrl+I vs Tab, Shift+Enter vs Enter); with
+  flag 2, key releases of escape-coded keys are reported as
+  `CSI code;mods:3 u`. Flag stacks are tracked per screen (main /
+  alternate), unsupported flag bits are masked so the query reply never
+  over-advertises. Verified to survive the ConPTY hop in both
+  directions (diagnostic harness: `conpty_kitty_roundtrip_repro`).
+  This chiefly benefits VT-input applications in panes — neovim, and
+  Linux TUIs (helix, fish 4, kakoune) inside WSL or ssh sessions.
+
+- **Nested-session guard**: launching `wtmux` inside a wtmux pane now
+  exits with an error instead of starting a nested instance (which
+  would fight over the prefix key and stack ConPTY inside ConPTY),
+  mirroring tmux's `$TMUX` check. CLI subcommands (`send-keys`,
+  `list-keys`, ...) still work inside panes. Unset the `WTMUX`
+  environment variable to force nesting.
+
+### Fixed
+
+- Multi-pane mode now honors the focused pane's terminal modes when
+  encoding key input (e.g. DECCKM application cursor keys); previously
+  it always used default modes.
+
 ## [3.0.1] - 2026-07-30
 
 ### Added

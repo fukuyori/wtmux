@@ -786,6 +786,21 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Refuse to nest. Panes inherit WTMUX=1, so its presence means this
+    // process was started inside a wtmux pane; a nested instance would
+    // fight over the prefix key and stack ConPTY inside ConPTY. CLI
+    // subcommands (send-keys, list-keys, ...) stay usable — they were
+    // dispatched above. Like tmux, unsetting the variable forces it.
+    if env::var_os("WTMUX").is_some() {
+        eprintln!("Error: wtmux is already running in this terminal (WTMUX is set).");
+        eprintln!("Nested wtmux sessions are not supported.");
+        #[cfg(windows)]
+        eprintln!("To force a nested session: Remove-Item Env:WTMUX (or `set WTMUX=` in cmd), then run wtmux again.");
+        #[cfg(not(windows))]
+        eprintln!("To force a nested session: unset WTMUX, then run wtmux again.");
+        std::process::exit(1);
+    }
+
     // Initialize logging only when --debug is specified
     if config.debug {
         if let Some(wtmux_dir) = crate::config::get_data_dir() {
@@ -1241,6 +1256,36 @@ fn run_wm_main_loop(
             match input::read()? {
                 Event::Key(key_event) => {
                     if key_event.kind != KeyEventKind::Press {
+                        // Kitty keyboard protocol (report event types):
+                        // forward key releases to the pane that requested
+                        // them. Releases never trigger wtmux keybindings
+                        // or modal UI.
+                        if key_event.kind == crossterm::event::KeyEventKind::Release {
+                            if ui.mode == UiMode::Popup {
+                                let bytes = ui.popup.as_ref().and_then(|popup| {
+                                    let state = &popup.session.state;
+                                    KeyMapper::map_with_flags(
+                                        &key_event,
+                                        &state.modes,
+                                        state.kitty_flags(),
+                                    )
+                                });
+                                if let (Some(bytes), Some(popup)) = (bytes, ui.popup.as_mut()) {
+                                    let _ = popup.session.write(&bytes);
+                                }
+                            } else if ui.mode == UiMode::Normal && !wm.prefix_mode {
+                                let bytes = wm.focused_state().and_then(|state| {
+                                    KeyMapper::map_with_flags(
+                                        &key_event,
+                                        &state.modes,
+                                        state.kitty_flags(),
+                                    )
+                                });
+                                if let Some(bytes) = bytes {
+                                    let _ = wm.write(&bytes);
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -1297,7 +1342,13 @@ fn run_wm_main_loop(
                             continue;
                         }
                         if let Some(popup) = ui.popup.as_mut() {
-                            let bytes = KeyMapper::map_key(&key_event);
+                            let state = &popup.session.state;
+                            let bytes = KeyMapper::map_with_flags(
+                                &key_event,
+                                &state.modes,
+                                state.kitty_flags(),
+                            )
+                            .unwrap_or_default();
                             if !bytes.is_empty() {
                                 // Typing returns the view to the live bottom,
                                 // like regular panes
@@ -2106,8 +2157,18 @@ fn run_wm_main_loop(
                     wm.scroll_to_bottom();
                     wm.clear_selection();
 
-                    // Send key to focused pane
-                    let bytes = KeyMapper::map_key(&key_event);
+                    // Send key to focused pane, honoring its terminal modes
+                    // and kitty keyboard flags
+                    let bytes = wm
+                        .focused_state()
+                        .and_then(|state| {
+                            KeyMapper::map_with_flags(
+                                &key_event,
+                                &state.modes,
+                                state.kitty_flags(),
+                            )
+                        })
+                        .unwrap_or_default();
                     if !bytes.is_empty() {
                         let _ = wm.write(&bytes);
                     }
@@ -3021,8 +3082,18 @@ fn run_main_loop(
             
             match evt {
                 Event::Key(key_event) => {
-                    // Only process key press events
+                    // Only process key press events; key releases are
+                    // forwarded when the pane enabled kitty event reporting
                     if key_event.kind != KeyEventKind::Press {
+                        if key_event.kind == crossterm::event::KeyEventKind::Release {
+                            if let Some(bytes) = KeyMapper::map_with_flags(
+                                &key_event,
+                                &session.state.modes,
+                                session.state.kitty_flags(),
+                            ) {
+                                let _ = session.write(&bytes);
+                            }
+                        }
                         continue;
                     }
 
@@ -3106,7 +3177,11 @@ fn run_main_loop(
                     }
 
                     // Map key to bytes and send to PTY
-                    if let Some(bytes) = KeyMapper::map(&key_event, &session.state.modes) {
+                    if let Some(bytes) = KeyMapper::map_with_flags(
+                        &key_event,
+                        &session.state.modes,
+                        session.state.kitty_flags(),
+                    ) {
                         if let Err(e) = session.write(&bytes) {
                             error!("Failed to write to PTY: {}", e);
                         }

@@ -35,6 +35,8 @@ pub enum Response {
     DeviceAttributes,
     /// Secondary device attributes response
     SecondaryDeviceAttributes,
+    /// Kitty keyboard protocol flag report: ESC [ ? flags u
+    KittyKeyboardFlags(u8),
 }
 
 impl Response {
@@ -50,6 +52,9 @@ impl Response {
             Response::SecondaryDeviceAttributes => {
                 // VT220 response
                 b"\x1b[>1;10;0c".to_vec()
+            }
+            Response::KittyKeyboardFlags(flags) => {
+                format!("\x1b[?{}u", flags).into_bytes()
             }
         }
     }
@@ -455,6 +460,31 @@ impl VtParser {
         let is_private = self.intermediates.contains(&b'?');
         let is_gt = self.intermediates.contains(&b'>');
         let params = &self.params;
+
+        // Kitty keyboard protocol: CSI ? u (query), CSI = flags ; mode u
+        // (set), CSI > flags u (push), CSI < n u (pop). Plain `CSI u`
+        // (no prefix) stays SCORC — restore cursor — handled below.
+        if final_byte == b'u' && !self.intermediates.is_empty() {
+            let response = if is_private {
+                Some(Response::KittyKeyboardFlags(state.kitty_flags()))
+            } else if self.intermediates.contains(&b'=') {
+                let flags = params.first().copied().unwrap_or(0).min(255) as u8;
+                let mode = params.get(1).copied().unwrap_or(1);
+                state.kitty_set(flags, mode);
+                None
+            } else if is_gt {
+                let flags = params.first().copied().unwrap_or(0).min(255) as u8;
+                state.kitty_push(flags);
+                None
+            } else if self.intermediates.contains(&b'<') {
+                state.kitty_pop(params.first().copied().unwrap_or(1).max(1));
+                None
+            } else {
+                None
+            };
+            self.state = ParserState::Ground;
+            return response;
+        }
 
         let response = match (is_private, is_gt, final_byte) {
             // Cursor movement
@@ -1147,6 +1177,92 @@ mod tests {
         let first_cell = &state.active_screen().rows[0].cells[0];
         assert!(first_cell.grapheme.is_empty(), "unexpected char leaked: {:?}", first_cell.grapheme);
         assert_eq!(state.active_cursor().col, 0);
+    }
+
+    fn feed_str(parser: &mut VtParser, state: &mut TerminalState, s: &str) -> Vec<Response> {
+        let mut responses = Vec::new();
+        for byte in s.bytes() {
+            if let Some(r) = parser.feed(byte, state) {
+                responses.push(r);
+            }
+        }
+        responses
+    }
+
+    #[test]
+    fn kitty_keyboard_push_pop_and_query() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Query with no flags set → CSI ? 0 u
+        let r = feed_str(&mut parser, &mut state, "\x1b[?u");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].to_bytes(), b"\x1b[?0u");
+
+        // Push disambiguate (1), then disambiguate+event-types (3)
+        feed_str(&mut parser, &mut state, "\x1b[>1u");
+        assert_eq!(state.kitty_flags(), 1);
+        feed_str(&mut parser, &mut state, "\x1b[>3u");
+        assert_eq!(state.kitty_flags(), 3);
+        let r = feed_str(&mut parser, &mut state, "\x1b[?u");
+        assert_eq!(r[0].to_bytes(), b"\x1b[?3u");
+
+        // Pop once → back to 1; pop past the bottom → 0
+        feed_str(&mut parser, &mut state, "\x1b[<u");
+        assert_eq!(state.kitty_flags(), 1);
+        feed_str(&mut parser, &mut state, "\x1b[<10u");
+        assert_eq!(state.kitty_flags(), 0);
+    }
+
+    #[test]
+    fn kitty_keyboard_set_modes() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Mode 1 (default): replace
+        feed_str(&mut parser, &mut state, "\x1b[=1u");
+        assert_eq!(state.kitty_flags(), 1);
+        // Mode 2: OR bits in
+        feed_str(&mut parser, &mut state, "\x1b[=2;2u");
+        assert_eq!(state.kitty_flags(), 3);
+        // Mode 3: clear bits
+        feed_str(&mut parser, &mut state, "\x1b[=1;3u");
+        assert_eq!(state.kitty_flags(), 2);
+        // Unsupported bits are masked out (8 = report-all-keys)
+        feed_str(&mut parser, &mut state, "\x1b[=11;1u");
+        assert_eq!(state.kitty_flags(), 3);
+    }
+
+    #[test]
+    fn kitty_keyboard_stacks_are_per_screen() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        feed_str(&mut parser, &mut state, "\x1b[>1u");
+        assert_eq!(state.kitty_flags(), 1);
+
+        // Enter the alternate screen: it has its own (empty) stack
+        feed_str(&mut parser, &mut state, "\x1b[?1049h");
+        assert_eq!(state.kitty_flags(), 0);
+        feed_str(&mut parser, &mut state, "\x1b[>3u");
+        assert_eq!(state.kitty_flags(), 3);
+
+        // Back to the main screen: its stack is untouched
+        feed_str(&mut parser, &mut state, "\x1b[?1049l");
+        assert_eq!(state.kitty_flags(), 1);
+    }
+
+    #[test]
+    fn plain_csi_u_still_restores_cursor() {
+        let mut state = TerminalState::new(80, 24);
+        let mut parser = VtParser::new();
+
+        // Save at (5,10), move away, restore via SCORC (CSI u, no prefix)
+        feed_str(&mut parser, &mut state, "\x1b[5;10H\x1b[s\x1b[1;1H\x1b[u");
+        assert_eq!(state.active_cursor().row, 4);
+        assert_eq!(state.active_cursor().col, 9);
+        // And it must not have touched the kitty stack
+        assert_eq!(state.kitty_flags(), 0);
     }
 
     #[test]

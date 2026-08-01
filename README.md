@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -33,6 +33,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 - **Encoding support** - UTF-8 and Shift-JIS (CP932, Windows only)
 - **Robust rendering** - Thread-safe output with synchronized updates (v0.4.0)
 - **Mouse passthrough** - TUI apps receive mouse events (hold Shift for wtmux selection)
+- **Kitty keyboard protocol** - panes support the *disambiguate escape codes* and *report event types* enhancements (`CSI u`), so apps like neovim, helix or fish (in WSL/ssh) can distinguish Ctrl+I from Tab, Shift+Enter from Enter, and receive key-release events
 - **Nerd Font / Powerline support** - oh-my-posh, Starship, and Powerline prompts render correctly
 - **Shell integration** - OSC 133/633 for accurate command history with modern prompts
 

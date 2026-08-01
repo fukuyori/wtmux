@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -31,6 +31,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 - **複数シェル対応** - Windowsはcmd.exe、PowerShell、PowerShell 7、WSL。macOS / Linuxは `$SHELL`（bash、zsh、fishなど）
 - **エンコーディング対応** - UTF-8とShift-JIS（CP932、Windowsのみ）
 - **マウスパススルー** - TUIアプリにマウスイベントを転送（Shiftでwtmuxの選択を使用）
+- **Kitty キーボードプロトコル** - ペイン内アプリが *disambiguate escape codes* / *report event types* 拡張（`CSI u`）を利用可能。neovim や WSL/ssh 内の helix・fish などが Ctrl+I と Tab、Shift+Enter と Enter を区別でき、キーリリースイベントも受け取れます
 
 ## スクリーンショット
 

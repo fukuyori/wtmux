@@ -37,7 +37,29 @@ pub struct TerminalState {
     /// cleared. Consumed by the pane activity monitor to flag panes whose
     /// program (e.g. an AI agent) is asking for attention.
     pub bell: bool,
+    /// Kitty keyboard protocol flag stacks (CSI = / > / < / ? u).
+    pub kitty_keyboard: KittyKeyboardState,
 }
+
+/// Kitty keyboard protocol progressive-enhancement flag stacks.
+///
+/// The spec requires the main and alternate screens to track their flags
+/// independently, so there is one stack per screen. An empty stack means
+/// "no enhancements" (flags 0, i.e. legacy encoding).
+#[derive(Clone, Debug, Default)]
+pub struct KittyKeyboardState {
+    primary: Vec<u8>,
+    alternate: Vec<u8>,
+}
+
+/// Progressive-enhancement bits wtmux honors: 1 = disambiguate escape
+/// codes, 2 = report event types. Unsupported bits are masked out on
+/// set/push so the `CSI ? u` reply never advertises behavior the key
+/// encoder does not implement.
+pub const KITTY_SUPPORTED_FLAGS: u8 = 0b0000_0011;
+
+/// Push depth limit; pushing beyond it evicts the oldest entry, per spec.
+const KITTY_STACK_LIMIT: usize = 8;
 
 /// Text selection
 #[derive(Clone, Debug)]
@@ -72,6 +94,7 @@ impl TerminalState {
             shell_integration: ShellIntegration::default(),
             keystroke_tracker: KeystrokeTracker::default(),
             bell: false,
+            kitty_keyboard: KittyKeyboardState::default(),
         }
     }
 
@@ -104,6 +127,62 @@ impl TerminalState {
             &mut self.alternate_cursor
         } else {
             &mut self.primary_cursor
+        }
+    }
+
+    fn kitty_stack_mut(&mut self) -> &mut Vec<u8> {
+        if self.using_alternate {
+            &mut self.kitty_keyboard.alternate
+        } else {
+            &mut self.kitty_keyboard.primary
+        }
+    }
+
+    /// Kitty keyboard flags currently in effect for the active screen
+    /// (0 = legacy encoding).
+    pub fn kitty_flags(&self) -> u8 {
+        let stack = if self.using_alternate {
+            &self.kitty_keyboard.alternate
+        } else {
+            &self.kitty_keyboard.primary
+        };
+        stack.last().copied().unwrap_or(0)
+    }
+
+    /// `CSI > flags u` — push a new flag entry onto the active screen's stack.
+    pub fn kitty_push(&mut self, flags: u8) {
+        let stack = self.kitty_stack_mut();
+        if stack.len() >= KITTY_STACK_LIMIT {
+            stack.remove(0);
+        }
+        stack.push(flags & KITTY_SUPPORTED_FLAGS);
+    }
+
+    /// `CSI < n u` — pop `n` entries; popping past the bottom leaves the
+    /// screen with flags 0 (empty stack).
+    pub fn kitty_pop(&mut self, n: u16) {
+        let stack = self.kitty_stack_mut();
+        for _ in 0..n.max(1) {
+            if stack.pop().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// `CSI = flags ; mode u` — modify the current entry in place.
+    /// Mode 1 replaces the flags, 2 sets the given bits, 3 clears them.
+    pub fn kitty_set(&mut self, flags: u8, mode: u16) {
+        let flags = flags & KITTY_SUPPORTED_FLAGS;
+        let stack = self.kitty_stack_mut();
+        if stack.is_empty() {
+            stack.push(0);
+        }
+        let top = stack.last_mut().expect("stack non-empty");
+        match mode {
+            1 => *top = flags,
+            2 => *top |= flags,
+            3 => *top &= !flags,
+            _ => {}
         }
     }
 
