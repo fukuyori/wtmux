@@ -2,7 +2,6 @@
 /target/
 /target-*/
 /test/
-/images/
 
 # Cargo.lock is included for binary crates
 # Cargo.lock

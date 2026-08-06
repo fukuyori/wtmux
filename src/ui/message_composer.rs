@@ -10,7 +10,7 @@
 use crate::core::term::width::char_width;
 use crate::wm::{PaneId, TabId};
 
-/// Sent messages kept for Ctrl+P/N recall.
+/// Sent and cancelled messages kept for Ctrl+P/N recall.
 const HISTORY_LIMIT: usize = 100;
 
 /// The pane a composed message will be sent to.
@@ -41,14 +41,16 @@ pub struct MessageComposer {
     pub cursor_row: usize,
     /// Cursor position within the line, in chars
     pub cursor_col: usize,
-    /// Messages sent this session, oldest first (kept across open/close)
+    /// Messages sent or cancelled this session, oldest first
     pub history: Vec<String>,
     /// Position while browsing history with Ctrl+P/N; `None` = editing
     history_index: Option<usize>,
     /// Buffer stashed when history browsing started
     stashed_draft: Option<Vec<String>>,
-    /// Unsent input preserved across close/open
+    /// Unsent input preserved only while a send result is pending
     draft: Option<Vec<String>>,
+    /// Fixed end of a Shift+Arrow selection; the cursor is the moving end
+    selection_anchor: Option<(usize, usize)>,
 }
 
 impl MessageComposer {
@@ -56,8 +58,8 @@ impl MessageComposer {
         Self::default()
     }
 
-    /// Open the composer targeting the given pane. An unsent draft from a
-    /// previous cancel is restored; otherwise the buffer starts empty.
+    /// Open the composer targeting the given pane. A failed-send draft is
+    /// restored; after a normal cancel the buffer starts empty.
     pub fn open(&mut self, tab_id: TabId, pane_id: PaneId, label: String) {
         self.target = Some(ComposeTarget {
             tab_id,
@@ -70,14 +72,21 @@ impl MessageComposer {
         }
         self.history_index = None;
         self.stashed_draft = None;
+        self.selection_anchor = None;
         self.move_to_end();
     }
 
-    /// Close the composer, preserving any unsent input as a draft for the
-    /// next open. The sent-message history is kept.
+    /// Close the composer. Cancelling an open composer records its unfinished
+    /// text in history and starts a fresh message next time. When the target
+    /// was already taken for sending, preserve the text only until the send
+    /// succeeds so a failed send can still be retried.
     pub fn close(&mut self) {
-        self.target = None;
-        if self.lines.iter().any(|line| !line.is_empty()) {
+        let was_cancelled = self.target.take().is_some();
+        let text = self.text();
+        if was_cancelled {
+            self.record_history(&text);
+            self.draft = None;
+        } else if self.lines.iter().any(|line| !line.is_empty()) {
             self.draft = Some(std::mem::take(&mut self.lines));
         }
         self.lines.clear();
@@ -85,6 +94,7 @@ impl MessageComposer {
         self.cursor_col = 0;
         self.history_index = None;
         self.stashed_draft = None;
+        self.selection_anchor = None;
     }
 
     /// Take the target out of the composer (used on send).
@@ -109,6 +119,7 @@ impl MessageComposer {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        self.delete_selection();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -132,6 +143,7 @@ impl MessageComposer {
     }
 
     pub fn insert_newline(&mut self) {
+        self.delete_selection();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -147,6 +159,9 @@ impl MessageComposer {
     /// Delete the char before the cursor; at column 0, join with the
     /// previous line.
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor_col > 0 {
             let line = &mut self.lines[self.cursor_row];
             let at = Self::byte_at(line, self.cursor_col - 1);
@@ -163,6 +178,9 @@ impl MessageComposer {
     /// Delete the char under the cursor; at end of line, join with the
     /// next line.
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         let len = self.line_len(self.cursor_row);
         if self.cursor_col < len {
             let line = &mut self.lines[self.cursor_row];
@@ -175,6 +193,16 @@ impl MessageComposer {
     }
 
     pub fn move_left(&mut self) {
+        if let Some((start, _)) = self.selection_range() {
+            (self.cursor_row, self.cursor_col) = start;
+            self.selection_anchor = None;
+            return;
+        }
+        self.selection_anchor = None;
+        self.move_left_raw();
+    }
+
+    fn move_left_raw(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         } else if self.cursor_row > 0 {
@@ -184,6 +212,16 @@ impl MessageComposer {
     }
 
     pub fn move_right(&mut self) {
+        if let Some((_, end)) = self.selection_range() {
+            (self.cursor_row, self.cursor_col) = end;
+            self.selection_anchor = None;
+            return;
+        }
+        self.selection_anchor = None;
+        self.move_right_raw();
+    }
+
+    fn move_right_raw(&mut self) {
         if self.cursor_col < self.line_len(self.cursor_row) {
             self.cursor_col += 1;
         } else if self.cursor_row + 1 < self.lines.len() {
@@ -193,6 +231,11 @@ impl MessageComposer {
     }
 
     pub fn move_up(&mut self) {
+        self.selection_anchor = None;
+        self.move_up_raw();
+    }
+
+    fn move_up_raw(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
             self.cursor_col = self.cursor_col.min(self.line_len(self.cursor_row));
@@ -200,6 +243,11 @@ impl MessageComposer {
     }
 
     pub fn move_down(&mut self) {
+        self.selection_anchor = None;
+        self.move_down_raw();
+    }
+
+    fn move_down_raw(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
             self.cursor_col = self.cursor_col.min(self.line_len(self.cursor_row));
@@ -207,11 +255,84 @@ impl MessageComposer {
     }
 
     pub fn move_home(&mut self) {
+        self.selection_anchor = None;
         self.cursor_col = 0;
     }
 
     pub fn move_end(&mut self) {
+        self.selection_anchor = None;
         self.cursor_col = self.line_len(self.cursor_row);
+    }
+
+    pub fn select_left(&mut self) {
+        self.begin_selection();
+        self.move_left_raw();
+        self.finish_selection();
+    }
+
+    pub fn select_right(&mut self) {
+        self.begin_selection();
+        self.move_right_raw();
+        self.finish_selection();
+    }
+
+    pub fn select_up(&mut self) {
+        self.begin_selection();
+        self.move_up_raw();
+        self.finish_selection();
+    }
+
+    pub fn select_down(&mut self) {
+        self.begin_selection();
+        self.move_down_raw();
+        self.finish_selection();
+    }
+
+    fn begin_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some((self.cursor_row, self.cursor_col));
+        }
+    }
+
+    fn finish_selection(&mut self) {
+        if self.selection_anchor == Some((self.cursor_row, self.cursor_col)) {
+            self.selection_anchor = None;
+        }
+    }
+
+    /// Ordered selection endpoints. The end position is exclusive.
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.selection_anchor?;
+        let cursor = (self.cursor_row, self.cursor_col);
+        if anchor == cursor {
+            None
+        } else if anchor < cursor {
+            Some((anchor, cursor))
+        } else {
+            Some((cursor, anchor))
+        }
+    }
+
+    /// Whether the character at `(row, col)` belongs to the selection.
+    pub fn is_selected(&self, row: usize, col: usize) -> bool {
+        self.selection_range()
+            .is_some_and(|(start, end)| (row, col) >= start && (row, col) < end)
+    }
+
+    /// Delete the current selection and place the cursor at its start.
+    fn delete_selection(&mut self) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let start_byte = Self::byte_at(&self.lines[start.0], start.1);
+        let end_byte = Self::byte_at(&self.lines[end.0], end.1);
+        let prefix = self.lines[start.0][..start_byte].to_string();
+        let suffix = self.lines[end.0][end_byte..].to_string();
+        self.lines
+            .splice(start.0..=end.0, [format!("{prefix}{suffix}")]);
+        (self.cursor_row, self.cursor_col) = start;
+        self.selection_anchor = None;
+        true
     }
 
     /// Clear the buffer, keeping the target (Ctrl+U).
@@ -219,6 +340,7 @@ impl MessageComposer {
         self.lines = vec![String::new()];
         self.cursor_row = 0;
         self.cursor_col = 0;
+        self.selection_anchor = None;
     }
 
     fn move_to_end(&mut self) {
@@ -294,13 +416,17 @@ impl MessageComposer {
     /// Record a successfully sent message and drop the pending draft.
     /// Consecutive duplicates are skipped.
     pub fn record_sent(&mut self, text: &str) {
+        self.record_history(text);
+        self.draft = None;
+    }
+
+    fn record_history(&mut self, text: &str) {
         if !text.trim().is_empty() && self.history.last().map(String::as_str) != Some(text) {
             self.history.push(text.to_string());
             if self.history.len() > HISTORY_LIMIT {
                 self.history.remove(0);
             }
         }
-        self.draft = None;
     }
 
     /// Current history browse position as `(index, total)`, if browsing.
@@ -336,6 +462,7 @@ impl MessageComposer {
                 if self.lines.is_empty() {
                     self.lines.push(String::new());
                 }
+                self.selection_anchor = None;
                 self.move_to_end();
             }
         }
@@ -344,6 +471,7 @@ impl MessageComposer {
     fn load_history(&mut self, index: usize) {
         self.history_index = Some(index);
         self.lines = self.history[index].split('\n').map(str::to_string).collect();
+        self.selection_anchor = None;
         self.move_to_end();
     }
 }
@@ -413,6 +541,48 @@ mod tests {
         // Down clamps the column to the shorter line
         c.move_down();
         assert_eq!((c.cursor_row, c.cursor_col), (1, 2));
+    }
+
+    #[test]
+    fn shift_arrows_extend_and_shrink_selection_across_lines() {
+        let mut c = open_composer();
+        c.insert_str("ab\ncd");
+
+        c.select_left();
+        assert_eq!(c.selection_range(), Some(((1, 1), (1, 2))));
+        assert!(c.is_selected(1, 1));
+
+        c.select_up();
+        assert_eq!(c.selection_range(), Some(((0, 1), (1, 2))));
+        assert!(c.is_selected(0, 1));
+        assert!(c.is_selected(0, 2)); // line break after "ab"
+        assert!(c.is_selected(1, 0));
+
+        c.select_down();
+        assert_eq!(c.selection_range(), Some(((1, 1), (1, 2))));
+        c.select_right();
+        assert_eq!(c.selection_range(), None);
+    }
+
+    #[test]
+    fn typing_and_deletion_replace_selected_text() {
+        let mut c = open_composer();
+        c.insert_str("hello");
+        c.move_left();
+        c.move_left();
+        c.select_left();
+        c.select_left();
+        c.insert_char('X');
+        assert_eq!(c.text(), "hXlo");
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 2));
+        assert_eq!(c.selection_range(), None);
+
+        c.clear();
+        c.insert_str("ab\ncd");
+        c.select_up();
+        c.backspace();
+        assert_eq!(c.text(), "ab");
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 2));
     }
 
     #[test]
@@ -524,18 +694,32 @@ mod tests {
     }
 
     #[test]
-    fn close_preserves_unsent_draft_until_sent() {
+    fn cancel_records_unfinished_text_and_reopens_empty() {
         let mut c = open_composer();
         c.insert_str("unsent\ndraft");
         c.close();
-        c.open(1, 2, "1:main · 1: agent".to_string());
-        assert_eq!(c.text(), "unsent\ndraft");
-        assert_eq!((c.cursor_row, c.cursor_col), (1, 5));
+        assert_eq!(c.history, vec!["unsent\ndraft"]);
 
-        // Sending clears the draft; the next open starts empty
-        c.close();
-        c.record_sent("unsent\ndraft");
         c.open(1, 2, "1:main · 1: agent".to_string());
         assert_eq!(c.text(), "");
+        c.history_prev();
+        assert_eq!(c.text(), "unsent\ndraft");
+    }
+
+    #[test]
+    fn failed_send_draft_is_restored_until_send_succeeds() {
+        let mut c = open_composer();
+        c.insert_str("retry me");
+        let target = c.take_target().unwrap();
+        c.close();
+        c.open(target.tab_id, target.pane_id, target.label.clone());
+        assert_eq!(c.text(), "retry me");
+
+        c.take_target();
+        c.close();
+        c.record_sent("retry me");
+        c.open(1, 2, "1:main · 1: agent".to_string());
+        assert_eq!(c.text(), "");
+        assert_eq!(c.history, vec!["retry me"]);
     }
 }

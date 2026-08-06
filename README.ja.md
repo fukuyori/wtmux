@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -39,16 +39,9 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 ## スクリーンショット
 
-```
-┌─[0: cmd]─────────────────┬─[1: pwsh]────────────────┐
-│ C:\Users\user>           │ PS C:\Users\user>        │
-│                          │                          │
-│                          ├──────────────────────────┤
-│                          │ user@wsl:~$              │
-│                          │                          │
-└──────────────────────────┴──────────────────────────┘
- [0] cmd [1] pwsh* [2] wsl                    tokyo-night
-```
+![Claude Code と OpenAI Codex を 3 ペインで実行している wtmux](images/screenshot1.png)
+
+![別ペインへの入力を送信する wtmux のメッセージコンポーザー](images/screenshot2.png)
 
 ## 動作要件
 

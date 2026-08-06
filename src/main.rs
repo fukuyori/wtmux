@@ -1461,10 +1461,34 @@ fn run_wm_main_loop(
                             }
                             KeyCode::Backspace => ui.message_composer.backspace(),
                             KeyCode::Delete => ui.message_composer.delete(),
-                            KeyCode::Left => ui.message_composer.move_left(),
-                            KeyCode::Right => ui.message_composer.move_right(),
-                            KeyCode::Up => ui.message_composer.move_up(),
-                            KeyCode::Down => ui.message_composer.move_down(),
+                            KeyCode::Left => {
+                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_left();
+                                } else {
+                                    ui.message_composer.move_left();
+                                }
+                            }
+                            KeyCode::Right => {
+                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_right();
+                                } else {
+                                    ui.message_composer.move_right();
+                                }
+                            }
+                            KeyCode::Up => {
+                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_up();
+                                } else {
+                                    ui.message_composer.move_up();
+                                }
+                            }
+                            KeyCode::Down => {
+                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_down();
+                                } else {
+                                    ui.message_composer.move_down();
+                                }
+                            }
                             KeyCode::Home => ui.message_composer.move_home(),
                             KeyCode::End => ui.message_composer.move_end(),
                             KeyCode::Char('u')

@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -43,16 +43,9 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 ## Screenshots
 
-```
-┌─[0: cmd]─────────────────┬─[1: pwsh]────────────────┐
-│ C:\Users\user>           │ PS C:\Users\user>        │
-│                          │                          │
-│                          ├──────────────────────────┤
-│                          │ user@wsl:~$              │
-│                          │                          │
-└──────────────────────────┴──────────────────────────┘
- [0] cmd [1] pwsh* [2] wsl                    tokyo-night
-```
+![wtmux running Claude Code and OpenAI Codex in a three-pane layout](images/screenshot1.png)
+
+![wtmux message composer broadcasting input to another pane](images/screenshot2.png)
 
 ## Requirements
 

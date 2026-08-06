@@ -1,3 +1,18 @@
+## [3.2.4] - 2026-08-06
+
+### Added
+
+- **Shift+Arrow selection in the message composer**: selections can span
+  multiple lines, are highlighted in the popup, and are replaced by typing,
+  Enter, Backspace, Delete, or pasted text.
+
+### Fixed
+
+- **Cancelling a message no longer restores it on the next open**: Esc now
+  stores non-empty unfinished text in the composer's Ctrl+P/N history and the
+  next message starts empty. A message whose send failed is still restored so
+  it can be retried.
+
 ## [3.2.3] - 2026-08-06
 
 ### Added

@@ -785,20 +785,74 @@ impl WmRenderer {
         // IME preedit text appears inline at the right spot.
         for row in 0..body_h {
             let index = first_visible + row;
-            let display: String = rows
-                .get(index)
-                .and_then(|wrow| {
-                    composer.lines.get(wrow.line).map(|line| {
-                        line.chars()
-                            .skip(wrow.start)
-                            .take(wrow.end - wrow.start)
-                            .collect()
-                    })
-                })
-                .unwrap_or_default();
-            let padding = inner_width.saturating_sub(str_display_width(&display));
-            execute!(stdout, MoveTo(start_x as u16, (start_y + 1 + row) as u16))?;
-            write!(stdout, "│ {}{:padding$} │", display, "", padding = padding)?;
+            execute!(
+                stdout,
+                MoveTo(start_x as u16, (start_y + 1 + row) as u16),
+                SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                SetForegroundColor(cs.selector_fg.to_crossterm())
+            )?;
+            write!(stdout, "│ ")?;
+
+            let mut display_width = 0;
+            let mut selection_color = false;
+            if let Some(wrow) = rows.get(index) {
+                if let Some(line) = composer.lines.get(wrow.line) {
+                    for (offset, ch) in line
+                        .chars()
+                        .skip(wrow.start)
+                        .take(wrow.end - wrow.start)
+                        .enumerate()
+                    {
+                        let selected = composer.is_selected(wrow.line, wrow.start + offset);
+                        if selected != selection_color {
+                            if selected {
+                                execute!(
+                                    stdout,
+                                    SetBackgroundColor(cs.selector_selected_bg.to_crossterm()),
+                                    SetForegroundColor(cs.selector_selected_fg.to_crossterm())
+                                )?;
+                            } else {
+                                execute!(
+                                    stdout,
+                                    SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                                    SetForegroundColor(cs.selector_fg.to_crossterm())
+                                )?;
+                            }
+                            selection_color = selected;
+                        }
+                        write!(stdout, "{ch}")?;
+                        display_width += char_width(ch);
+                    }
+
+                    // Represent a selected line break with one highlighted
+                    // space so Shift+Left/Right across lines is visible.
+                    if wrow.end == line.chars().count()
+                        && wrow.line + 1 < composer.lines.len()
+                        && composer.is_selected(wrow.line, wrow.end)
+                        && display_width < inner_width
+                    {
+                        if !selection_color {
+                            execute!(
+                                stdout,
+                                SetBackgroundColor(cs.selector_selected_bg.to_crossterm()),
+                                SetForegroundColor(cs.selector_selected_fg.to_crossterm())
+                            )?;
+                            selection_color = true;
+                        }
+                        write!(stdout, " ")?;
+                        display_width += 1;
+                    }
+                }
+            }
+            if selection_color {
+                execute!(
+                    stdout,
+                    SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                    SetForegroundColor(cs.selector_fg.to_crossterm())
+                )?;
+            }
+            let padding = inner_width.saturating_sub(display_width);
+            write!(stdout, "{:padding$} │", "", padding = padding)?;
         }
 
         // Screen position of the text cursor within the box
@@ -826,7 +880,7 @@ impl WmRenderer {
         }
         write!(stdout, "┤")?;
 
-        let help = "Ctrl+Enter/Ctrl+S:Send Enter:Newline Ctrl+V:Paste Ctrl+P/N:History Esc:Cancel";
+        let help = "Ctrl+Enter/S:Send Enter:Newline Shift+Arrows:Select Esc:Close";
         let help = truncate_to_display_width(help, box_width.saturating_sub(3));
         let help_width = str_display_width(&help);
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
