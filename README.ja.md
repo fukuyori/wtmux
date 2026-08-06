@@ -6,6 +6,8 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
 [![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
+[![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
+
 [English README](README.md)
 
 ## 3.0.0 の主な変更
@@ -57,6 +59,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 **Windows**
 
+- **Microsoft Store** — [wtmuxをダウンロード](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 - **インストーラー** (`wtmux-x.x.x-setup.exe`) - 一般ユーザー向け推奨
 - **ポータブル版** (`wtmux-x.x.x-portable-x64.zip`) - インストール不要、展開して実行するだけ
 - **MSI** (`wtmux-x.x.x-x64.msi`) - 企業展開向け

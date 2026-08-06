@@ -6,6 +6,8 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
 [![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
+[![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
+
 [日本語版 README](README.ja.md)
 
 ## 3.0.0 Highlights
@@ -61,6 +63,7 @@ Download from the [Releases](https://github.com/fukuyori/wtmux/releases) page:
 
 **Windows**
 
+- **Microsoft Store** — [Download wtmux](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 - **Installer** (`wtmux-x.x.x-setup.exe`) - Recommended for most users
 - **Portable** (`wtmux-x.x.x-portable-x64.zip`) - No installation required, just extract and run
 - **MSI** (`wtmux-x.x.x-x64.msi`) - For enterprise deployment
