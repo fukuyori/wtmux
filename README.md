@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [日本語版 README](README.ja.md)
 
@@ -247,6 +247,7 @@ switch to it, or click outside the popup to close it.
 | `Ctrl+B, q` | Show pane numbers (then 0-9 to select) |
 | `Ctrl+B, {` | Swap with previous pane |
 | `Ctrl+B, }` | Swap with next pane |
+| `Ctrl+B, .` | Rename pane (empty name restores the default) |
 
 ### Copy Mode
 
@@ -296,6 +297,7 @@ commands (tmux abbreviations in parentheses):
 | `next-window` / `previous-window` / `last-window` (`next` / `prev` / `last`) | Switch window |
 | `select-window -t <n>` (`selectw`) | Select window by number |
 | `rename-window <name>` (`renamew`) | Rename window |
+| `rename-pane [name]` (`renamep`) | Rename pane (no name restores the default) |
 | `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` (`selectl`) | Apply layout preset |
 | `resize-pane -Z` | Toggle pane zoom |
 | `set synchronize-panes [on\|off]` | Input broadcast |
@@ -509,7 +511,7 @@ Character case is significant, so `P` and `p` are different keys.
 | Group | Commands |
 |-------|----------|
 | Windows | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
-| Panes | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
+| Panes | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` / `rename-pane` |
 | Sizing | `resize-pane -Z` (zoom) / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
 | Layout | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
 | Modes | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |

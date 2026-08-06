@@ -21,6 +21,8 @@ pub enum PromptAction {
     /// select-window -t <n> (1-based display number)
     SelectWindow(usize),
     RenameWindow(String),
+    /// rename-pane [name]; empty name restores the default "Pane N" title
+    RenamePane(String),
     SelectLayout(LayoutType),
     /// resize-pane -Z
     ToggleZoom,
@@ -86,6 +88,7 @@ pub fn parse(line: &str) -> Result<PromptAction, String> {
             }
             Ok(PromptAction::RenameWindow(args.join(" ")))
         }
+        "rename-pane" | "renamep" => Ok(PromptAction::RenamePane(args.join(" "))),
         "select-layout" | "selectl" => {
             let name = args.first().ok_or(
                 "usage: select-layout <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>",
@@ -206,6 +209,15 @@ mod tests {
         assert_eq!(
             parse("rename-window \"my window\"").unwrap(),
             PromptAction::RenameWindow("my window".to_string())
+        );
+        assert_eq!(
+            parse("rename-pane build").unwrap(),
+            PromptAction::RenamePane("build".to_string())
+        );
+        // No name = restore the default pane title
+        assert_eq!(
+            parse("renamep").unwrap(),
+            PromptAction::RenamePane(String::new())
         );
         assert_eq!(
             parse("renamew ビルド").unwrap(),

@@ -946,6 +946,9 @@ impl WindowManager {
     }
 
     /// Pane whose title row (top border) is at the given screen position.
+    ///
+    /// Borderless panes (single pane, zoomed) have no title row, so their
+    /// top row is ordinary content and never matches.
     pub fn pane_title_at(&self, col: u16, row: u16) -> Option<PaneId> {
         if row < self.tab_bar_height {
             return None;
@@ -954,7 +957,7 @@ impl WindowManager {
         let tab = self.active_tab()?;
         let pane_id = tab.pane_at(col, content_row)?;
         let pane = tab.panes.get(&pane_id)?;
-        (content_row == pane.y).then_some(pane_id)
+        (pane.border != crate::wm::BorderStyle::None && content_row == pane.y).then_some(pane_id)
     }
 
     /// Handle mouse drag (extend selection)
@@ -1736,20 +1739,19 @@ impl WindowManager {
     /// * `y` - Screen row relative to content area (excluding tab bar)
     ///
     /// # Returns
-    /// Some((pane_x, pane_y)) if coordinates are within the focused pane,
-    /// None otherwise.
+    /// Some((pane_x, pane_y)) if coordinates are within the focused pane's
+    /// content area (inside the border), None otherwise. Border rows —
+    /// including the title row — are wtmux chrome, not app content, so
+    /// clicks there are not translated (and thus not forwarded to the app).
     pub fn screen_to_pane_coords(&self, x: u16, y: u16) -> Option<(u16, u16)> {
         self.tabs.get(&self.active_tab)
             .and_then(|tab| tab.focused_pane())
             .and_then(|pane| {
-                let px = pane.x;
-                let py = pane.y;
-                let pw = pane.width;
-                let ph = pane.height;
-                
-                // Check if coordinates are within pane content area
-                if x >= px && x < px + pw && y >= py && y < py + ph {
-                    Some((x - px, y - py))
+                let (ix, iy) = pane.inner_pos();
+                let (iw, ih) = pane.inner_size();
+
+                if x >= ix && x < ix + iw && y >= iy && y < iy + ih {
+                    Some((x - ix, y - iy))
                 } else {
                     None
                 }
@@ -1952,13 +1954,39 @@ mod tests {
 
     #[test]
     fn pane_title_at_matches_only_top_border_row() {
-        let wm = test_manager(80);
+        let mut wm = test_manager(80);
         let title_row = wm.tab_bar_height; // first content row = top border
 
+        // A single pane is borderless: it has no title row to click
+        assert_eq!(wm.pane_title_at(10, title_row), None);
+
+        // With a border, only the top border row is the title
+        let tab_id = wm.active_tab;
+        for pane in wm.tabs.get_mut(&tab_id).unwrap().panes.values_mut() {
+            pane.border = crate::wm::BorderStyle::Single;
+        }
         assert!(wm.pane_title_at(10, title_row).is_some());
         assert_eq!(wm.pane_title_at(10, title_row + 1), None);
         // Tab bar rows are never a pane title
         assert_eq!(wm.pane_title_at(10, 0), None);
+    }
+
+    #[test]
+    fn mouse_passthrough_coords_exclude_the_border() {
+        let mut wm = test_manager(80);
+
+        // Borderless pane: content starts at the pane origin
+        assert_eq!(wm.screen_to_pane_coords(0, 0), Some((0, 0)));
+
+        // Bordered pane: the title row and border columns are wtmux
+        // chrome, and app coordinates start inside the border
+        let tab_id = wm.active_tab;
+        for pane in wm.tabs.get_mut(&tab_id).unwrap().panes.values_mut() {
+            pane.border = crate::wm::BorderStyle::Single;
+        }
+        assert_eq!(wm.screen_to_pane_coords(10, 0), None, "title row");
+        assert_eq!(wm.screen_to_pane_coords(0, 10), None, "left border");
+        assert_eq!(wm.screen_to_pane_coords(1, 1), Some((0, 0)));
     }
 
     #[test]

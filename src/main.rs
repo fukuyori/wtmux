@@ -1670,6 +1670,7 @@ fn run_wm_main_loop(
                         match key_event.code {
                             KeyCode::Esc => {
                                 ui.close_mode();
+                                wm.force_full_redraw();
                                 renderer.render(wm)?;
                                 continue;
                             }
@@ -1686,6 +1687,7 @@ fn run_wm_main_loop(
                                     }
                                 }
                                 ui.close_mode();
+                                wm.force_full_redraw();
                                 renderer.render(wm)?;
                                 continue;
                             }
@@ -1713,6 +1715,7 @@ fn run_wm_main_loop(
                             }
                         }
                         ui.close_mode();
+                        wm.force_full_redraw();
                         renderer.render(wm)?;
                         continue;
                     }
@@ -2304,6 +2307,7 @@ fn run_wm_main_loop(
                                     .handle_click(mouse_event.column, mouse_event.row)
                                 {
                                     ui.close_mode();
+                                    wm.force_full_redraw();
                                     if action == ContextMenuAction::RenamePane {
                                         open_rename_pane(&mut ui, wm);
                                         ui.render(renderer, wm, &theme_list)?;
@@ -2314,12 +2318,14 @@ fn run_wm_main_loop(
                                 } else {
                                     // Clicked outside menu - close it
                                     ui.close_mode();
+                                    wm.force_full_redraw();
                                     renderer.render(wm)?;
                                 }
                             }
                             MouseEventKind::Down(MouseButton::Right) => {
                                 // Close menu on right click
                                 ui.close_mode();
+                                wm.force_full_redraw();
                                 renderer.render(wm)?;
                             }
                             MouseEventKind::Moved | MouseEventKind::Drag(_)
@@ -2491,6 +2497,11 @@ fn run_wm_main_loop(
                         ui.message_composer.insert_str(&text);
                         ui.render(renderer, wm, &theme_list)?;
                         continue;
+                    }
+                    if ui.mode != UiMode::Normal {
+                        // An overlay was painted over the panes; repaint fully
+                        // so no fragments linger after it closes.
+                        wm.force_full_redraw();
                     }
                     ui.close_mode();
                     wm.prefix_mode = false;
@@ -2685,6 +2696,14 @@ fn execute_prompt_action(
             wm.rename_active_tab(&name);
             format!("window renamed to {name:?}")
         }
+        P::RenamePane(name) => {
+            wm.rename_focused_pane(&name);
+            if name.is_empty() {
+                "pane title reset".to_string()
+            } else {
+                format!("pane renamed to {name:?}")
+            }
+        }
         P::SelectLayout(layout) => {
             wm.set_layout_preset(layout);
             format!("layout: {layout:?}")
@@ -2868,6 +2887,9 @@ fn apply_ui_action(
             if let Some(tab) = wm.active_tab() {
                 ui.rename_buffer = tab.name.clone();
             }
+        }
+        B::UiRenamePane => {
+            open_rename_pane(ui, wm);
         }
         B::UiCopyMode => {
             ui.copy_mode.enter(wm);

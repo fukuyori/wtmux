@@ -2,13 +2,13 @@
 # build-portable.ps1
 # Create portable ZIP package for wtmux
 #
+# Packaging never builds: run `cargo build --release` first.
+#
 # Usage:
-#   .\scripts\build-portable.ps1              # Build and package
-#   .\scripts\build-portable.ps1 -SkipBuild   # Package only (use existing build)
+#   .\scripts\build-portable.ps1
 
 param(
-    [string]$Version = "",
-    [switch]$SkipBuild
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,18 +30,8 @@ if (-not $Version) {
     }
 }
 
-# Check for release build or build it
+# Packaging never builds: require an existing release build
 $exePath = ".\target\release\wtmux.exe"
-
-if (-not $SkipBuild) {
-    Write-Host "Building release version..." -ForegroundColor Green
-    cargo build --release
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Error: Build failed" -ForegroundColor Red
-        exit 1
-    }
-}
-
 if (-not (Test-Path $exePath)) {
     Write-Host "Error: wtmux.exe not found at $exePath" -ForegroundColor Red
     Write-Host "Please build first: cargo build --release" -ForegroundColor Yellow

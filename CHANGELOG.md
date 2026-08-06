@@ -1,3 +1,31 @@
+## [3.2.3] - 2026-08-06
+
+### Added
+
+- **`Prefix + .` renames the focused pane** (next to `Prefix + ,` =
+  rename window). Also available as `rename-pane [name]` (`renamep`)
+  in the command prompt and `[bind]` config; an empty name restores
+  the default "Pane N" title. Previously pane rename was only
+  reachable from the right-click context menu / title bar.
+
+### Fixed
+
+- **Right-clicking a pane title sometimes did not open the rename
+  dialog**: when the app in the focused pane had mouse tracking on
+  (vim, htop, Claude Code, …), clicks on the pane border — including
+  the title row — were forwarded to the app instead of being handled
+  as wtmux chrome. Border clicks now always stay with wtmux, and
+  forwarded mouse coordinates are computed from the content area
+  inside the border (they were off by one cell on bordered panes).
+  Borderless panes (single pane, zoomed) no longer treat their top
+  content row as a clickable title.
+- **Leftover dialog fragments after closing overlays**: closing the
+  rename dialog (Esc/Enter), the pane-numbers overlay, or the context
+  menu via mouse did not force a full repaint, so panes with no new
+  output kept showing pieces of the dismissed overlay. All overlay
+  close paths now trigger a full redraw, matching the keyboard
+  context-menu and window-selector behavior.
+
 ## [3.2.2] - 2026-08-01
 
 ### Added

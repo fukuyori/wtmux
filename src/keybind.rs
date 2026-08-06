@@ -85,6 +85,7 @@ pub enum BoundAction {
     CopySelection,
     // ── Actions that open a modal UI ─────────────────────────────────────
     UiRenameWindow,
+    UiRenamePane,
     UiCopyMode,
     UiSearch,
     UiThemeSelector,
@@ -103,6 +104,7 @@ impl BoundAction {
         matches!(
             self,
             BoundAction::UiRenameWindow
+                | BoundAction::UiRenamePane
                 | BoundAction::UiCopyMode
                 | BoundAction::UiSearch
                 | BoundAction::UiThemeSelector
@@ -341,6 +343,7 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
             }
         }
         "rename-window" | "renamew" => BoundAction::UiRenameWindow,
+        "rename-pane" | "renamep" => BoundAction::UiRenamePane,
         "copy-mode" => BoundAction::UiCopyMode,
         "search" | "search-mode" => BoundAction::UiSearch,
         "choose-window" | "choosew" => BoundAction::UiWindowSelector,
@@ -590,6 +593,7 @@ fn describe_action(action: BoundAction) -> String {
         } => format!("extend-selection {}", dir_flag(direction, arrow_up_or_left)),
         B::CopySelection => "copy-selection".into(),
         B::UiRenameWindow => "rename-window".into(),
+        B::UiRenamePane => "rename-pane".into(),
         B::UiCopyMode => "copy-mode".into(),
         B::UiSearch => "search".into(),
         B::UiThemeSelector => "choose-theme".into(),
@@ -642,6 +646,7 @@ fn default_prefix_binds(prefix_char: char) -> Vec<(BindKey, BoundAction)> {
         ("{", B::SwapPanePrev),
         ("d", B::Detach),
         (",", B::UiRenameWindow),
+        (".", B::UiRenamePane),
         ("[", B::UiCopyMode),
         ("/", B::UiSearch),
         ("t", B::UiThemeSelector),
@@ -948,6 +953,10 @@ mod tests {
         assert_eq!(
             table.lookup_prefix(&ev(KeyCode::Char('p'), KeyModifiers::NONE)),
             Some(BoundAction::PrevWindow)
+        );
+        assert_eq!(
+            table.lookup_prefix(&ev(KeyCode::Char('.'), KeyModifiers::NONE)),
+            Some(BoundAction::UiRenamePane)
         );
     }
 

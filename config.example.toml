@@ -81,7 +81,7 @@ color_scheme = "default"
 #                  main-vertical|tiled>
 #   next-layout   swap-pane -U|-D       set synchronize-panes   pipe-pane
 #   copy-mode  search  choose-window  choose-theme  command-prompt
-#   display-panes  rename-window  paste-buffer  send-prefix
+#   display-panes  rename-window  rename-pane  paste-buffer  send-prefix
 #   agent-dashboard  compose-message  next-attention  reset-cursor
 #   scroll-up [n]  scroll-down [n]  scroll-top  scroll-bottom   (default n: 10)
 #   extend-selection -L|-R|-U|-D    copy-selection  history-selector

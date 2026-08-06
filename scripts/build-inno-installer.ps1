@@ -59,15 +59,12 @@ if (-not $iscc) {
 
 Write-Host "Using Inno Setup: $iscc" -ForegroundColor Gray
 
-# Check for release build
+# Packaging never builds: require an existing release build
 $exePath = ".\target\release\wtmux.exe"
 if (-not (Test-Path $exePath)) {
-    Write-Host "Release build not found. Building..." -ForegroundColor Yellow
-    cargo build --release
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Error: Build failed" -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "Error: wtmux.exe not found at $exePath" -ForegroundColor Red
+    Write-Host "Please build first: cargo build --release" -ForegroundColor Yellow
+    exit 1
 }
 
 # Generate icon assets

@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.2.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [English README](README.md)
 
@@ -244,6 +244,7 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `Ctrl+B, q` | ペイン番号表示（その後0-9で選択） |
 | `Ctrl+B, {` | 前のペインと入れ替え |
 | `Ctrl+B, }` | 次のペインと入れ替え |
+| `Ctrl+B, .` | ペイン名を変更（空にするとデフォルトに戻る） |
 
 ### コピーモード
 
@@ -293,6 +294,7 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `next-window` / `previous-window` / `last-window`（`next` / `prev` / `last`） | ウィンドウ切り替え |
 | `select-window -t <n>`（`selectw`） | 番号でウィンドウ選択 |
 | `rename-window <名前>`（`renamew`） | ウィンドウ名変更 |
+| `rename-pane [名前]`（`renamep`） | ペイン名変更（名前省略でデフォルトに戻る） |
 | `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>`（`selectl`） | レイアウト適用 |
 | `resize-pane -Z` | ペインズーム切り替え |
 | `set synchronize-panes [on\|off]` | 入力ブロードキャスト |
@@ -454,7 +456,7 @@ unbind = ["d"]                 # 既定の Ctrl+B, d を解除（配列は [セ�
 | 分類 | コマンド |
 |------|---------|
 | ウィンドウ | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
-| ペイン | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
+| ペイン | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` / `rename-pane` |
 | サイズ | `resize-pane -Z`（ズーム） / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
 | レイアウト | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
 | モード | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
