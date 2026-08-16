@@ -125,6 +125,80 @@ impl WindowSelectorLayout {
     }
 }
 
+/// Which border of the message composer a resize drag grabbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerResizeEdge {
+    Right,
+    Bottom,
+    Corner,
+}
+
+/// Geometry of the message composer overlay (`Prefix + m`).
+///
+/// Produced by [`WmRenderer::message_composer_layout`]; rendering and mouse
+/// hit-testing both derive from it so they can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageComposerLayout {
+    pub start_x: usize,
+    pub start_y: usize,
+    pub box_width: usize,
+    /// Editor rows between the top border and the separator
+    pub body_h: usize,
+    /// Cells available for text on one editor row
+    pub inner_width: usize,
+    /// Index into the wrapped display rows of the first visible one
+    pub first_visible: usize,
+}
+
+impl MessageComposerLayout {
+    /// Full box height: body plus top border, separator, help line, and
+    /// bottom border.
+    pub fn box_height(&self) -> usize {
+        self.body_h + 4
+    }
+
+    /// Map a screen position to `(display row index, cell offset)` in the
+    /// editor body, or None outside it.
+    pub fn body_pos_at(&self, column: u16, row: u16) -> Option<(usize, usize)> {
+        let (col, row) = (column as usize, row as usize);
+        let text_left = self.start_x + 2;
+        if row < self.start_y + 1 || row >= self.start_y + 1 + self.body_h {
+            return None;
+        }
+        if col < text_left || col >= text_left + self.inner_width {
+            return None;
+        }
+        Some((self.first_visible + (row - self.start_y - 1), col - text_left))
+    }
+
+    /// Like [`Self::body_pos_at`] but clamping outside positions onto the
+    /// body, so a drag-selection keeps tracking when the pointer leaves
+    /// the box.
+    pub fn body_pos_clamped(&self, column: u16, row: u16) -> (usize, usize) {
+        let text_left = self.start_x + 2;
+        let col = (column as usize)
+            .clamp(text_left, text_left + self.inner_width.saturating_sub(1));
+        let row = (row as usize).clamp(self.start_y + 1, self.start_y + self.body_h.max(1));
+        (self.first_visible + (row - self.start_y - 1), col - text_left)
+    }
+
+    /// The resize handle at a screen position: the right border, the
+    /// bottom border, or the bottom-right corner.
+    pub fn resize_handle_at(&self, column: u16, row: u16) -> Option<ComposerResizeEdge> {
+        let (col, row) = (column as usize, row as usize);
+        let right = self.start_x + self.box_width - 1;
+        let bottom = self.start_y + self.box_height() - 1;
+        let on_right = col == right && row >= self.start_y && row <= bottom;
+        let on_bottom = row == bottom && col >= self.start_x && col <= right;
+        match (on_right, on_bottom) {
+            (true, true) => Some(ComposerResizeEdge::Corner),
+            (true, false) => Some(ComposerResizeEdge::Right),
+            (false, true) => Some(ComposerResizeEdge::Bottom),
+            (false, false) => None,
+        }
+    }
+}
+
 /// Multi-pane renderer
 pub struct WmRenderer {
     initialized: bool,
@@ -712,6 +786,54 @@ impl WmRenderer {
         Ok(())
     }
 
+    /// Compute the message composer overlay geometry, or None when the
+    /// terminal is too small to show it. Shared by rendering and mouse
+    /// hit-testing so the two can never disagree.
+    pub fn message_composer_layout(
+        &self,
+        wm: &WindowManager,
+        composer: &MessageComposer,
+    ) -> Option<MessageComposerLayout> {
+        composer.target.as_ref()?;
+        if wm.width < 30 || wm.height < 8 {
+            return None;
+        }
+        let content_top = wm.tab_bar_height as usize;
+        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+        let max_width = (wm.width as usize).saturating_sub(4);
+        // Chrome: top border, separator, help line, bottom border
+        let max_body = content_height.saturating_sub(4);
+        if max_width < 24 || max_body < 1 {
+            return None;
+        }
+        // Default size reads as multi-line from the start (8 rows); a border
+        // drag overrides it, clamped to what fits on screen
+        let (box_width, body_h) = match composer.custom_size {
+            Some((w, h)) => (w.clamp(24, max_width), h.clamp(1, max_body)),
+            None => (max_width.min(70), max_body.min(8)),
+        };
+        let inner_width = box_width.saturating_sub(4);
+        // Long lines soft-wrap onto extra display rows instead of truncating;
+        // scroll so the cursor's display row stays visible
+        let rows = composer.wrapped_rows(inner_width);
+        let (cursor_display_row, _) = composer.cursor_display_pos(&rows);
+        let first_visible = cursor_display_row
+            .saturating_add(1)
+            .saturating_sub(body_h)
+            .min(rows.len().saturating_sub(body_h));
+        let box_height = body_h + 4;
+        let start_x = (wm.width as usize - box_width) / 2;
+        let start_y = content_top + (content_height - box_height) / 2;
+        Some(MessageComposerLayout {
+            start_x,
+            start_y,
+            box_width,
+            body_h,
+            inner_width,
+            first_visible,
+        })
+    }
+
     /// Render the floating message composer (`Prefix + m`): a small
     /// multi-line editor addressed to one pane.
     ///
@@ -727,35 +849,21 @@ impl WmRenderer {
         let Some(target) = composer.target.as_ref() else {
             return Ok(None);
         };
-        if wm.width < 30 || wm.height < 8 {
+        let Some(layout) = self.message_composer_layout(wm, composer) else {
             return Ok(None);
-        }
+        };
+        let MessageComposerLayout {
+            start_x,
+            start_y,
+            box_width,
+            body_h,
+            inner_width,
+            first_visible,
+        } = layout;
 
         let cs = &self.color_scheme;
-        let content_top = wm.tab_bar_height as usize;
-        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
-
-        let box_width = (wm.width as usize).saturating_sub(4).min(70);
-        // Chrome: top border, separator, help line, bottom border
-        let max_body = content_height.saturating_sub(4).min(8);
-        if box_width < 24 || max_body < 1 {
-            return Ok(None);
-        }
-        // Fixed-size editor area so the popup reads as multi-line from the
-        // start (8 rows, less on small terminals)
-        let body_h = max_body;
-        let box_height = body_h + 4;
-        let inner_width = box_width.saturating_sub(4);
-        // Long lines soft-wrap onto extra display rows instead of truncating
         let rows = composer.wrapped_rows(inner_width);
         let (cursor_display_row, cursor_offset) = composer.cursor_display_pos(&rows);
-        // Scroll so the cursor's display row stays visible
-        let first_visible = cursor_display_row
-            .saturating_add(1)
-            .saturating_sub(body_h)
-            .min(rows.len().saturating_sub(body_h));
-        let start_x = (wm.width as usize - box_width) / 2;
-        let start_y = content_top + (content_height - box_height) / 2;
 
         execute!(
             stdout,
@@ -880,16 +988,25 @@ impl WmRenderer {
         }
         write!(stdout, "┤")?;
 
-        let help = "Ctrl+Enter/S:Send Enter:Newline Shift+Arrows:Select Esc:Close";
-        let help = truncate_to_display_width(help, box_width.saturating_sub(3));
+        // Help on the left, line/char counter on the right
+        let total_chars: usize = composer
+            .lines
+            .iter()
+            .map(|l| l.chars().count())
+            .sum::<usize>()
+            + composer.lines.len().saturating_sub(1);
+        let counter = format!("{}L {}C", composer.lines.len(), total_chars);
+        let counter_width = str_display_width(&counter);
+        let inner = box_width.saturating_sub(4);
+        let help = "C-Enter:Send Enter:NL C-z:Undo C-c/x/v:Clipboard Esc:Close";
+        let help = truncate_to_display_width(help, inner.saturating_sub(counter_width + 1));
         let help_width = str_display_width(&help);
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
-        write!(stdout, "│ {}", help)?;
         write!(
             stdout,
-            "{:padding$}│",
+            "│ {help}{:pad$}{counter} │",
             "",
-            padding = box_width.saturating_sub(help_width + 3)
+            pad = inner.saturating_sub(help_width + counter_width)
         )?;
 
         execute!(stdout, MoveTo(start_x as u16, (separator_y + 2) as u16))?;
@@ -2388,6 +2505,119 @@ mod tests {
         // Too-small terminals produce no layout (selector is not drawn)
         let tiny = WindowManager::new(15, 6, None, None, PrefixKey { char: 'b' }, true);
         assert!(renderer.window_selector_layout(&tiny, 2, 0).is_none());
+    }
+
+    #[test]
+    fn message_composer_layout_maps_mouse_and_clamps_custom_size() {
+        use super::ComposerResizeEdge as Edge;
+        use crate::config::PrefixKey;
+        use crate::ui::message_composer::MessageComposer;
+        use crate::wm::WindowManager;
+
+        let wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
+        let renderer = WmRenderer::new();
+        let mut composer = MessageComposer::new();
+        // Closed composer has no layout
+        assert!(renderer.message_composer_layout(&wm, &composer).is_none());
+        composer.open(1, 1, "1:main · 1: Pane 1".to_string());
+
+        // 80x24, tab bar 1, status bar 1 → 70x12 box at x 5..75, y 6..18;
+        // body rows 7..15, text columns 7..73
+        let layout = renderer
+            .message_composer_layout(&wm, &composer)
+            .expect("layout for 80x24");
+        assert_eq!(layout.body_pos_at(7, 7), Some((0, 0)));
+        assert_eq!(layout.body_pos_at(72, 14), Some((7, 65)));
+        assert_eq!(layout.body_pos_at(7, 6), None); // top border
+        assert_eq!(layout.body_pos_at(6, 7), None); // left border
+        assert_eq!(layout.body_pos_at(7, 15), None); // separator
+
+        // Dragging outside the body clamps back onto it
+        assert_eq!(layout.body_pos_clamped(0, 0), (0, 0));
+        assert_eq!(layout.body_pos_clamped(79, 23), (7, 65));
+
+        assert_eq!(layout.resize_handle_at(74, 10), Some(Edge::Right));
+        assert_eq!(layout.resize_handle_at(40, 17), Some(Edge::Bottom));
+        assert_eq!(layout.resize_handle_at(74, 17), Some(Edge::Corner));
+        assert_eq!(layout.resize_handle_at(5, 10), None); // left border
+
+        // Dragged sizes are clamped to what fits on screen
+        composer.custom_size = Some((200, 100));
+        let big = renderer.message_composer_layout(&wm, &composer).unwrap();
+        assert_eq!((big.box_width, big.body_h), (76, 18));
+        composer.custom_size = Some((5, 0));
+        let small = renderer.message_composer_layout(&wm, &composer).unwrap();
+        assert_eq!((small.box_width, small.body_h), (24, 1));
+
+        // Too-small terminals produce no layout (composer is not drawn)
+        let tiny = WindowManager::new(20, 6, None, None, PrefixKey { char: 'b' }, true);
+        assert!(renderer.message_composer_layout(&tiny, &composer).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn message_composer_overlay_shows_help_and_counter() {
+        use crate::config::PrefixKey;
+        use crate::core::session::Session;
+        use crate::ui::message_composer::MessageComposer;
+        use crate::wm::WindowManager;
+
+        // Replay emitted bytes through a simulated host terminal so the
+        // assertions run against what the user's terminal grid would show.
+        fn replay(out: &[u8]) -> Vec<String> {
+            let mut host = Session::new(9, 80, 24);
+            host.feed_bytes(out);
+            host.state
+                .active_screen()
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells
+                        .iter()
+                        .filter(|c| !c.is_continuation())
+                        .map(|c| if c.grapheme.is_empty() { " " } else { c.grapheme.as_str() })
+                        .collect()
+                })
+                .collect()
+        }
+
+        let wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
+        let renderer = WmRenderer::new();
+        let mut composer = MessageComposer::new();
+        composer.open(1, 1, "1:main · 1: Pane 1".to_string());
+        composer.insert_str("hello\nこんにちは");
+
+        let mut out = Vec::new();
+        let cursor = renderer
+            .render_message_composer(&mut out, &wm, &composer)
+            .expect("render composer");
+        assert!(cursor.is_some(), "composer must park the text cursor");
+        let grid = replay(&out);
+
+        let has_line = |needle: &str| grid.iter().any(|l| l.contains(needle));
+        assert!(has_line("Send to 1:main"), "title missing:\n{}", grid.join("\n"));
+        assert!(has_line("hello"), "body missing:\n{}", grid.join("\n"));
+        // 5 + 5 chars joined by one newline
+        assert!(has_line("2L 11C"), "counter missing:\n{}", grid.join("\n"));
+        assert!(has_line("C-z:Undo"), "help missing:\n{}", grid.join("\n"));
+
+        // Every overlay row must keep the box edges aligned. Compare
+        // display widths: the replay drops wide-char continuation cells,
+        // so a char count would come up short on rows with CJK text.
+        let width = str_display_width(
+            grid.iter()
+                .find(|l| l.contains('┌'))
+                .expect("top border")
+                .trim_end(),
+        );
+        for line in grid.iter().filter(|l| l.contains('│') || l.contains('├')) {
+            assert_eq!(
+                str_display_width(line.trim_end()),
+                width,
+                "misaligned overlay row:\n{}",
+                grid.join("\n")
+            );
+        }
     }
 
     #[test]

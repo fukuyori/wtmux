@@ -4,7 +4,7 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
@@ -275,10 +275,38 @@ In copy mode:
 | `Ctrl+B, :` | Command prompt (tmux-style commands, see below) |
 | `Ctrl+B, t` | Theme selector |
 | `Esc` in theme selector | Cancel theme selector |
+| `Ctrl+B, m` | Message composer (multi-line editor, see below) |
 | `Ctrl+B, r` | Reset cursor shape |
 | `Ctrl+B, Shift+P` | Toggle output logging for the focused pane (`[LOG]`) |
 | `Ctrl+B, b` | Send Ctrl+B to application |
 | `Esc` | Cancel prefix mode |
+
+### Message Composer
+
+`Ctrl+B, m` opens a floating multi-line editor for composing a message and
+sending it to the focused pane's application (IME-friendly; handy for AI
+agents such as Claude Code). Also available as `m` in the agent dashboard
+and as the `compose-message` command.
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Enter` (or `Ctrl+S`) | Send the message |
+| `Enter` | Insert a newline |
+| `Esc` | Close (the unsent draft can be recalled with `Ctrl+P`) |
+| `Shift+Arrows` / `Shift+Home` / `Shift+End` | Extend the selection |
+| `Ctrl+A` | Select all |
+| `Ctrl+C` / `Ctrl+X` | Copy / cut the selection |
+| `Ctrl+V` | Paste from the clipboard |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+Home` / `Ctrl+End` | Jump to the start / end of the message |
+| `Ctrl+U` | Clear the message |
+| `Ctrl+P` / `Ctrl+N` | Recall older / newer sent messages |
+| `Tab` | Insert 4 spaces |
+
+The mouse works inside the composer too: click places the cursor, drag
+selects text, the wheel scrolls, and dragging the right or bottom border
+(or the corner) resizes the popup — the chosen size is kept until wtmux
+exits. The footer shows a line/character counter.
 
 ### Command Prompt
 
@@ -727,6 +755,10 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Right click on tab bar | Rename that window | Rename that window |
 | Right click on pane title (top border) | Rename that pane | Rename that pane |
 | Scroll wheel | Scroll buffer | App receives event |
+
+While the message composer (`Ctrl+B, m`) is open, the mouse acts on the
+composer itself: click to place the cursor, drag to select, wheel to move
+through the text, and drag the right/bottom border to resize the popup.
 
 ## Comparison with tmux
 

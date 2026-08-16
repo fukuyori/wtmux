@@ -28,7 +28,7 @@ pub mod message_composer;
 pub use keymapper::*;
 pub(crate) use app_state::{RenameTarget, UiMode, WmAppState};
 pub use renderer::*;
-pub use wm_renderer::{WmOverlay, WmRenderer};
+pub use wm_renderer::{ComposerResizeEdge, WmOverlay, WmRenderer};
 pub use window_selector::{TreeEntry, WindowSelector};
 pub use agent_dashboard::AgentDashboard;
 pub use context_menu::{ContextMenu, ContextMenuAction};

@@ -1059,6 +1059,15 @@ fn run_terminal_wm(
     result
 }
 
+/// Mouse drag in progress inside the message composer overlay.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComposerDrag {
+    /// Extending the text selection from the press position
+    Select,
+    /// Resizing the popup by its border
+    Resize(crate::ui::ComposerResizeEdge),
+}
+
 /// Main event loop for window manager
 fn run_wm_main_loop(
     wm: &mut WindowManager,
@@ -1101,6 +1110,9 @@ fn run_wm_main_loop(
     // when wtmux's pane focus moves, like tmux's focus-events. Host terminal
     // focus is forwarded in the event handler below.
     let mut last_focus = wm.focused_pane_id();
+
+    // Mouse drag in progress inside the message composer overlay
+    let mut composer_drag: Option<ComposerDrag> = None;
 
     loop {
         // Check if any session is still running
@@ -1489,8 +1501,55 @@ fn run_wm_main_loop(
                                     ui.message_composer.move_down();
                                 }
                             }
-                            KeyCode::Home => ui.message_composer.move_home(),
-                            KeyCode::End => ui.message_composer.move_end(),
+                            KeyCode::Home => {
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                                    ui.message_composer.move_buffer_start();
+                                } else if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_home();
+                                } else {
+                                    ui.message_composer.move_home();
+                                }
+                            }
+                            KeyCode::End => {
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                                    ui.message_composer.move_buffer_end();
+                                } else if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                                    ui.message_composer.select_end();
+                                } else {
+                                    ui.message_composer.move_end();
+                                }
+                            }
+                            KeyCode::Tab => ui.message_composer.insert_str("    "),
+                            // Clipboard: copy/cut the selection, select all
+                            KeyCode::Char('c')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                if let Some(text) = ui.message_composer.selected_text() {
+                                    let _ = copy_to_clipboard(&text);
+                                }
+                            }
+                            KeyCode::Char('x')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                if let Some(text) = ui.message_composer.cut_selection() {
+                                    let _ = copy_to_clipboard(&text);
+                                }
+                            }
+                            KeyCode::Char('a')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.select_all();
+                            }
+                            KeyCode::Char('z')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.undo();
+                            }
+                            KeyCode::Char('y')
+                                if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                ui.message_composer.redo();
+                            }
                             KeyCode::Char('u')
                                 if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
                             {
@@ -2209,8 +2268,90 @@ fn run_wm_main_loop(
                 Event::Mouse(mouse_event) => {
                     use crossterm::event::{MouseEventKind, MouseButton};
 
-                    // Message composer: mouse interaction is not routed
+                    // Message composer: click places the cursor, drag selects,
+                    // the wheel scrolls, and dragging the right/bottom border
+                    // resizes the popup. Clicks outside are ignored so a stray
+                    // click cannot discard the draft.
                     if ui.mode == UiMode::MessageComposer {
+                        let Some(layout) =
+                            renderer.message_composer_layout(wm, &ui.message_composer)
+                        else {
+                            continue;
+                        };
+                        match mouse_event.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                if let Some(edge) = layout
+                                    .resize_handle_at(mouse_event.column, mouse_event.row)
+                                {
+                                    composer_drag = Some(ComposerDrag::Resize(edge));
+                                } else if let Some((display_row, x_cells)) =
+                                    layout.body_pos_at(mouse_event.column, mouse_event.row)
+                                {
+                                    let rows =
+                                        ui.message_composer.wrapped_rows(layout.inner_width);
+                                    ui.message_composer.set_cursor_display(
+                                        &rows,
+                                        display_row,
+                                        x_cells,
+                                    );
+                                    composer_drag = Some(ComposerDrag::Select);
+                                    ui.render(renderer, wm, &theme_list)?;
+                                } else {
+                                    composer_drag = None;
+                                }
+                            }
+                            MouseEventKind::Drag(MouseButton::Left) => match composer_drag {
+                                Some(ComposerDrag::Resize(edge)) => {
+                                    use crate::ui::ComposerResizeEdge as Edge;
+                                    let (mut w, mut h) = (layout.box_width, layout.body_h);
+                                    if edge != Edge::Bottom {
+                                        w = (mouse_event.column as usize)
+                                            .saturating_sub(layout.start_x)
+                                            + 1;
+                                    }
+                                    if edge != Edge::Right {
+                                        // Body rows between the dragged bottom
+                                        // border and the 3 chrome rows above it
+                                        h = (mouse_event.row as usize)
+                                            .saturating_sub(layout.start_y)
+                                            .saturating_sub(3);
+                                    }
+                                    ui.message_composer.custom_size =
+                                        Some((w.max(24), h.max(1)));
+                                    // The popup may have shrunk; repaint the
+                                    // panes underneath before the overlay
+                                    wm.force_full_redraw();
+                                    renderer.render(wm)?;
+                                    wm.clear_all_dirty();
+                                    ui.render(renderer, wm, &theme_list)?;
+                                }
+                                Some(ComposerDrag::Select) => {
+                                    let (display_row, x_cells) = layout
+                                        .body_pos_clamped(mouse_event.column, mouse_event.row);
+                                    let rows =
+                                        ui.message_composer.wrapped_rows(layout.inner_width);
+                                    ui.message_composer.drag_to_display(
+                                        &rows,
+                                        display_row,
+                                        x_cells,
+                                    );
+                                    ui.render(renderer, wm, &theme_list)?;
+                                }
+                                None => {}
+                            },
+                            MouseEventKind::Up(MouseButton::Left) => composer_drag = None,
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                for _ in 0..3 {
+                                    if mouse_event.kind == MouseEventKind::ScrollUp {
+                                        ui.message_composer.move_up();
+                                    } else {
+                                        ui.message_composer.move_down();
+                                    }
+                                }
+                                ui.render(renderer, wm, &theme_list)?;
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
 

@@ -13,6 +13,27 @@ use crate::wm::{PaneId, TabId};
 /// Sent and cancelled messages kept for Ctrl+P/N recall.
 const HISTORY_LIMIT: usize = 100;
 
+/// Undo snapshots kept for Ctrl+Z.
+const UNDO_LIMIT: usize = 100;
+
+/// What the previous buffer mutation was, for coalescing undo steps.
+/// A run of plain typing collapses into one undo step; everything else
+/// (and any cursor move in between) starts a new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum EditKind {
+    #[default]
+    Other,
+    Typing,
+}
+
+/// Buffer + cursor state captured before a mutation (Ctrl+Z/Y).
+#[derive(Debug, Clone)]
+struct Snapshot {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
 /// The pane a composed message will be sent to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeTarget {
@@ -51,6 +72,15 @@ pub struct MessageComposer {
     draft: Option<Vec<String>>,
     /// Fixed end of a Shift+Arrow selection; the cursor is the moving end
     selection_anchor: Option<(usize, usize)>,
+    /// States restorable with Ctrl+Z, newest last
+    undo_stack: Vec<Snapshot>,
+    /// States undone with Ctrl+Z, restorable with Ctrl+Y
+    redo_stack: Vec<Snapshot>,
+    /// Kind of the previous mutation, for coalescing typing runs
+    last_edit: EditKind,
+    /// Popup size chosen by dragging the border: `(box_width, body_h)`.
+    /// Kept across open/close for the session; clamped by the layout.
+    pub custom_size: Option<(usize, usize)>,
 }
 
 impl MessageComposer {
@@ -73,6 +103,7 @@ impl MessageComposer {
         self.history_index = None;
         self.stashed_draft = None;
         self.selection_anchor = None;
+        self.reset_undo();
         self.move_to_end();
     }
 
@@ -95,6 +126,7 @@ impl MessageComposer {
         self.history_index = None;
         self.stashed_draft = None;
         self.selection_anchor = None;
+        self.reset_undo();
     }
 
     /// Take the target out of the composer (used on send).
@@ -119,6 +151,17 @@ impl MessageComposer {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        // Replacing a selection is its own undo step; plain typing coalesces
+        let kind = if self.selection_range().is_some() {
+            EditKind::Other
+        } else {
+            EditKind::Typing
+        };
+        self.push_undo(kind);
+        self.insert_char_raw(c);
+    }
+
+    fn insert_char_raw(&mut self, c: char) {
         self.delete_selection();
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -130,19 +173,28 @@ impl MessageComposer {
         self.cursor_col += 1;
     }
 
-    /// Insert text, splitting on newlines (`\r\n`, `\n`, and lone `\r` from
-    /// terminal paste all count as line breaks).
+    /// Insert text as one undo step, splitting on newlines (`\r\n`, `\n`,
+    /// and lone `\r` from terminal paste all count as line breaks).
     pub fn insert_str(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.push_undo(EditKind::Other);
         for c in text.replace("\r\n", "\n").replace('\r', "\n").chars() {
             if c == '\n' {
-                self.insert_newline();
+                self.insert_newline_raw();
             } else if !c.is_control() {
-                self.insert_char(c);
+                self.insert_char_raw(c);
             }
         }
     }
 
     pub fn insert_newline(&mut self) {
+        self.push_undo(EditKind::Other);
+        self.insert_newline_raw();
+    }
+
+    fn insert_newline_raw(&mut self) {
         self.delete_selection();
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -159,9 +211,15 @@ impl MessageComposer {
     /// Delete the char before the cursor; at column 0, join with the
     /// previous line.
     pub fn backspace(&mut self) {
-        if self.delete_selection() {
+        if self.selection_range().is_some() {
+            self.push_undo(EditKind::Other);
+            self.delete_selection();
             return;
         }
+        if self.cursor_row == 0 && self.cursor_col == 0 {
+            return;
+        }
+        self.push_undo(EditKind::Other);
         if self.cursor_col > 0 {
             let line = &mut self.lines[self.cursor_row];
             let at = Self::byte_at(line, self.cursor_col - 1);
@@ -178,9 +236,17 @@ impl MessageComposer {
     /// Delete the char under the cursor; at end of line, join with the
     /// next line.
     pub fn delete(&mut self) {
-        if self.delete_selection() {
+        if self.selection_range().is_some() {
+            self.push_undo(EditKind::Other);
+            self.delete_selection();
             return;
         }
+        if self.cursor_row + 1 >= self.lines.len()
+            && self.cursor_col >= self.line_len(self.cursor_row)
+        {
+            return;
+        }
+        self.push_undo(EditKind::Other);
         let len = self.line_len(self.cursor_row);
         if self.cursor_col < len {
             let line = &mut self.lines[self.cursor_row];
@@ -192,7 +258,14 @@ impl MessageComposer {
         }
     }
 
+    /// A cursor move ends the current typing run, so the next insertion
+    /// starts a fresh undo step.
+    fn break_typing_run(&mut self) {
+        self.last_edit = EditKind::Other;
+    }
+
     pub fn move_left(&mut self) {
+        self.break_typing_run();
         if let Some((start, _)) = self.selection_range() {
             (self.cursor_row, self.cursor_col) = start;
             self.selection_anchor = None;
@@ -212,6 +285,7 @@ impl MessageComposer {
     }
 
     pub fn move_right(&mut self) {
+        self.break_typing_run();
         if let Some((_, end)) = self.selection_range() {
             (self.cursor_row, self.cursor_col) = end;
             self.selection_anchor = None;
@@ -231,6 +305,7 @@ impl MessageComposer {
     }
 
     pub fn move_up(&mut self) {
+        self.break_typing_run();
         self.selection_anchor = None;
         self.move_up_raw();
     }
@@ -243,6 +318,7 @@ impl MessageComposer {
     }
 
     pub fn move_down(&mut self) {
+        self.break_typing_run();
         self.selection_anchor = None;
         self.move_down_raw();
     }
@@ -255,13 +331,30 @@ impl MessageComposer {
     }
 
     pub fn move_home(&mut self) {
+        self.break_typing_run();
         self.selection_anchor = None;
         self.cursor_col = 0;
     }
 
     pub fn move_end(&mut self) {
+        self.break_typing_run();
         self.selection_anchor = None;
         self.cursor_col = self.line_len(self.cursor_row);
+    }
+
+    /// Ctrl+Home: move to the very start of the buffer.
+    pub fn move_buffer_start(&mut self) {
+        self.break_typing_run();
+        self.selection_anchor = None;
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+    }
+
+    /// Ctrl+End: move to the very end of the buffer.
+    pub fn move_buffer_end(&mut self) {
+        self.break_typing_run();
+        self.selection_anchor = None;
+        self.move_to_end();
     }
 
     pub fn select_left(&mut self) {
@@ -288,7 +381,30 @@ impl MessageComposer {
         self.finish_selection();
     }
 
+    /// Shift+Home: extend the selection to the start of the line.
+    pub fn select_home(&mut self) {
+        self.begin_selection();
+        self.cursor_col = 0;
+        self.finish_selection();
+    }
+
+    /// Shift+End: extend the selection to the end of the line.
+    pub fn select_end(&mut self) {
+        self.begin_selection();
+        self.cursor_col = self.line_len(self.cursor_row);
+        self.finish_selection();
+    }
+
+    /// Ctrl+A: select the whole buffer, cursor at the end.
+    pub fn select_all(&mut self) {
+        self.break_typing_run();
+        self.selection_anchor = Some((0, 0));
+        self.move_to_end();
+        self.finish_selection();
+    }
+
     fn begin_selection(&mut self) {
+        self.break_typing_run();
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some((self.cursor_row, self.cursor_col));
         }
@@ -319,6 +435,39 @@ impl MessageComposer {
             .is_some_and(|(start, end)| (row, col) >= start && (row, col) < end)
     }
 
+    /// The text inside the current selection (Ctrl+C), with `\n` line
+    /// separators.
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        let mut out = String::new();
+        for row in start.0..=end.0 {
+            let line = self.lines.get(row).map_or("", String::as_str);
+            let from = if row == start.0 {
+                Self::byte_at(line, start.1)
+            } else {
+                0
+            };
+            let to = if row == end.0 {
+                Self::byte_at(line, end.1)
+            } else {
+                line.len()
+            };
+            if row > start.0 {
+                out.push('\n');
+            }
+            out.push_str(&line[from..to]);
+        }
+        Some(out)
+    }
+
+    /// Remove the current selection and return its text (Ctrl+X).
+    pub fn cut_selection(&mut self) -> Option<String> {
+        let text = self.selected_text()?;
+        self.push_undo(EditKind::Other);
+        self.delete_selection();
+        Some(text)
+    }
+
     /// Delete the current selection and place the cursor at its start.
     fn delete_selection(&mut self) -> bool {
         let Some((start, end)) = self.selection_range() else {
@@ -337,6 +486,10 @@ impl MessageComposer {
 
     /// Clear the buffer, keeping the target (Ctrl+U).
     pub fn clear(&mut self) {
+        if self.text().is_empty() {
+            return;
+        }
+        self.push_undo(EditKind::Other);
         self.lines = vec![String::new()];
         self.cursor_row = 0;
         self.cursor_col = 0;
@@ -346,6 +499,113 @@ impl MessageComposer {
     fn move_to_end(&mut self) {
         self.cursor_row = self.lines.len().saturating_sub(1);
         self.cursor_col = self.line_len(self.cursor_row);
+    }
+
+    // ── Undo / redo ──────────────────────────────────────────────────────
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            lines: self.lines.clone(),
+            cursor_row: self.cursor_row,
+            cursor_col: self.cursor_col,
+        }
+    }
+
+    /// Record the current state before a mutation. Consecutive plain typing
+    /// coalesces into the step already on the stack; any other mutation (or
+    /// a cursor move in between) starts a new step. Any new edit invalidates
+    /// the redo stack.
+    fn push_undo(&mut self, kind: EditKind) {
+        if !(kind == EditKind::Typing && self.last_edit == EditKind::Typing) {
+            self.undo_stack.push(self.snapshot());
+            if self.undo_stack.len() > UNDO_LIMIT {
+                self.undo_stack.remove(0);
+            }
+        }
+        self.redo_stack.clear();
+        self.last_edit = kind;
+    }
+
+    /// Ctrl+Z: restore the state before the most recent edit.
+    pub fn undo(&mut self) {
+        let Some(prev) = self.undo_stack.pop() else {
+            return;
+        };
+        self.redo_stack.push(self.snapshot());
+        self.restore(prev);
+    }
+
+    /// Ctrl+Y: re-apply the most recently undone edit.
+    pub fn redo(&mut self) {
+        let Some(next) = self.redo_stack.pop() else {
+            return;
+        };
+        self.undo_stack.push(self.snapshot());
+        self.restore(next);
+    }
+
+    /// Restoring a snapshot also leaves history browsing, since the
+    /// snapshot only captures the buffer, not the browse position.
+    fn restore(&mut self, s: Snapshot) {
+        self.lines = s.lines;
+        self.cursor_row = s.cursor_row;
+        self.cursor_col = s.cursor_col;
+        self.selection_anchor = None;
+        self.history_index = None;
+        self.stashed_draft = None;
+        self.last_edit = EditKind::Other;
+    }
+
+    fn reset_undo(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit = EditKind::Other;
+    }
+
+    // ── Mouse ────────────────────────────────────────────────────────────
+
+    /// Char position `x_cells` display cells into wrapped row `wrow`,
+    /// counting wide chars as two cells. Past the end of the row the last
+    /// position wins.
+    fn char_at_cells(&self, wrow: WrappedRow, x_cells: usize) -> usize {
+        let Some(line) = self.lines.get(wrow.line) else {
+            return 0;
+        };
+        let mut cells = 0;
+        let mut col = wrow.start;
+        for ch in line.chars().skip(wrow.start).take(wrow.end - wrow.start) {
+            let w = char_width(ch);
+            if cells + w > x_cells {
+                break;
+            }
+            cells += w;
+            col += 1;
+        }
+        col
+    }
+
+    fn move_cursor_display(&mut self, rows: &[WrappedRow], display_row: usize, x_cells: usize) {
+        let Some(&wrow) = rows.get(display_row.min(rows.len().saturating_sub(1))) else {
+            return;
+        };
+        self.cursor_row = wrow.line;
+        self.cursor_col = self.char_at_cells(wrow, x_cells);
+    }
+
+    /// Place the cursor at a clicked display position. `rows` must come
+    /// from [`Self::wrapped_rows`] with the same width the box was drawn at.
+    pub fn set_cursor_display(&mut self, rows: &[WrappedRow], display_row: usize, x_cells: usize) {
+        self.break_typing_run();
+        self.selection_anchor = None;
+        self.move_cursor_display(rows, display_row, x_cells);
+    }
+
+    /// Extend the selection to a dragged display position, anchored where
+    /// the drag started.
+    pub fn drag_to_display(&mut self, rows: &[WrappedRow], display_row: usize, x_cells: usize) {
+        self.begin_selection();
+        self.move_cursor_display(rows, display_row, x_cells);
+        self.finish_selection();
     }
 
     // ── Soft wrap ────────────────────────────────────────────────────────
@@ -442,10 +702,16 @@ impl MessageComposer {
         }
         let index = match self.history_index {
             None => {
+                self.push_undo(EditKind::Other);
                 self.stashed_draft = Some(std::mem::take(&mut self.lines));
                 self.history.len() - 1
             }
-            Some(i) => i.saturating_sub(1),
+            // Already at the oldest entry: stay there
+            Some(0) => return,
+            Some(i) => {
+                self.push_undo(EditKind::Other);
+                i - 1
+            }
         };
         self.load_history(index);
     }
@@ -455,8 +721,12 @@ impl MessageComposer {
     pub fn history_next(&mut self) {
         match self.history_index {
             None => {}
-            Some(i) if i + 1 < self.history.len() => self.load_history(i + 1),
+            Some(i) if i + 1 < self.history.len() => {
+                self.push_undo(EditKind::Other);
+                self.load_history(i + 1);
+            }
             Some(_) => {
+                self.push_undo(EditKind::Other);
                 self.history_index = None;
                 self.lines = self.stashed_draft.take().unwrap_or_default();
                 if self.lines.is_empty() {
@@ -721,5 +991,170 @@ mod tests {
         c.open(1, 2, "1:main · 1: agent".to_string());
         assert_eq!(c.text(), "");
         assert_eq!(c.history, vec!["retry me"]);
+    }
+
+    #[test]
+    fn selected_text_extracts_partial_and_multiline_ranges() {
+        let mut c = open_composer();
+        c.insert_str("あbc\nde");
+        assert_eq!(c.selected_text(), None);
+
+        c.select_left();
+        assert_eq!(c.selected_text().as_deref(), Some("e"));
+        c.select_up();
+        assert_eq!(c.selected_text().as_deref(), Some("bc\nde"));
+    }
+
+    #[test]
+    fn select_all_and_cut_remove_everything() {
+        let mut c = open_composer();
+        c.select_all();
+        assert_eq!(c.selected_text(), None); // empty buffer selects nothing
+
+        c.insert_str("ab\ncd");
+        c.select_all();
+        assert_eq!(c.selected_text().as_deref(), Some("ab\ncd"));
+
+        assert_eq!(c.cut_selection().as_deref(), Some("ab\ncd"));
+        assert_eq!(c.text(), "");
+        assert_eq!(c.cut_selection(), None); // no selection left
+
+        c.undo();
+        assert_eq!(c.text(), "ab\ncd");
+    }
+
+    #[test]
+    fn shift_home_end_select_to_line_edges() {
+        let mut c = open_composer();
+        c.insert_str("hello");
+        c.move_left();
+        c.move_left();
+        c.move_left();
+
+        c.select_end();
+        assert_eq!(c.selection_range(), Some(((0, 2), (0, 5))));
+        c.select_home();
+        assert_eq!(c.selection_range(), Some(((0, 0), (0, 2))));
+    }
+
+    #[test]
+    fn ctrl_home_end_jump_across_the_buffer() {
+        let mut c = open_composer();
+        c.insert_str("ab\ncd\nef");
+        c.move_buffer_start();
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 0));
+        c.move_buffer_end();
+        assert_eq!((c.cursor_row, c.cursor_col), (2, 2));
+    }
+
+    #[test]
+    fn undo_coalesces_typing_and_redo_replays_it() {
+        let mut c = open_composer();
+        c.insert_str("first ");
+        c.insert_char('a');
+        c.insert_char('b'); // coalesces with 'a'
+        assert_eq!(c.text(), "first ab");
+
+        c.undo();
+        assert_eq!(c.text(), "first ");
+        c.undo();
+        assert_eq!(c.text(), "");
+        c.redo();
+        assert_eq!(c.text(), "first ");
+        c.redo();
+        assert_eq!(c.text(), "first ab");
+
+        // A new edit clears the redo stack
+        c.undo();
+        c.insert_char('x');
+        c.redo();
+        assert_eq!(c.text(), "first x");
+    }
+
+    #[test]
+    fn cursor_move_breaks_typing_coalescing() {
+        let mut c = open_composer();
+        c.insert_char('a');
+        c.insert_char('b');
+        c.move_left();
+        c.insert_char('X');
+        assert_eq!(c.text(), "aXb");
+
+        c.undo();
+        assert_eq!(c.text(), "ab");
+        c.undo();
+        assert_eq!(c.text(), "");
+    }
+
+    #[test]
+    fn selection_replacement_and_clear_are_single_undo_steps() {
+        let mut c = open_composer();
+        c.insert_str("hello");
+        c.select_left();
+        c.select_left();
+        c.insert_char('X');
+        assert_eq!(c.text(), "helX");
+
+        c.undo();
+        assert_eq!(c.text(), "hello");
+        assert_eq!(c.selection_range(), None);
+
+        c.clear();
+        assert_eq!(c.text(), "");
+        c.undo();
+        assert_eq!(c.text(), "hello");
+    }
+
+    #[test]
+    fn history_recall_is_undoable() {
+        let mut c = open_composer();
+        c.record_sent("older");
+        c.insert_str("draft");
+
+        c.history_prev();
+        assert_eq!(c.text(), "older");
+        c.undo();
+        assert_eq!(c.text(), "draft");
+        assert_eq!(c.history_position(), None);
+    }
+
+    #[test]
+    fn tab_inserts_spaces_as_one_undo_step() {
+        let mut c = open_composer();
+        c.insert_str("a");
+        c.insert_str("    ");
+        assert_eq!(c.text(), "a    ");
+        c.undo();
+        assert_eq!(c.text(), "a");
+    }
+
+    #[test]
+    fn mouse_positions_map_display_cells_to_chars() {
+        let mut c = open_composer();
+        c.insert_str("あいうえ\nxy");
+        // Width 5 → display rows (0,0,2), (0,2,4), (1,0,2)
+        let rows = c.wrapped_rows(5);
+
+        // A click on the second cell of い lands before it
+        c.set_cursor_display(&rows, 0, 3);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 1));
+        // Past the end of a wrapped row clamps to its last position
+        c.set_cursor_display(&rows, 1, 99);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 4));
+        // A row beyond the last clamps to the last row
+        c.set_cursor_display(&rows, 99, 0);
+        assert_eq!((c.cursor_row, c.cursor_col), (1, 0));
+    }
+
+    #[test]
+    fn mouse_drag_selects_from_press_point() {
+        let mut c = open_composer();
+        c.insert_str("abcdef");
+        let rows = c.wrapped_rows(10);
+
+        c.set_cursor_display(&rows, 0, 1);
+        c.drag_to_display(&rows, 0, 4);
+        assert_eq!(c.selection_range(), Some(((0, 1), (0, 4))));
+        assert_eq!(c.selected_text().as_deref(), Some("bcd"));
     }
 }

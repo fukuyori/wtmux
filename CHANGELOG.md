@@ -1,3 +1,22 @@
+## [3.3.0] - 2026-08-16
+
+### Added
+
+- **Message composer editing upgrades** (`Prefix + m`):
+  - Clipboard: `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+A`
+    selects all (system clipboard, like `Ctrl+V` paste).
+  - Undo/redo with `Ctrl+Z` / `Ctrl+Y`; a run of plain typing undoes as
+    one step, and clears, pastes, and history recalls are undoable too.
+  - `Shift+Home` / `Shift+End` select to the start/end of the line;
+    `Ctrl+Home` / `Ctrl+End` jump to the start/end of the message.
+  - `Tab` inserts 4 spaces.
+  - Mouse support: click places the cursor, drag selects, the wheel moves
+    through the text, and dragging the right/bottom border (or corner)
+    resizes the popup; the chosen size is kept for the session. Clicks
+    outside the popup are ignored so a stray click cannot discard the
+    draft.
+  - The footer shows a line/character counter (e.g. `3L 45C`).
+
 ## [3.2.4] - 2026-08-06
 
 ### Added

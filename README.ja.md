@@ -4,7 +4,7 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.2.4-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.3.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
@@ -272,10 +272,38 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `Ctrl+B, :` | コマンドプロンプト（tmuxスタイルのコマンド入力、下記参照） |
 | `Ctrl+B, t` | テーマ選択 |
 | テーマ選択中の `Esc` | テーマ選択をキャンセル |
+| `Ctrl+B, m` | メッセージコンポーザー（複数行エディタ、下記参照） |
 | `Ctrl+B, r` | カーソル形状をリセット |
 | `Ctrl+B, Shift+P` | フォーカスペインの出力ログを切り替え（`[LOG]`） |
 | `Ctrl+B, b` | アプリケーションにCtrl+Bを送信 |
 | `Esc` | プレフィックスモードをキャンセル |
+
+### メッセージコンポーザー
+
+`Ctrl+B, m` で、フォーカス中のペインのアプリケーションへ送るメッセージを
+作成する浮動の複数行エディタが開きます（IME対応。Claude Code などの
+AIエージェント宛に便利です）。エージェントダッシュボードの `m`、および
+`compose-message` コマンドからも開けます。
+
+| キー | 動作 |
+|-----|--------|
+| `Ctrl+Enter`（または `Ctrl+S`） | メッセージを送信 |
+| `Enter` | 改行を挿入 |
+| `Esc` | 閉じる（未送信の下書きは `Ctrl+P` で呼び出せます） |
+| `Shift+矢印` / `Shift+Home` / `Shift+End` | 選択範囲を拡張 |
+| `Ctrl+A` | 全選択 |
+| `Ctrl+C` / `Ctrl+X` | 選択範囲をコピー / カット |
+| `Ctrl+V` | クリップボードから貼り付け |
+| `Ctrl+Z` / `Ctrl+Y` | 元に戻す / やり直し |
+| `Ctrl+Home` / `Ctrl+End` | メッセージの先頭 / 末尾へ移動 |
+| `Ctrl+U` | メッセージを消去 |
+| `Ctrl+P` / `Ctrl+N` | 送信済みメッセージを新旧に呼び出し |
+| `Tab` | スペース4個を挿入 |
+
+マウスも使えます。クリックでカーソル移動、ドラッグで選択、ホイールで
+スクロール、右端・下端の枠（または右下角）のドラッグでポップアップを
+リサイズできます（サイズは wtmux 終了まで保持）。フッターには行数と
+文字数のカウンターが表示されます。
 
 ### コマンドプロンプト
 
@@ -670,6 +698,10 @@ wtmuxは包括的なマウスサポートを提供しています。
 | タブバーを右クリック | そのウィンドウの名前変更 | そのウィンドウの名前変更 |
 | ペインタイトル（上枠）を右クリック | そのペインの名前変更 | そのペインの名前変更 |
 | スクロールホイール | バッファをスクロール | アプリに転送 |
+
+メッセージコンポーザー（`Ctrl+B, m`）表示中は、マウスはコンポーザー自体に
+作用します。クリックでカーソル移動、ドラッグで選択、ホイールでテキスト内を
+移動、右端・下端の枠のドラッグでポップアップをリサイズできます。
 
 ## tmuxとの比較
 
