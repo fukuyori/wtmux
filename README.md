@@ -64,13 +64,13 @@ Download from the [Releases](https://github.com/fukuyori/wtmux/releases) page:
 **Windows**
 
 - **Microsoft Store** — [Download wtmux](https://apps.microsoft.com/detail/9PKHJXB67R2N)
-- **Installer** (`wtmux-x.x.x-setup.exe`) - Recommended for most users
-- **Portable** (`wtmux-x.x.x-portable-x64.zip`) - No installation required, just extract and run
-- **MSI** (`wtmux-x.x.x-x64.msi`) - For enterprise deployment
+- **Installer** (`wtmux-x.x.x-windows-x64.exe`) - Recommended for most users
+- **Portable** (`wtmux-x.x.x-windows-x64.zip`) - No installation required, just extract and run
+- **MSI** (`wtmux-x.x.x-windows-x64.msi`) - For enterprise deployment
 
 **macOS**
 
-- **Installer package** (`wtmux-x.x.x.pkg`) - Signed & notarized; installs `/usr/local/bin/wtmux`
+- **Installer package** (`wtmux-x.x.x-macos-<arch>.pkg`) - Signed & notarized; installs `/usr/local/bin/wtmux`
 
 **Linux**
 

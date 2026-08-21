@@ -26,13 +26,13 @@ Linuxやmacでターミナル作業をする人にとって、**tmux**は欠か�
 
 ### 方法1: ポータブル版（推奨）
 
-1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-portable-x64.zip`をダウンロード
+1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-windows-x64.zip`をダウンロード
 2. 任意のフォルダに展開
 3. `wtmux.exe`を実行
 
 ### 方法2: インストーラー
 
-1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-setup.exe`をダウンロード
+1. [Releases](https://github.com/fukuyori/wtmux/releases)ページから`wtmux-x.x.x-windows-x64.exe`をダウンロード
 2. インストーラーを実行
 3. コマンドプロンプトまたはPowerShellで`wtmux`を実行
 

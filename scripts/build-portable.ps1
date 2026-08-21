@@ -107,7 +107,7 @@ set WTMUX_CONFIG_DIR=%~dp0
 "@ | Out-File -FilePath "$packageDir\wtmux-portable.bat" -Encoding ASCII
 
 # Create ZIP
-$zipPath = "$outputDir\wtmux-$Version-portable-x64.zip"
+$zipPath = "$outputDir\wtmux-$Version-windows-x64.zip"
 if (Test-Path $zipPath) {
     Remove-Item $zipPath
 }

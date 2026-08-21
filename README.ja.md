@@ -60,13 +60,13 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 **Windows**
 
 - **Microsoft Store** — [wtmuxをダウンロード](https://apps.microsoft.com/detail/9PKHJXB67R2N)
-- **インストーラー** (`wtmux-x.x.x-setup.exe`) - 一般ユーザー向け推奨
-- **ポータブル版** (`wtmux-x.x.x-portable-x64.zip`) - インストール不要、展開して実行するだけ
-- **MSI** (`wtmux-x.x.x-x64.msi`) - 企業展開向け
+- **インストーラー** (`wtmux-x.x.x-windows-x64.exe`) - 一般ユーザー向け推奨
+- **ポータブル版** (`wtmux-x.x.x-windows-x64.zip`) - インストール不要、展開して実行するだけ
+- **MSI** (`wtmux-x.x.x-windows-x64.msi`) - 企業展開向け
 
 **macOS**
 
-- **インストーラーパッケージ** (`wtmux-x.x.x.pkg`) - 署名・公証済み。`/usr/local/bin/wtmux` にインストールされます
+- **インストーラーパッケージ** (`wtmux-x.x.x-macos-<arch>.pkg`) - 署名・公証済み。`/usr/local/bin/wtmux` にインストールされます
 
 **Linux**
 

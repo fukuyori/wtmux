@@ -138,4 +138,4 @@ try {
 
 Write-Host ""
 Write-Host "=== Build Complete ===" -ForegroundColor Cyan
-Write-Host "Installer: $outputDir\wtmux-$Version-setup.exe" -ForegroundColor Green
+Write-Host "Installer: $outputDir\wtmux-$Version-windows-x64.exe" -ForegroundColor Green

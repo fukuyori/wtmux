@@ -26,13 +26,13 @@ Startup is light: command history is loaded lazily on first use of the history s
 
 ### Option 1: Portable Version (Recommended)
 
-1. Download `wtmux-x.x.x-portable-x64.zip` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
+1. Download `wtmux-x.x.x-windows-x64.zip` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
 2. Extract to any folder
 3. Run `wtmux.exe`
 
 ### Option 2: Installer
 
-1. Download `wtmux-x.x.x-setup.exe` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
+1. Download `wtmux-x.x.x-windows-x64.exe` from the [Releases](https://github.com/fukuyori/wtmux/releases) page
 2. Run the installer
 3. Run `wtmux` from Command Prompt or PowerShell
 

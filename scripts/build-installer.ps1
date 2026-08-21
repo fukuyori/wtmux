@@ -173,7 +173,7 @@ Copy-Item $exePath "$stagingDir\wtmux.exe"
 Copy-Item ".\installer\license.rtf" "$stagingDir\license.rtf"
 Copy-Item ".\assets\generated\wtmux.ico" "$stagingDir\wtmux.ico"
 
-$msiPath = "$OutputDir\wtmux-$Version-x64.msi"
+$msiPath = "$OutputDir\wtmux-$Version-windows-x64.msi"
 
 if ($wixVersion -ge 4) {
     # WiX v4/v5/v6 - use wix.exe
@@ -259,7 +259,7 @@ if ($wixVersion -ge 4) {
         $wixArgs = @(
             "build",
             "-arch", "x64",
-            "-o", "..\output\wtmux-$Version-x64.msi",
+            "-o", "..\output\wtmux-$Version-windows-x64.msi",
             "wtmux-v4.wxs",
             "-ext", "WixToolset.UI.wixext"
         )

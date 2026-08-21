@@ -20,8 +20,8 @@
 # installed; a missing tool is skipped with a warning).
 #
 # Output:
-#   installer/output/wtmux_<version>-1_<arch>.deb
-#   installer/output/wtmux-<version>-1.<arch>.rpm
+#   installer/output/wtmux-<version>-linux-<arch>.deb
+#   installer/output/wtmux-<version>-linux-<arch>.rpm
 
 set -euo pipefail
 # Run from the repository root regardless of where the script lives
@@ -73,7 +73,13 @@ if [[ $DO_DEB -eq 1 ]]; then
         cargo deb --no-build --output "$OUTPUT_DIR"
         DEB_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.deb" -newer Cargo.toml -print -quit)
         [[ -z "$DEB_FILE" ]] && DEB_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.deb" | sort | tail -1)
-        echo "Package: $DEB_FILE"
+        # Rename cargo-deb's wtmux_<version>-1_<arch>.deb to the common
+        # wtmux-<version>-<os>-<arch> release naming
+        DEB_ARCH=$(basename "$DEB_FILE" .deb)
+        DEB_ARCH=${DEB_ARCH##*_}
+        DEB_OUT="$OUTPUT_DIR/wtmux-$VERSION-linux-$DEB_ARCH.deb"
+        [[ "$DEB_FILE" != "$DEB_OUT" ]] && mv "$DEB_FILE" "$DEB_OUT"
+        echo "Package: $DEB_OUT"
     else
         echo "Warning: cargo-deb not installed, skipping .deb (cargo install cargo-deb)" >&2
     fi
@@ -86,7 +92,13 @@ if [[ $DO_RPM -eq 1 ]]; then
         cargo generate-rpm --output "$OUTPUT_DIR"
         RPM_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.rpm" -newer Cargo.toml -print -quit)
         [[ -z "$RPM_FILE" ]] && RPM_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.rpm" | sort | tail -1)
-        echo "Package: $RPM_FILE"
+        # Rename cargo-generate-rpm's wtmux-<version>-1.<arch>.rpm to the common
+        # wtmux-<version>-<os>-<arch> release naming
+        RPM_ARCH=$(basename "$RPM_FILE" .rpm)
+        RPM_ARCH=${RPM_ARCH##*.}
+        RPM_OUT="$OUTPUT_DIR/wtmux-$VERSION-linux-$RPM_ARCH.rpm"
+        [[ "$RPM_FILE" != "$RPM_OUT" ]] && mv "$RPM_FILE" "$RPM_OUT"
+        echo "Package: $RPM_OUT"
     else
         echo "Warning: cargo-generate-rpm not installed, skipping .rpm (cargo install cargo-generate-rpm)" >&2
     fi
