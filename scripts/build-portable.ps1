@@ -5,10 +5,15 @@
 # Packaging never builds: run `cargo build --release` first.
 #
 # Usage:
-#   .\scripts\build-portable.ps1
+#   .\scripts\build-portable.ps1 [-Sign]
+#
+# -Sign: code-sign the bundled wtmux.exe (if not already signed),
+#        using the certificate named by CODESIGN_CERT.
 
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$Sign,
+    [string]$TimestampUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +22,15 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "=== wtmux Portable Package Builder ===" -ForegroundColor Cyan
+
+# Signing prerequisites
+$signTool = $null
+if ($Sign) {
+    . (Join-Path $PSScriptRoot "signing.ps1")
+    $signTool = Assert-SignPrereqs
+    if (-not $TimestampUrl) { $TimestampUrl = $script:DefaultTimestampUrl }
+    Write-Host "Code signing enabled: /n `"$env:CODESIGN_CERT`"" -ForegroundColor Gray
+}
 
 # Get version from Cargo.toml if not specified
 if (-not $Version) {
@@ -56,7 +70,11 @@ New-Item -ItemType Directory -Path $packageDir | Out-Null
 # Copy files
 Write-Host "Copying files..." -ForegroundColor Green
 
-# Main executable
+# Main executable — signed in place first so every package format reuses
+# one signature (= one token PIN prompt); skipped when already validly signed
+if ($Sign) {
+    Invoke-CodeSign -SignTool $signTool -Path $exePath -TimestampUrl $TimestampUrl -SkipIfSigned
+}
 Copy-Item $exePath "$packageDir\wtmux.exe"
 
 # Documentation

@@ -75,20 +75,9 @@ Download from the [Releases](https://github.com/fukuyori/wtmux/releases) page:
 **Linux**
 
 - **.deb / .rpm packages** - Build with `scripts/build-linux-packages.sh` (see below)
-- Build from source (see Option 3)
+- Build from source (see Option 2)
 
-### Option 2: PowerShell Install Script (Windows)
-
-```powershell
-# Build and install
-cargo build --release
-.\install.ps1
-
-# To uninstall
-.\install.ps1 -Uninstall
-```
-
-### Option 3: Build from Source
+### Option 2: Build from Source
 
 ```bash
 git clone https://github.com/fukuyori/wtmux.git
@@ -789,7 +778,6 @@ wtmux/
 ├── LICENSE
 ├── CHANGELOG.md
 ├── config.example.toml
-├── install.ps1
 ├── assets/
 │   ├── wtmux-icon.svg       # Icon source artwork
 │   └── generated/           # Generated .ico / preview PNG

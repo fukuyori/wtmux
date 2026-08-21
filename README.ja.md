@@ -71,20 +71,9 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 **Linux**
 
 - **.deb / .rpm パッケージ** - `scripts/build-linux-packages.sh` でビルド（下記参照）
-- ソースからビルド（方法3を参照）
+- ソースからビルド（方法2を参照）
 
-### 方法2: PowerShellインストールスクリプト（Windows）
-
-```powershell
-# ビルドしてインストール
-cargo build --release
-.\install.ps1
-
-# アンインストール
-.\install.ps1 -Uninstall
-```
-
-### 方法3: ソースからビルド
+### 方法2: ソースからビルド
 
 ```bash
 git clone https://github.com/fukuyori/wtmux.git
@@ -732,7 +721,6 @@ wtmux/
 ├── LICENSE
 ├── CHANGELOG.md
 ├── config.example.toml
-├── install.ps1
 ├── assets/
 │   ├── wtmux-icon.svg       # アイコン原本
 │   └── generated/           # 生成済み .ico / プレビュー PNG

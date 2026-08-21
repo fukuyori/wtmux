@@ -28,6 +28,11 @@ ArchitecturesInstallIn64BitMode=x64
 ChangesEnvironment=yes
 SetupIconFile=..\assets\generated\wtmux.ico
 UninstallDisplayIcon={app}\wtmux.ico
+; Signing is activated by build-inno-installer.ps1 -Sign (ISCC /DSign + /Ssigntool=...)
+#ifdef Sign
+SignTool=signtool
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

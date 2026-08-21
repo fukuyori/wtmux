@@ -4,9 +4,14 @@
 # Prerequisites:
 #   1. Install Inno Setup from https://jrsoftware.org/isinfo.php
 #   2. Build wtmux in release mode: cargo build --release
+#
+# -Sign: code-sign wtmux.exe (if not already signed), the uninstaller and
+#        the setup exe, using the certificate named by CODESIGN_CERT.
 
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$Sign,
+    [string]$TimestampUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +20,15 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "=== wtmux Inno Setup Installer Build ===" -ForegroundColor Cyan
+
+# Signing prerequisites
+$signTool = $null
+if ($Sign) {
+    . (Join-Path $PSScriptRoot "signing.ps1")
+    $signTool = Assert-SignPrereqs
+    if (-not $TimestampUrl) { $TimestampUrl = $script:DefaultTimestampUrl }
+    Write-Host "Code signing enabled: /n `"$env:CODESIGN_CERT`"" -ForegroundColor Gray
+}
 
 # Get version from Cargo.toml if not specified
 if (-not $Version) {
@@ -67,6 +81,12 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
+# Sign the executable in place, so every package format reuses one signature
+# (= one token PIN prompt); skipped when already validly signed
+if ($Sign) {
+    Invoke-CodeSign -SignTool $signTool -Path $exePath -TimestampUrl $TimestampUrl -SkipIfSigned
+}
+
 # Generate icon assets
 $iconScript = Join-Path $PSScriptRoot "generate-icons.ps1"
 if (Test-Path $iconScript) {
@@ -97,9 +117,17 @@ if ($updatedIssContent -ne $issContent) {
 
 # Build installer (run from installer directory)
 Write-Host "Building installer..." -ForegroundColor Green
+$isccArgs = @("/Q")
+if ($Sign) {
+    # /DSign activates the SignTool/SignedUninstaller directives in wtmux.iss;
+    # Inno Setup then signs both the uninstaller and the setup exe with this command
+    # ($q = literal quote, $f = file to sign).
+    $isccArgs += "/DSign"
+    $isccArgs += "/Ssigntool=`$q$signTool`$q sign /n `$q$env:CODESIGN_CERT`$q /fd SHA256 /tr $TimestampUrl /td SHA256 `$f"
+}
 Push-Location .\installer
 try {
-    & $iscc /Q "wtmux.iss"
+    & $iscc @isccArgs "wtmux.iss"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Error: Inno Setup compilation failed" -ForegroundColor Red
         exit 1

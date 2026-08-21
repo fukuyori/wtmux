@@ -5,10 +5,17 @@
 # Prerequisites:
 #   1. Install WiX Toolset from https://wixtoolset.org/releases/
 #   2. Build wtmux in release mode first: cargo build --release
+#
+# -Sign: code-sign the bundled wtmux.exe (if not already signed) and the MSI,
+#        using the certificate named by CODESIGN_CERT.
+#        (MSI has no separate uninstaller executable — uninstall runs through
+#        the signed MSI itself.)
 
 param(
     [string]$Version = "",
-    [string]$OutputDir = ".\installer\output"
+    [string]$OutputDir = ".\installer\output",
+    [switch]$Sign,
+    [string]$TimestampUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +24,15 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
 Write-Host "=== wtmux Installer Build Script ===" -ForegroundColor Cyan
+
+# Signing prerequisites
+$signTool = $null
+if ($Sign) {
+    . (Join-Path $PSScriptRoot "signing.ps1")
+    $signTool = Assert-SignPrereqs
+    if (-not $TimestampUrl) { $TimestampUrl = $script:DefaultTimestampUrl }
+    Write-Host "Code signing enabled: /n `"$env:CODESIGN_CERT`"" -ForegroundColor Gray
+}
 
 # Get version from Cargo.toml if not specified
 if (-not $Version) {
@@ -147,6 +163,12 @@ New-Item -ItemType Directory -Path $stagingDir | Out-Null
 
 # Copy files to staging
 Write-Host "Copying files to staging..." -ForegroundColor Green
+# Sign the executable in place before staging, so every package format reuses
+# one signature (= one token PIN prompt); skipped when already validly signed
+if ($Sign) {
+    Invoke-CodeSign -SignTool $signTool -Path $exePath -TimestampUrl $TimestampUrl -SkipIfSigned
+}
+
 Copy-Item $exePath "$stagingDir\wtmux.exe"
 Copy-Item ".\installer\license.rtf" "$stagingDir\license.rtf"
 Copy-Item ".\assets\generated\wtmux.ico" "$stagingDir\wtmux.ico"
@@ -275,6 +297,11 @@ if ($wixVersion -ge 4) {
         Write-Host "Error: light.exe failed" -ForegroundColor Red
         exit 1
     }
+}
+
+# Sign the MSI itself
+if ($Sign) {
+    Invoke-CodeSign -SignTool $signTool -Path $msiPath -TimestampUrl $TimestampUrl
 }
 
 # Cleanup
