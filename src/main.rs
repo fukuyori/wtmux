@@ -1487,18 +1487,33 @@ fn run_wm_main_loop(
                                     ui.message_composer.move_right();
                                 }
                             }
-                            KeyCode::Up => {
-                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                    ui.message_composer.select_up();
-                                } else {
-                                    ui.message_composer.move_up();
-                                }
-                            }
-                            KeyCode::Down => {
-                                if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                    ui.message_composer.select_down();
-                                } else {
-                                    ui.message_composer.move_down();
+                            // Vertical movement follows display rows so that
+                            // arrow keys behave naturally in soft-wrapped text;
+                            // without a layout (terminal too small) fall back
+                            // to logical lines
+                            KeyCode::Up | KeyCode::Down => {
+                                let rows = renderer
+                                    .message_composer_layout(wm, &ui.message_composer)
+                                    .map(|l| ui.message_composer.wrapped_rows(l.inner_width));
+                                let up = key_event.code == KeyCode::Up;
+                                let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
+                                match (rows, up, shift) {
+                                    (Some(rows), true, true) => {
+                                        ui.message_composer.select_up_display(&rows)
+                                    }
+                                    (Some(rows), true, false) => {
+                                        ui.message_composer.move_up_display(&rows)
+                                    }
+                                    (Some(rows), false, true) => {
+                                        ui.message_composer.select_down_display(&rows)
+                                    }
+                                    (Some(rows), false, false) => {
+                                        ui.message_composer.move_down_display(&rows)
+                                    }
+                                    (None, true, true) => ui.message_composer.select_up(),
+                                    (None, true, false) => ui.message_composer.move_up(),
+                                    (None, false, true) => ui.message_composer.select_down(),
+                                    (None, false, false) => ui.message_composer.move_down(),
                                 }
                             }
                             KeyCode::Home => {
@@ -2341,11 +2356,13 @@ fn run_wm_main_loop(
                             },
                             MouseEventKind::Up(MouseButton::Left) => composer_drag = None,
                             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                let rows =
+                                    ui.message_composer.wrapped_rows(layout.inner_width);
                                 for _ in 0..3 {
                                     if mouse_event.kind == MouseEventKind::ScrollUp {
-                                        ui.message_composer.move_up();
+                                        ui.message_composer.move_up_display(&rows);
                                     } else {
-                                        ui.message_composer.move_down();
+                                        ui.message_composer.move_down_display(&rows);
                                     }
                                 }
                                 ui.render(renderer, wm, &theme_list)?;

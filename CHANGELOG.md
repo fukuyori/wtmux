@@ -1,3 +1,21 @@
+## [3.3.1] - 2026-08-21
+
+### Fixed
+
+- Message composer: `Up`/`Down` (and `Shift+Up`/`Shift+Down`, wheel
+  scrolling) now move by display row in soft-wrapped text, keeping the
+  x position in cells, instead of jumping by logical line.
+
+### Changed
+
+- Release package files are now uniformly named
+  `wtmux-<version>-<os>-<arch>` (e.g. `wtmux-3.3.1-windows-x64.exe`
+  / `.zip` / `.msi`, `wtmux-3.3.1-linux-amd64.deb`).
+- Packaging scripts gained a `-Sign` option that code-signs the bundled
+  executable, the Inno Setup installer and its uninstaller, and the MSI;
+  the new `build-release-packages.ps1` builds all Windows packages in
+  one go. The manual `install.ps1` was removed.
+
 ## [3.3.0] - 2026-08-16
 
 ### Added

@@ -592,6 +592,60 @@ impl MessageComposer {
         self.cursor_col = self.char_at_cells(wrow, x_cells);
     }
 
+    /// Display-cell x offset of the cursor within its wrapped row.
+    fn cursor_x_cells(&self, rows: &[WrappedRow]) -> usize {
+        let (index, offset) = self.cursor_display_pos(rows);
+        let Some(row) = rows.get(index) else {
+            return 0;
+        };
+        let Some(line) = self.lines.get(row.line) else {
+            return 0;
+        };
+        line.chars().skip(row.start).take(offset).map(char_width).sum()
+    }
+
+    /// Move the cursor one display row up (`-1`) or down (`1`), keeping the
+    /// x position in cells, so vertical movement follows soft-wrapped rows.
+    fn move_vert_display_raw(&mut self, rows: &[WrappedRow], delta: isize) {
+        let (index, _) = self.cursor_display_pos(rows);
+        let Some(target) = index
+            .checked_add_signed(delta)
+            .filter(|&target| target < rows.len())
+        else {
+            return;
+        };
+        let x_cells = self.cursor_x_cells(rows);
+        self.move_cursor_display(rows, target, x_cells);
+    }
+
+    /// Up arrow: move one display (soft-wrapped) row up.
+    pub fn move_up_display(&mut self, rows: &[WrappedRow]) {
+        self.break_typing_run();
+        self.selection_anchor = None;
+        self.move_vert_display_raw(rows, -1);
+    }
+
+    /// Down arrow: move one display (soft-wrapped) row down.
+    pub fn move_down_display(&mut self, rows: &[WrappedRow]) {
+        self.break_typing_run();
+        self.selection_anchor = None;
+        self.move_vert_display_raw(rows, 1);
+    }
+
+    /// Shift+Up: extend the selection one display row up.
+    pub fn select_up_display(&mut self, rows: &[WrappedRow]) {
+        self.begin_selection();
+        self.move_vert_display_raw(rows, -1);
+        self.finish_selection();
+    }
+
+    /// Shift+Down: extend the selection one display row down.
+    pub fn select_down_display(&mut self, rows: &[WrappedRow]) {
+        self.begin_selection();
+        self.move_vert_display_raw(rows, 1);
+        self.finish_selection();
+    }
+
     /// Place the cursor at a clicked display position. `rows` must come
     /// from [`Self::wrapped_rows`] with the same width the box was drawn at.
     pub fn set_cursor_display(&mut self, rows: &[WrappedRow], display_row: usize, x_cells: usize) {
@@ -754,6 +808,61 @@ mod tests {
         let mut composer = MessageComposer::new();
         composer.open(1, 2, "1:main · 1: agent".to_string());
         composer
+    }
+
+    #[test]
+    fn arrow_keys_move_by_display_row_in_wrapped_text() {
+        let mut c = open_composer();
+        c.insert_str("abcdefghij");
+        // Width 4 wraps one logical line into "abcd" / "efgh" / "ij"
+        let rows = c.wrapped_rows(4);
+        assert_eq!(rows.len(), 3);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 10));
+
+        c.move_up_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 6), "into middle row, x kept");
+        c.move_up_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 2));
+        c.move_up_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 2), "no-op at the top row");
+
+        c.move_down_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 6));
+        c.move_down_display(&rows);
+        c.move_down_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 10), "clamped to short last row");
+        c.move_down_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 10), "no-op at the bottom row");
+    }
+
+    #[test]
+    fn display_row_movement_keeps_x_in_cells_with_wide_chars() {
+        let mut c = open_composer();
+        // Width 4 wraps "あいう" (2 cells each) into "あい" / "う"
+        c.insert_str("あいう");
+        let rows = c.wrapped_rows(4);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 3));
+
+        // Cursor is 2 cells into the last row; 2 cells into the first
+        // row is the start of "い"
+        c.move_up_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 1));
+        c.move_down_display(&rows);
+        assert_eq!((c.cursor_row, c.cursor_col), (0, 3));
+    }
+
+    #[test]
+    fn shift_up_down_select_one_display_row() {
+        let mut c = open_composer();
+        c.insert_str("abcdefgh");
+        let rows = c.wrapped_rows(4); // "abcd" / "efgh"
+        c.move_buffer_start();
+
+        c.select_down_display(&rows);
+        assert_eq!(c.selected_text().as_deref(), Some("abcd"));
+        c.select_up_display(&rows);
+        assert_eq!(c.selected_text(), None, "moving back collapses the selection");
     }
 
     #[test]
