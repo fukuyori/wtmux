@@ -66,19 +66,29 @@ fi
 OUTPUT_DIR=installer/output
 mkdir -p "$OUTPUT_DIR"
 
+# Each package is built into an empty staging directory, then moved to its
+# release name. Globbing $OUTPUT_DIR directly would match packages left by
+# earlier runs and rename an already-renamed file a second time.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+
 if [[ $DO_DEB -eq 1 ]]; then
     echo ""
     if command -v cargo-deb >/dev/null 2>&1; then
         echo "Building .deb ..."
-        cargo deb --no-build --output "$OUTPUT_DIR"
-        DEB_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.deb" -newer Cargo.toml -print -quit)
-        [[ -z "$DEB_FILE" ]] && DEB_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.deb" | sort | tail -1)
-        # Rename cargo-deb's wtmux_<version>-1_<arch>.deb to the common
-        # wtmux-<version>-<os>-<arch> release naming
+        mkdir -p "$STAGE/deb"
+        cargo deb --no-build --output "$STAGE/deb"
+        DEB_FILE=$(find "$STAGE/deb" -maxdepth 1 -name "*.deb" -print -quit)
+        if [[ -z "$DEB_FILE" ]]; then
+            echo "Error: cargo deb produced no .deb package." >&2
+            exit 1
+        fi
+        # cargo-deb names its output wtmux_<version>-1_<arch>.deb; move it to
+        # the common wtmux-<version>-<os>-<arch> release naming
         DEB_ARCH=$(basename "$DEB_FILE" .deb)
         DEB_ARCH=${DEB_ARCH##*_}
         DEB_OUT="$OUTPUT_DIR/wtmux-$VERSION-linux-$DEB_ARCH.deb"
-        [[ "$DEB_FILE" != "$DEB_OUT" ]] && mv "$DEB_FILE" "$DEB_OUT"
+        mv -f "$DEB_FILE" "$DEB_OUT"
         echo "Package: $DEB_OUT"
     else
         echo "Warning: cargo-deb not installed, skipping .deb (cargo install cargo-deb)" >&2
@@ -89,15 +99,19 @@ if [[ $DO_RPM -eq 1 ]]; then
     echo ""
     if command -v cargo-generate-rpm >/dev/null 2>&1; then
         echo "Building .rpm ..."
-        cargo generate-rpm --output "$OUTPUT_DIR"
-        RPM_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.rpm" -newer Cargo.toml -print -quit)
-        [[ -z "$RPM_FILE" ]] && RPM_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "wtmux*.rpm" | sort | tail -1)
-        # Rename cargo-generate-rpm's wtmux-<version>-1.<arch>.rpm to the common
-        # wtmux-<version>-<os>-<arch> release naming
+        mkdir -p "$STAGE/rpm"
+        cargo generate-rpm --output "$STAGE/rpm"
+        RPM_FILE=$(find "$STAGE/rpm" -maxdepth 1 -name "*.rpm" -print -quit)
+        if [[ -z "$RPM_FILE" ]]; then
+            echo "Error: cargo generate-rpm produced no .rpm package." >&2
+            exit 1
+        fi
+        # cargo-generate-rpm names its output wtmux-<version>-1.<arch>.rpm; move
+        # it to the common wtmux-<version>-<os>-<arch> release naming
         RPM_ARCH=$(basename "$RPM_FILE" .rpm)
         RPM_ARCH=${RPM_ARCH##*.}
         RPM_OUT="$OUTPUT_DIR/wtmux-$VERSION-linux-$RPM_ARCH.rpm"
-        [[ "$RPM_FILE" != "$RPM_OUT" ]] && mv "$RPM_FILE" "$RPM_OUT"
+        mv -f "$RPM_FILE" "$RPM_OUT"
         echo "Package: $RPM_OUT"
     else
         echo "Warning: cargo-generate-rpm not installed, skipping .rpm (cargo install cargo-generate-rpm)" >&2
