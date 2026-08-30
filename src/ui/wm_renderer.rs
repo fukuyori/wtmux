@@ -222,6 +222,18 @@ pub struct WmRenderer {
 /// How long a transient status message stays visible.
 const STATUS_MESSAGE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Cheat sheet box geometry: `(box_width, visible_rows)`, or `None` when the
+/// terminal is too small to show it. Shared with the event loop so paging
+/// moves by exactly one screen.
+pub fn key_help_geometry(wm: &WindowManager) -> Option<(usize, usize)> {
+    let content_top = wm.tab_bar_height as usize;
+    let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+    let box_width = (wm.width as usize).saturating_sub(4).min(80);
+    // Chrome: top border, separator, help line, bottom border
+    let list_h = content_height.saturating_sub(2 + 4);
+    (box_width >= 24 && list_h >= 1).then_some((box_width, list_h))
+}
+
 /// Optional UI layer rendered over the window-manager scene.
 ///
 /// A single overlay value keeps rendering priority explicit and guarantees
@@ -232,7 +244,11 @@ pub enum WmOverlay<'a> {
     CopyMode(&'a CopyMode),
     Rename {
         buffer: &'a str,
-        target: super::app_state::RenameTarget,
+    },
+    /// Key cheat sheet (`Prefix + ?`), scrolled to `scroll`
+    KeyHelp {
+        lines: &'a [crate::keybind::CheatLine],
+        scroll: usize,
     },
     ThemeSelector {
         themes: &'a [&'a str],
@@ -291,6 +307,11 @@ impl WmRenderer {
     /// seconds).
     pub fn set_status_message(&mut self, message: String) {
         self.status_message = Some((message, std::time::Instant::now()));
+    }
+
+    /// Drop the status message immediately (e.g. when a prompt is answered).
+    pub fn clear_status_message(&mut self) {
+        self.status_message = None;
     }
 
     /// Expire a stale status message. Returns true when it was just cleared
@@ -415,12 +436,11 @@ impl WmRenderer {
                     Some(WmOverlay::PaneNumbers) => {
                         self.render_pane_numbers(out, wm)?;
                     }
-                    Some(WmOverlay::Rename { buffer, target }) => {
-                        let title = match target {
-                            super::app_state::RenameTarget::Window => "Rename Window",
-                            super::app_state::RenameTarget::Pane => "Rename Pane",
-                        };
-                        self.render_rename_popup(out, wm, buffer, title)?;
+                    Some(WmOverlay::Rename { buffer }) => {
+                        self.render_rename_popup(out, wm, buffer, "Rename Window")?;
+                    }
+                    Some(WmOverlay::KeyHelp { lines, scroll }) => {
+                        self.render_key_help(out, wm, lines, *scroll)?;
                     }
                     Some(WmOverlay::ThemeSelector { themes, selected }) => {
                         self.render_theme_selector(out, wm, themes, *selected)?;
@@ -1550,6 +1570,126 @@ impl WmRenderer {
         Ok(())
     }
 
+    /// Render the key cheat sheet: section headers and `key  command  help`
+    /// rows from `lines`, starting at line `scroll`.
+    fn render_key_help<W: Write>(
+        &self,
+        stdout: &mut W,
+        wm: &WindowManager,
+        lines: &[crate::keybind::CheatLine],
+        scroll: usize,
+    ) -> io::Result<()> {
+        use crate::keybind::CheatLine;
+
+        let Some((box_width, list_h)) = key_help_geometry(wm) else {
+            return Ok(());
+        };
+        let cs = &self.color_scheme;
+        let content_top = wm.tab_bar_height as usize;
+        let content_height = (wm.height as usize).saturating_sub(content_top + 1);
+        let box_height = list_h + 4;
+        let start_x = (wm.width as usize - box_width) / 2;
+        let start_y = content_top + (content_height - box_height) / 2;
+        let scroll = scroll.min(lines.len().saturating_sub(list_h));
+        let inner = box_width.saturating_sub(2);
+
+        let base_colors = |stdout: &mut W| {
+            execute!(
+                stdout,
+                SetBackgroundColor(cs.selector_bg.to_crossterm()),
+                SetForegroundColor(cs.selector_fg.to_crossterm())
+            )
+        };
+        base_colors(stdout)?;
+
+        // Top border with title
+        let title = format!("Keys [{}, ?]", wm.prefix_key.display_name());
+        let title = truncate_to_display_width(&title, box_width.saturating_sub(5));
+        let title_width = str_display_width(&title);
+        execute!(stdout, MoveTo(start_x as u16, start_y as u16))?;
+        write!(stdout, "┌─ {} ", title)?;
+        for _ in 0..box_width.saturating_sub(title_width + 5) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┐")?;
+
+        // Column widths: the command column is dropped on narrow terminals
+        const KEY_COL: usize = 16;
+        let cmd_col = if inner >= 64 { 28 } else { 0 };
+
+        for row in 0..list_h {
+            let y = start_y + 1 + row;
+            execute!(stdout, MoveTo(start_x as u16, y as u16))?;
+            write!(stdout, "│")?;
+            match lines.get(scroll + row) {
+                Some(CheatLine::Section(name)) => {
+                    // "─ Windows ────" header in the selected colors
+                    execute!(
+                        stdout,
+                        SetBackgroundColor(cs.selector_selected_bg.to_crossterm()),
+                        SetForegroundColor(cs.selector_selected_fg.to_crossterm())
+                    )?;
+                    let label = truncate_to_display_width(name, inner.saturating_sub(3));
+                    write!(stdout, " {} ", label)?;
+                    for _ in 0..inner.saturating_sub(str_display_width(&label) + 2) {
+                        write!(stdout, "─")?;
+                    }
+                    base_colors(stdout)?;
+                }
+                Some(CheatLine::Row { key, command, help }) => {
+                    let key = truncate_to_display_width(key, KEY_COL - 1);
+                    let mut text = format!(" {:<width$}", key, width = KEY_COL);
+                    if cmd_col > 0 {
+                        let command = truncate_to_display_width(command, cmd_col - 1);
+                        text.push_str(&format!("{:<width$}", command, width = cmd_col));
+                    }
+                    text.push_str(help);
+                    let text = truncate_to_display_width(&text, inner);
+                    let used = str_display_width(&text);
+                    write!(stdout, "{}{:pad$}", text, "", pad = inner.saturating_sub(used))?;
+                }
+                None => write!(stdout, "{:pad$}", "", pad = inner)?,
+            }
+            write!(stdout, "│")?;
+        }
+
+        // Separator, help line, bottom border
+        let separator_y = start_y + 1 + list_h;
+        execute!(stdout, MoveTo(start_x as u16, separator_y as u16))?;
+        write!(stdout, "├")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┤")?;
+
+        let position = if lines.len() > list_h {
+            format!(" {}/{}", scroll + 1, lines.len().saturating_sub(list_h) + 1)
+        } else {
+            String::new()
+        };
+        let help = format!("j/k:Scroll PgUp/PgDn g/G:Top/End q/Esc:Close{position}");
+        let help = truncate_to_display_width(&help, box_width.saturating_sub(3));
+        let help_width = str_display_width(&help);
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 1) as u16))?;
+        write!(stdout, "│ {}", help)?;
+        write!(
+            stdout,
+            "{:padding$}│",
+            "",
+            padding = box_width.saturating_sub(help_width + 3)
+        )?;
+
+        execute!(stdout, MoveTo(start_x as u16, (separator_y + 2) as u16))?;
+        write!(stdout, "└")?;
+        for _ in 0..box_width.saturating_sub(2) {
+            write!(stdout, "─")?;
+        }
+        write!(stdout, "┘")?;
+
+        execute!(stdout, ResetColor)?;
+        Ok(())
+    }
+
     /// Paint a live preview of a window's panes clipped to the given region.
     ///
     /// Pane geometry is laid out for the full content area, so panes are
@@ -2344,21 +2484,75 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn rename_popup_shows_pane_title_variant() {
+    fn key_help_overlay_lists_sections_and_rows_with_aligned_box() {
         use crate::config::PrefixKey;
+        use crate::core::session::Session;
+        use crate::keybind::BindTable;
         use crate::wm::WindowManager;
+        use std::collections::BTreeMap;
 
-        let wm = WindowManager::new(60, 10, None, None, PrefixKey { char: 'b' }, true);
+        fn replay(out: &[u8]) -> Vec<String> {
+            let mut host = Session::new(9, 100, 30);
+            host.feed_bytes(out);
+            host.state
+                .active_screen()
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells
+                        .iter()
+                        .filter(|c| !c.is_continuation())
+                        .map(|c| if c.grapheme.is_empty() { " " } else { c.grapheme.as_str() })
+                        .collect()
+                })
+                .collect()
+        }
+
+        let wm = WindowManager::new(100, 30, None, None, PrefixKey { char: 'b' }, true);
+        let lines = BindTable::build('b', &BTreeMap::new(), &BTreeMap::new(), &[]).cheat_sheet();
         let renderer = WmRenderer::new();
+
         let mut out = Vec::new();
+        renderer.render_key_help(&mut out, &wm, &lines, 0).expect("render key help");
+        let grid = replay(&out);
+        let has_line = |needle: &str| grid.iter().any(|l| l.contains(needle));
+        assert!(has_line("Keys [Ctrl+B, ?]"), "title missing:\n{}", grid.join("\n"));
+        assert!(has_line(" Windows "), "section header missing:\n{}", grid.join("\n"));
+        assert!(
+            has_line("new-window") && has_line("Create a new window"),
+            "row missing:\n{}",
+            grid.join("\n")
+        );
+        assert!(has_line("q/Esc:Close"), "help line missing:\n{}", grid.join("\n"));
 
+        let width = grid.iter().find(|l| l.contains('┌')).unwrap().trim_end().chars().count();
+        for line in grid.iter().filter(|l| l.contains('│') || l.contains('├')) {
+            assert_eq!(
+                line.trim_end().chars().count(),
+                width,
+                "misaligned overlay row:\n{}",
+                grid.join("\n")
+            );
+        }
+
+        // Scrolling to the end shows the last row and the position counter
+        let (_, rows) = super::key_help_geometry(&wm).unwrap();
+        let mut out = Vec::new();
         renderer
-            .render_rename_popup(&mut out, &wm, "agent", "Rename Pane")
-            .expect("render rename popup");
-
-        let output = String::from_utf8(out).expect("valid UTF-8 output");
-        assert!(output.contains("Rename Pane"));
-        assert!(output.contains("agent█"));
+            .render_key_help(&mut out, &wm, &lines, lines.len())
+            .expect("render scrolled key help");
+        let grid = replay(&out);
+        let last = match lines.last().unwrap() {
+            crate::keybind::CheatLine::Row { help, .. } => *help,
+            crate::keybind::CheatLine::Section(s) => s,
+        };
+        assert!(grid.iter().any(|l| l.contains(last)), "last row missing:\n{}", grid.join("\n"));
+        let pages = lines.len().saturating_sub(rows) + 1;
+        assert!(
+            grid.iter().any(|l| l.contains(&format!("{pages}/{pages}"))),
+            "position counter missing:\n{}",
+            grid.join("\n")
+        );
     }
 
     #[cfg(windows)]
@@ -2390,6 +2584,15 @@ mod tests {
 
         let mut wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
         wm.new_tab();
+        // Pin the cwd-derived pane titles to a fixed value
+        for _ in 0..2 {
+            if let Some(tab) = wm.active_tab_mut() {
+                for pane in tab.panes.values_mut() {
+                    pane.session.state.current_path = "C:\\work\\proj".to_string();
+                }
+            }
+            wm.next_tab();
+        }
         let renderer = WmRenderer::new();
         let mut selector = WindowSelector::new();
         selector.open(&wm);
@@ -2402,9 +2605,9 @@ mod tests {
 
         let has_line = |needle: &str| grid.iter().any(|l| l.contains(needle));
         assert!(has_line("Windows [Ctrl+B, w]"), "title missing:\n{}", grid.join("\n"));
-        assert!(has_line("+  1: 1:main- (1 pane)"), "last-window row missing:\n{}", grid.join("\n"));
-        assert!(has_line("+  2: 2:shell* (1 pane)"), "active-window row missing:\n{}", grid.join("\n"));
-        assert!(has_line("Preview: 2: 2:shell"), "preview separator missing:\n{}", grid.join("\n"));
+        assert!(has_line("+  1: main- (1 pane)"), "last-window row missing:\n{}", grid.join("\n"));
+        assert!(has_line("+  2: shell* (1 pane)"), "active-window row missing:\n{}", grid.join("\n"));
+        assert!(has_line("Preview: 2: shell"), "preview separator missing:\n{}", grid.join("\n"));
         assert!(has_line("Enter:Select"), "help line missing:\n{}", grid.join("\n"));
 
         // Every overlay row must keep the box edges aligned.
@@ -2435,17 +2638,17 @@ mod tests {
             .expect("render expanded selector");
         let tree_grid = replay(&out);
         assert!(
-            tree_grid.iter().any(|l| l.contains("-  2: 2:shell* (1 pane)")),
+            tree_grid.iter().any(|l| l.contains("-  2: shell* (1 pane)")),
             "expanded-window marker missing:\n{}",
             tree_grid.join("\n")
         );
         assert!(
-            tree_grid.iter().any(|l| l.contains("└─ 1: Pane 1*")),
+            tree_grid.iter().any(|l| l.contains("└─ 1: proj*")),
             "pane child row missing:\n{}",
             tree_grid.join("\n")
         );
         assert!(
-            tree_grid.iter().any(|l| l.contains("Preview: 2: 2:shell - pane 1")),
+            tree_grid.iter().any(|l| l.contains("Preview: 2: shell - pane 1")),
             "pane preview title missing:\n{}",
             tree_grid.join("\n")
         );
@@ -2460,7 +2663,7 @@ mod tests {
         assert!(
             confirm_grid
                 .iter()
-                .any(|l| l.contains("Kill pane 1 of window 2: 2:shell? (y/N)")),
+                .any(|l| l.contains("Kill pane 1 of window 2: shell? (y/N)")),
             "pane kill confirmation missing:\n{}",
             confirm_grid.join("\n")
         );
@@ -2472,7 +2675,7 @@ mod tests {
             .expect("render window kill confirm");
         let confirm_grid = replay(&out);
         assert!(
-            confirm_grid.iter().any(|l| l.contains("Kill window 1: 1:main? (y/N)")),
+            confirm_grid.iter().any(|l| l.contains("Kill window 1: main? (y/N)")),
             "window kill confirmation missing:\n{}",
             confirm_grid.join("\n")
         );

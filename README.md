@@ -176,7 +176,7 @@ wtmux --help
 | `-w, --wsl` | Use WSL *(Windows only)* |
 | `-s, --shell <CMD>` | Custom shell command |
 | `--sjis` | Shift-JIS encoding (default: UTF-8) *(Windows only)* |
-| `-P, --cwd-prompt-hook <on\|off>` | Set shell prompt hook cwd tracking |
+| `-P, --cwd-prompt-hook <on\|off>` | Set shell prompt hook cwd tracking (default: on) |
 | `--no-cwd-prompt-hook` | Disable shell prompt hook cwd tracking |
 | `-v, --version` | Show version |
 | `-h, --help` | Show help |
@@ -205,6 +205,8 @@ reassigned or removed — see [Custom Key Bindings](#custom-key-bindings).
 | `Ctrl+B, w` | Show the window selector |
 | `Ctrl+B, 0-9` | Select window by number |
 | `Ctrl+B, ,` | Rename window |
+| `Ctrl+B, .` then `1-9` | Move window to that position (tmux `move-window`) |
+| `Ctrl+B, ?` | Key cheat sheet (every effective binding with a short description; `j/k`/`PgUp`/`PgDn` scroll, `q`/`Esc` close) |
 
 The window selector shows every window with its pane count and tmux-style
 flags (`*` current, `-` last), plus a live preview of the selected window.
@@ -228,11 +230,29 @@ switch to it, or click outside the popup to close it.
 | `Ctrl+B, ←↑↓→` | Move focus to pane in direction |
 | `Ctrl+B, Ctrl+←↑↓→` | Resize pane |
 | `Ctrl+B, z` | Toggle pane zoom |
-| `Ctrl+B, Space` | Cycle through layout presets |
+| `Ctrl+B, Space` | Next layout preset |
+| `Ctrl+B, Alt+1` … `Alt+5` | Apply a layout preset directly (see the table below) |
 | `Ctrl+B, q` | Show pane numbers (then 0-9 to select) |
 | `Ctrl+B, {` | Swap with previous pane |
 | `Ctrl+B, }` | Swap with next pane |
-| `Ctrl+B, .` | Rename pane (empty name restores the default) |
+
+Layout presets (same names and keys as tmux):
+
+| Key | Preset | Arrangement |
+|-----|--------|-------------|
+| `Alt+1` | `even-horizontal` | All panes side by side, equal width |
+| `Alt+2` | `even-vertical` | All panes stacked, equal height |
+| `Alt+3` | `main-horizontal` | One large pane on top, the rest in a row below |
+| `Alt+4` | `main-vertical` | One large pane on the left, the rest stacked on the right |
+| `Alt+5` | `tiled` | Grid |
+
+`Space` cycles forward through the presets; `previous-layout` (no default
+key, bindable) cycles backward.
+
+Pane titles are automatic: each pane shows the last component of its working
+directory (e.g. `wtmux` for `D:\home\source\rust\wtmux`) and follows `cd` as
+you move around. Panes in the same window that share a directory name are
+numbered `wtmux`, `wtmux:2`, `wtmux:3`, …
 
 ### Copy Mode
 
@@ -310,8 +330,11 @@ commands (tmux abbreviations in parentheses):
 | `next-window` / `previous-window` / `last-window` (`next` / `prev` / `last`) | Switch window |
 | `select-window -t <n>` (`selectw`) | Select window by number |
 | `rename-window <name>` (`renamew`) | Rename window |
-| `rename-pane [name]` (`renamep`) | Rename pane (no name restores the default) |
+| `move-window -t <n>` (`movew`) | Move the current window to position n (others shift) |
+| `swap-window -t <n>` (`swapw`) | Swap the current window with the one at position n |
 | `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` (`selectl`) | Apply layout preset |
+| `select-layout -n` / `-p`, `next-layout` (`nextl`), `previous-layout` (`prevl`) | Next / previous layout preset |
+| `list-keys` (`lsk`) | Open the key cheat sheet |
 | `resize-pane -Z` | Toggle pane zoom |
 | `set synchronize-panes [on\|off]` | Input broadcast |
 | `pipe-pane` | Toggle pane output logging |
@@ -418,8 +441,9 @@ same directory.
 # prefix_key = "C-a"  # Change to Ctrl+A
 
 # Inject a prompt hook into cmd.exe / PowerShell to publish pane cwd changes.
-# Disabled by default to avoid interfering with custom prompts.
-# cwd_prompt_hook = false
+# Enabled by default: pane titles follow the working directory. Set to false
+# if the hook interferes with a custom prompt.
+# cwd_prompt_hook = true
 
 # Remove built-in bindings (tmux: unbind-key).
 # Being an array, this must appear before the [sections] below.
@@ -444,8 +468,8 @@ color_scheme = "tokyo-night"
 
 # Bindings pressed after the prefix key (tmux: bind-key)
 [bind]
-# "M-4" = "select-layout main-vertical"
-# "M-5" = "select-layout tiled"
+# "M-p" = "previous-layout"
+# "M-s" = "swap-window"         # then a digit picks the other window
 # "C-o" = "swap-pane -D"
 # "z"   = ""                    # empty string unbinds
 
@@ -501,9 +525,8 @@ takes precedence over `[keybindings]`.
 unbind = ["d"]                 # drop the default Ctrl+B, d (array goes before any [section])
 
 [bind]                         # pressed after the prefix key
-"M-1" = "select-layout even-horizontal"
-"M-4" = "select-layout main-vertical"
-"M-5" = "select-layout tiled"
+"M-p" = "previous-layout"
+"M-s" = "swap-window"
 "|"   = "split-window -h"
 "C-o" = "swap-pane -D"
 "z"   = ""                     # empty string unbinds, same as `unbind`
@@ -523,10 +546,10 @@ Character case is significant, so `P` and `p` are different keys.
 
 | Group | Commands |
 |-------|----------|
-| Windows | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
-| Panes | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` / `rename-pane` |
+| Windows | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `move-window [-t <n>]` / `swap-window [-t <n>]` / `rename-window` / `choose-window` |
+| Panes | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
 | Sizing | `resize-pane -Z` (zoom) / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
-| Layout | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
+| Layout | `next-layout` / `previous-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` / `select-layout -n\|-p` / `M-1`…`M-5` |
 | Modes | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
 | Terminal | `scroll-up [n]` / `scroll-down [n]` / `scroll-top` / `scroll-bottom` / `extend-selection -L\|-R\|-U\|-D` / `copy-selection` / `history-selector` |
 | Other | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
@@ -600,7 +623,8 @@ on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -
 
 Hooks run detached (`cmd /C` on Windows, `sh -c` elsewhere) and receive the
 context via environment variables: `WTMUX_HOOK_STATE`, `WTMUX_HOOK_PREV_STATE`,
-`WTMUX_HOOK_PANE` (`<window>.<pane>`), `WTMUX_HOOK_WINDOW`, `WTMUX_HOOK_TITLE`.
+`WTMUX_HOOK_PANE` (`<window>.<pane>`), `WTMUX_HOOK_WINDOW`, `WTMUX_HOOK_TITLE`
+(the pane title, i.e. its working directory name).
 
 ### Ground-truth state reporting (`wtmux report-state`)
 
@@ -740,9 +764,8 @@ When running TUI applications that use mouse input (e.g., htop, mc, vim with mou
 | Left drag on split border | Resize panes | Resize panes |
 | Left click on tab bar | Switch tab | Switch tab |
 | Left click `[+]` in tab bar | Create new tab | Create new tab |
-| Right click | Context menu (Paste, Zoom, Split, Rename Pane, etc.) | Context menu |
+| Right click | Context menu (Paste, Zoom, Split, etc.) | Context menu |
 | Right click on tab bar | Rename that window | Rename that window |
-| Right click on pane title (top border) | Rename that pane | Rename that pane |
 | Scroll wheel | Scroll buffer | App receives event |
 
 While the message composer (`Ctrl+B, m`) is open, the mouse acts on the

@@ -61,7 +61,7 @@ use tracing_subscriber::FmtSubscriber;
 use crate::core::session::Session;
 use crate::core::term::width::{char_width, str_display_width};
 use crate::ui::{
-    input, ContextMenuAction, KeyMapper, RenameTarget, Renderer, TreeEntry, UiMode, WmAppState,
+    input, ContextMenuAction, KeyMapper, Renderer, TreeEntry, UiMode, WmAppState,
 };
 use crate::wm::{WindowManager, SplitDirection};
 use crate::config::{ColorScheme, Config as WtmuxConfig, ParsedKeyBindings, PrefixKey};
@@ -87,11 +87,16 @@ enum AppAction {
         arrow_up_or_left: bool,
     },
     GotoTab(usize),
+    /// move-window -t <n> (1-based display position)
+    MoveTab(usize),
+    /// swap-window -t <n> (1-based display position)
+    SwapTab(usize),
     FocusNextPane,
     FocusPrevPane,
     ResetCursorShape,
     ToggleZoom,
     NextLayout,
+    PrevLayout,
     SelectLayout(crate::wm::layout::LayoutType),
     ResizePane {
         grow: bool,
@@ -121,9 +126,6 @@ impl From<ContextMenuAction> for AppAction {
             ContextMenuAction::SplitHorizontal => AppAction::SplitHorizontal,
             ContextMenuAction::SplitVertical => AppAction::SplitVertical,
             ContextMenuAction::ToggleZoom => AppAction::ToggleZoom,
-            // RenamePane needs UI state (the rename popup), so the event loop
-            // handles it before converting to an AppAction.
-            ContextMenuAction::RenamePane => AppAction::Noop,
             ContextMenuAction::Cancel => AppAction::Noop,
         }
     }
@@ -161,7 +163,8 @@ impl Default for Config {
             shell_from_cli: false,
             debug: false,  // Logging disabled by default
             vt_trace: false,
-            cwd_prompt_hook: false,
+            // Default on: pane titles follow the working directory
+            cwd_prompt_hook: true,
             cwd_prompt_hook_from_cli: false,
         }
     }
@@ -234,7 +237,7 @@ fn print_help(wtmux_config: &WtmuxConfig) {
     eprintln!("  -d, --debug           Enable debug logging to file");
     eprintln!("  --vt-trace            Trace raw PTY bytes to <data dir>/vt_trace.log");
     eprintln!("  -P, --cwd-prompt-hook <on|off>");
-    eprintln!("                         Set shell prompt hook cwd tracking");
+    eprintln!("                         Set shell prompt hook cwd tracking (default: on)");
     eprintln!("  --no-cwd-prompt-hook  Disable shell prompt hook cwd tracking");
     eprintln!("  -v, --version         Show version");
     eprintln!("  -h, --help            Show this help");
@@ -1086,6 +1089,18 @@ fn run_wm_main_loop(
     let mut status_publisher = tmux_compat::StatusPublisher::default();
     let theme_list = ColorScheme::list();
     let mut ui = WmAppState::new();
+    // Bindings are fixed for the session, so the cheat sheet is built once.
+    // The legacy `[keybindings]` keys are a separate table; list them too.
+    ui.key_help_lines = binds.cheat_sheet();
+    ui.key_help_lines
+        .push(crate::keybind::CheatLine::Section("Without prefix ([keybindings])"));
+    ui.key_help_lines.extend(keybindings.cheat_rows().into_iter().map(
+        |(key, command, help)| crate::keybind::CheatLine::Row {
+            key,
+            command: command.to_string(),
+            help,
+        },
+    ));
     let pane_numbers_duration = Duration::from_secs(2);
 
     // Resize debounce: buffer rapid resize events and apply after 30ms of calm.
@@ -1407,6 +1422,10 @@ fn run_wm_main_loop(
                                                 ));
                                             }
                                         }
+                                        Ok(PromptAction::ListKeys) => {
+                                            ui.mode = UiMode::KeyHelp;
+                                            ui.key_help_scroll = 0;
+                                        }
                                         Ok(action) => {
                                             let message = execute_prompt_action(wm, action);
                                             renderer.set_status_message(message);
@@ -1622,13 +1641,8 @@ fn run_wm_main_loop(
                                 let menu_action = ui.context_menu.selected_action();
                                 ui.close_mode();
                                 wm.force_full_redraw();
-                                if menu_action == ContextMenuAction::RenamePane {
-                                    open_rename_pane(&mut ui, wm);
-                                    ui.render(renderer, wm, &theme_list)?;
-                                } else {
-                                    apply_app_action(wm, menu_action.into());
-                                    renderer.render(wm)?;
-                                }
+                                apply_app_action(wm, menu_action.into());
+                                renderer.render(wm)?;
                             }
                             _ => {}
                         }
@@ -1773,16 +1787,8 @@ fn run_wm_main_loop(
                                 continue;
                             }
                             KeyCode::Enter => {
-                                match ui.rename_target {
-                                    RenameTarget::Window => {
-                                        if !ui.rename_buffer.is_empty() {
-                                            wm.rename_active_tab(&ui.rename_buffer);
-                                        }
-                                    }
-                                    // Empty name restores the default pane title
-                                    RenameTarget::Pane => {
-                                        wm.rename_focused_pane(&ui.rename_buffer);
-                                    }
+                                if !ui.rename_buffer.is_empty() {
+                                    wm.rename_active_tab(&ui.rename_buffer);
                                 }
                                 ui.close_mode();
                                 wm.force_full_redraw();
@@ -1813,6 +1819,29 @@ fn run_wm_main_loop(
                             }
                         }
                         ui.close_mode();
+                        wm.force_full_redraw();
+                        renderer.render(wm)?;
+                        continue;
+                    }
+
+                    // move-window / swap-window: a single digit names the target
+                    // window position; any other key cancels.
+                    if matches!(ui.mode, UiMode::MoveWindow | UiMode::SwapWindow) {
+                        let swap = ui.mode == UiMode::SwapWindow;
+                        if let KeyCode::Char(c) = key_event.code {
+                            if let Some(num) = c.to_digit(10) {
+                                apply_app_action(
+                                    wm,
+                                    if swap {
+                                        AppAction::SwapTab(num as usize)
+                                    } else {
+                                        AppAction::MoveTab(num as usize)
+                                    },
+                                );
+                            }
+                        }
+                        ui.close_mode();
+                        renderer.clear_status_message();
                         wm.force_full_redraw();
                         renderer.render(wm)?;
                         continue;
@@ -1975,6 +2004,42 @@ fn run_wm_main_loop(
                     }
 
                     // Handle theme selector mode
+                    // Key cheat sheet: scroll, or close on q / Esc / ?
+                    if ui.mode == UiMode::KeyHelp {
+                        let page = crate::ui::key_help_geometry(wm)
+                            .map(|(_, rows)| rows)
+                            .unwrap_or(1);
+                        let max_scroll = ui.key_help_lines.len().saturating_sub(page);
+                        let scroll = ui.key_help_scroll;
+                        match key_event.code {
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                                ui.close_mode();
+                                wm.force_full_redraw();
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                ui.key_help_scroll = scroll.saturating_sub(1);
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                ui.key_help_scroll = (scroll + 1).min(max_scroll);
+                            }
+                            KeyCode::PageUp => {
+                                ui.key_help_scroll = scroll.saturating_sub(page);
+                            }
+                            KeyCode::PageDown | KeyCode::Char(' ') => {
+                                ui.key_help_scroll = (scroll + page).min(max_scroll);
+                            }
+                            KeyCode::Home | KeyCode::Char('g') => ui.key_help_scroll = 0,
+                            KeyCode::End | KeyCode::Char('G') => ui.key_help_scroll = max_scroll,
+                            _ => {}
+                        }
+                        if ui.mode == UiMode::KeyHelp {
+                            ui.render(renderer, wm, &theme_list)?;
+                        } else {
+                            renderer.render(wm)?;
+                        }
+                        continue;
+                    }
+
                     if ui.mode == UiMode::ThemeSelector {
                         match key_event.code {
                             KeyCode::Esc => {
@@ -2490,13 +2555,8 @@ fn run_wm_main_loop(
                                 {
                                     ui.close_mode();
                                     wm.force_full_redraw();
-                                    if action == ContextMenuAction::RenamePane {
-                                        open_rename_pane(&mut ui, wm);
-                                        ui.render(renderer, wm, &theme_list)?;
-                                    } else {
-                                        apply_app_action(wm, action.into());
-                                        renderer.render(wm)?;
-                                    }
+                                    apply_app_action(wm, action.into());
+                                    renderer.render(wm)?;
                                 } else {
                                     // Clicked outside menu - close it
                                     ui.close_mode();
@@ -2636,23 +2696,17 @@ fn run_wm_main_loop(
                                         wm.force_full_redraw();
                                     }
                                     ui.mode = UiMode::Rename;
-                                    ui.rename_target = RenameTarget::Window;
                                     if let Some(tab) = wm.active_tab() {
                                         ui.rename_buffer = tab.name.clone();
                                     }
                                     ui.render(renderer, wm, &theme_list)?;
                                 }
                             } else if let Some((pane_id, x, y)) = wm.handle_right_click(mouse_event.column, mouse_event.row) {
-                                if wm.pane_title_at(mouse_event.column, mouse_event.row) == Some(pane_id) {
-                                    // Right-click on the title row renames the pane
-                                    open_rename_pane(&mut ui, wm);
-                                    ui.render(renderer, wm, &theme_list)?;
-                                } else {
-                                    // Show context menu
-                                    ui.context_menu.show(pane_id, x, y, wm.width, wm.height);
-                                    ui.mode = UiMode::ContextMenu;
-                                    ui.render(renderer, wm, &theme_list)?;
-                                }
+                                // Show context menu (pane titles are automatic,
+                                // so the title row is no longer a rename target)
+                                ui.context_menu.show(pane_id, x, y, wm.width, wm.height);
+                                ui.mode = UiMode::ContextMenu;
+                                ui.render(renderer, wm, &theme_list)?;
                             }
                         }
                         MouseEventKind::ScrollUp => {
@@ -2874,21 +2928,35 @@ fn execute_prompt_action(
             wm.goto_tab(n);
             format!("window {n}")
         }
+        P::MoveWindow(n) => {
+            if n > 0 && wm.move_active_tab_to(n - 1) {
+                format!("window moved to {n}")
+            } else {
+                "window not moved".to_string()
+            }
+        }
+        P::SwapWindow(n) => {
+            if n > 0 && wm.swap_active_tab_with(n - 1) {
+                format!("window swapped with {n}")
+            } else {
+                "window not swapped".to_string()
+            }
+        }
         P::RenameWindow(name) => {
             wm.rename_active_tab(&name);
             format!("window renamed to {name:?}")
         }
-        P::RenamePane(name) => {
-            wm.rename_focused_pane(&name);
-            if name.is_empty() {
-                "pane title reset".to_string()
-            } else {
-                format!("pane renamed to {name:?}")
-            }
-        }
         P::SelectLayout(layout) => {
             wm.set_layout_preset(layout);
             format!("layout: {layout:?}")
+        }
+        P::NextLayout => {
+            wm.next_layout();
+            "next layout".to_string()
+        }
+        P::PrevLayout => {
+            wm.prev_layout();
+            "previous layout".to_string()
         }
         P::ToggleZoom => {
             wm.toggle_zoom();
@@ -2907,7 +2975,7 @@ fn execute_prompt_action(
             None => "pipe-pane: could not start logging".to_string(),
         },
         // Handled by the caller; kept for exhaustiveness
-        P::DisplayPopup { .. } => String::new(),
+        P::DisplayPopup { .. } | P::ListKeys => String::new(),
     }
 }
 
@@ -2973,14 +3041,6 @@ fn spawn_hook_command(command_line: &str, event: &crate::wm::AgentStateEvent) {
     }
 }
 
-/// Open the rename popup for the focused pane, prefilled with its custom
-/// title (empty when the pane still shows the default "Pane N" title).
-fn open_rename_pane(ui: &mut WmAppState, wm: &WindowManager) {
-    ui.mode = UiMode::Rename;
-    ui.rename_target = RenameTarget::Pane;
-    ui.rename_buffer = wm.focused_pane_title().unwrap_or_default();
-}
-
 /// Translate a key binding into the `AppAction` that carries it out.
 ///
 /// Returns `None` for bindings that open a modal UI (see [`apply_ui_action`])
@@ -2998,6 +3058,8 @@ fn app_action_for(bound: BoundAction, wm: &WindowManager) -> Option<AppAction> {
         B::PrevWindow => AppAction::PrevTab,
         B::LastWindow => AppAction::LastTab,
         B::SelectWindow(index) => AppAction::GotoTab(index),
+        B::MoveWindow(index) => AppAction::MoveTab(index),
+        B::SwapWindow(index) => AppAction::SwapTab(index),
         B::SelectPaneDir { direction, forward } => AppAction::FocusDirection { direction, forward },
         B::ResizePaneDir {
             direction,
@@ -3010,6 +3072,7 @@ fn app_action_for(bound: BoundAction, wm: &WindowManager) -> Option<AppAction> {
         B::PrevPane => AppAction::FocusPrevPane,
         B::ToggleZoom => AppAction::ToggleZoom,
         B::NextLayout => AppAction::NextLayout,
+        B::PrevLayout => AppAction::PrevLayout,
         B::SelectLayout(layout) => AppAction::SelectLayout(layout),
         B::ResizePane { grow } => AppAction::ResizePane { grow },
         B::SwapPaneNext => AppAction::SwapPaneNext,
@@ -3065,13 +3128,9 @@ fn apply_ui_action(
     match bound {
         B::UiRenameWindow => {
             ui.mode = UiMode::Rename;
-            ui.rename_target = RenameTarget::Window;
             if let Some(tab) = wm.active_tab() {
                 ui.rename_buffer = tab.name.clone();
             }
-        }
-        B::UiRenamePane => {
-            open_rename_pane(ui, wm);
         }
         B::UiCopyMode => {
             ui.copy_mode.enter(wm);
@@ -3109,6 +3168,18 @@ fn apply_ui_action(
         B::UiDisplayPanes => {
             ui.mode = UiMode::PaneNumbers;
             ui.pane_numbers_started = std::time::Instant::now();
+        }
+        B::UiListKeys => {
+            ui.mode = UiMode::KeyHelp;
+            ui.key_help_scroll = 0;
+        }
+        B::UiMoveWindow => {
+            ui.mode = UiMode::MoveWindow;
+            renderer.set_status_message("move-window: press 1-9 for the target position (Esc cancels)".to_string());
+        }
+        B::UiSwapWindow => {
+            ui.mode = UiMode::SwapWindow;
+            renderer.set_status_message("swap-window: press 1-9 for the other window (Esc cancels)".to_string());
         }
         B::UiHistorySelector => {
             let selector = ui.history_selector_mut();
@@ -3162,6 +3233,16 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
         AppAction::GotoTab(num) => {
             wm.goto_tab(num);
         }
+        AppAction::MoveTab(num) => {
+            if num > 0 {
+                wm.move_active_tab_to(num - 1);
+            }
+        }
+        AppAction::SwapTab(num) => {
+            if num > 0 {
+                wm.swap_active_tab_with(num - 1);
+            }
+        }
         AppAction::FocusNextPane => {
             wm.focus_next_pane();
             reset_cursor_shape();
@@ -3178,6 +3259,9 @@ fn apply_app_action(wm: &mut WindowManager, action: AppAction) {
         }
         AppAction::NextLayout => {
             wm.next_layout();
+        }
+        AppAction::PrevLayout => {
+            wm.prev_layout();
         }
         AppAction::SelectLayout(layout) => {
             wm.set_layout_preset(layout);

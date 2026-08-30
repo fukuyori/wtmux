@@ -80,6 +80,18 @@ impl LayoutType {
             LayoutType::Tiled => LayoutType::EvenHorizontal,
         }
     }
+
+    /// Get previous layout type (inverse of [`next`](Self::next))
+    pub fn prev(self) -> Self {
+        match self {
+            LayoutType::Custom => LayoutType::Tiled,
+            LayoutType::EvenHorizontal => LayoutType::Tiled,
+            LayoutType::EvenVertical => LayoutType::EvenHorizontal,
+            LayoutType::MainHorizontal => LayoutType::EvenVertical,
+            LayoutType::MainVertical => LayoutType::MainHorizontal,
+            LayoutType::Tiled => LayoutType::MainVertical,
+        }
+    }
 }
 
 /// Layout node - binary tree structure
@@ -748,5 +760,28 @@ mod tests {
             }
             Layout::Pane(_) => panic!("expected split"),
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_cycle_tests {
+    use super::LayoutType;
+
+    #[test]
+    fn prev_is_the_inverse_of_next_across_all_presets() {
+        let presets = [
+            LayoutType::EvenHorizontal,
+            LayoutType::EvenVertical,
+            LayoutType::MainHorizontal,
+            LayoutType::MainVertical,
+            LayoutType::Tiled,
+        ];
+        for preset in presets {
+            assert_eq!(preset.next().prev(), preset);
+            assert_eq!(preset.prev().next(), preset);
+        }
+        // Custom enters the cycle from either end
+        assert_eq!(LayoutType::Custom.next(), LayoutType::EvenHorizontal);
+        assert_eq!(LayoutType::Custom.prev(), LayoutType::Tiled);
     }
 }

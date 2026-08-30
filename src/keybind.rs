@@ -42,6 +42,10 @@ pub enum BoundAction {
     PrevWindow,
     LastWindow,
     SelectWindow(usize),
+    /// move-window -t <n> (1-based display position)
+    MoveWindow(usize),
+    /// swap-window -t <n> (1-based display position)
+    SwapWindow(usize),
     SelectPaneDir {
         direction: SplitDirection,
         forward: bool,
@@ -54,6 +58,7 @@ pub enum BoundAction {
     PrevPane,
     ToggleZoom,
     NextLayout,
+    PrevLayout,
     SelectLayout(LayoutType),
     ResizePane {
         grow: bool,
@@ -85,7 +90,10 @@ pub enum BoundAction {
     CopySelection,
     // ── Actions that open a modal UI ─────────────────────────────────────
     UiRenameWindow,
-    UiRenamePane,
+    /// move-window without -t: wait for a digit naming the target position
+    UiMoveWindow,
+    /// swap-window without -t: wait for a digit naming the other window
+    UiSwapWindow,
     UiCopyMode,
     UiSearch,
     UiThemeSelector,
@@ -95,6 +103,144 @@ pub enum BoundAction {
     UiMessageComposer,
     UiDisplayPanes,
     UiHistorySelector,
+    /// Key cheat sheet popup (tmux `list-keys` / `Prefix + ?`)
+    UiListKeys,
+}
+
+/// Section titles of the cheat sheet, in display order.
+const CHEAT_SHEET_SECTIONS: [&str; 6] = [
+    "Windows",
+    "Panes",
+    "Layouts",
+    "Scrollback & selection",
+    "Tools",
+    "Other",
+];
+
+/// One line of the key cheat sheet (`Prefix + ?`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CheatLine {
+    Section(&'static str),
+    Row {
+        key: String,
+        command: String,
+        help: &'static str,
+    },
+}
+
+impl BoundAction {
+    /// Cheat-sheet section this action is listed under.
+    pub fn category(self) -> &'static str {
+        use BoundAction as B;
+        match self {
+            B::NewWindow
+            | B::KillWindow
+            | B::NextWindow
+            | B::PrevWindow
+            | B::LastWindow
+            | B::SelectWindow(_)
+            | B::MoveWindow(_)
+            | B::SwapWindow(_)
+            | B::UiMoveWindow
+            | B::UiSwapWindow
+            | B::UiRenameWindow
+            | B::UiWindowSelector => CHEAT_SHEET_SECTIONS[0],
+            B::KillPane
+            | B::SplitVertical
+            | B::SplitHorizontal
+            | B::SelectPaneDir { .. }
+            | B::ResizePaneDir { .. }
+            | B::NextPane
+            | B::PrevPane
+            | B::ToggleZoom
+            | B::ResizePane { .. }
+            | B::SwapPaneNext
+            | B::SwapPanePrev
+            | B::ToggleBroadcast
+            | B::UiDisplayPanes => CHEAT_SHEET_SECTIONS[1],
+            B::NextLayout | B::PrevLayout | B::SelectLayout(_) => CHEAT_SHEET_SECTIONS[2],
+            B::ScrollUp(_)
+            | B::ScrollDown(_)
+            | B::ScrollTop
+            | B::ScrollBottom
+            | B::ExtendSelection { .. }
+            | B::CopySelection
+            | B::Paste
+            | B::UiCopyMode
+            | B::UiSearch => CHEAT_SHEET_SECTIONS[3],
+            B::UiCommandPrompt
+            | B::UiAgentDashboard
+            | B::UiMessageComposer
+            | B::UiHistorySelector
+            | B::UiThemeSelector
+            | B::NextAttention
+            | B::TogglePipeLog
+            | B::UiListKeys => CHEAT_SHEET_SECTIONS[4],
+            B::Noop | B::SendPrefix | B::Detach | B::ResetCursorShape => CHEAT_SHEET_SECTIONS[5],
+        }
+    }
+
+    /// One-line description for the cheat sheet.
+    pub fn help(self) -> &'static str {
+        use BoundAction as B;
+        match self {
+            B::Noop => "Do nothing",
+            B::NewWindow => "Create a new window",
+            B::KillPane => "Close the current pane",
+            B::KillWindow => "Close the current window",
+            B::SplitVertical => "Split top/bottom",
+            B::SplitHorizontal => "Split left/right",
+            B::NextWindow => "Go to the next window",
+            B::PrevWindow => "Go to the previous window",
+            B::LastWindow => "Go to the last-used window",
+            B::SelectWindow(_) => "Go to that window",
+            B::MoveWindow(_) => "Move this window to that position",
+            B::SwapWindow(_) => "Swap this window with that one",
+            B::UiMoveWindow => "Move window (then press a digit)",
+            B::UiSwapWindow => "Swap window (then press a digit)",
+            B::UiRenameWindow => "Rename the window",
+            B::UiWindowSelector => "Window list with preview",
+            B::SelectPaneDir { .. } => "Focus the pane in that direction",
+            B::ResizePaneDir { .. } => "Resize the pane in that direction",
+            B::NextPane => "Focus the next pane",
+            B::PrevPane => "Focus the previous pane",
+            B::ToggleZoom => "Zoom / unzoom the pane",
+            B::ResizePane { grow: true } => "Grow the pane",
+            B::ResizePane { grow: false } => "Shrink the pane",
+            B::SwapPaneNext => "Swap with the next pane",
+            B::SwapPanePrev => "Swap with the previous pane",
+            B::ToggleBroadcast => "Type into all panes at once (toggle)",
+            B::UiDisplayPanes => "Show pane numbers (then press a digit)",
+            B::NextLayout => "Next layout preset",
+            B::PrevLayout => "Previous layout preset",
+            B::SelectLayout(LayoutType::EvenHorizontal) => "Panes side by side",
+            B::SelectLayout(LayoutType::EvenVertical) => "Panes stacked",
+            B::SelectLayout(LayoutType::MainHorizontal) => "Main pane on top",
+            B::SelectLayout(LayoutType::MainVertical) => "Main pane on the left",
+            B::SelectLayout(LayoutType::Tiled) => "Grid",
+            B::SelectLayout(LayoutType::Custom) => "Current layout",
+            B::ScrollUp(_) => "Scroll back",
+            B::ScrollDown(_) => "Scroll forward",
+            B::ScrollTop => "Jump to the top of scrollback",
+            B::ScrollBottom => "Return to the live view",
+            B::ExtendSelection { .. } => "Extend the keyboard selection",
+            B::CopySelection => "Copy the selection",
+            B::Paste => "Paste the clipboard",
+            B::UiCopyMode => "Copy mode (vi-style scrollback)",
+            B::UiSearch => "Search the scrollback",
+            B::UiCommandPrompt => "Command prompt (tmux-style commands)",
+            B::UiAgentDashboard => "Agent dashboard (pane states)",
+            B::UiMessageComposer => "Message composer (multi-line send)",
+            B::UiHistorySelector => "Command history picker",
+            B::UiThemeSelector => "Choose a color theme",
+            B::NextAttention => "Jump to the next pane needing attention",
+            B::TogglePipeLog => "Log pane output to a file (toggle)",
+            B::UiListKeys => "This cheat sheet",
+            B::SendPrefix => "Send the prefix key to the pane",
+            B::Detach => "Detach from wtmux",
+            B::ResetCursorShape => "Reset the cursor shape",
+        }
+    }
 }
 
 impl BoundAction {
@@ -104,7 +250,8 @@ impl BoundAction {
         matches!(
             self,
             BoundAction::UiRenameWindow
-                | BoundAction::UiRenamePane
+                | BoundAction::UiMoveWindow
+                | BoundAction::UiSwapWindow
                 | BoundAction::UiCopyMode
                 | BoundAction::UiSearch
                 | BoundAction::UiThemeSelector
@@ -114,6 +261,7 @@ impl BoundAction {
                 | BoundAction::UiMessageComposer
                 | BoundAction::UiDisplayPanes
                 | BoundAction::UiHistorySelector
+                | BoundAction::UiListKeys
         )
     }
 }
@@ -294,6 +442,23 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
                 .map_err(|_| format!("invalid window index: {index}"))?;
             BoundAction::SelectWindow(index)
         }
+        // `-t <n>` acts directly; without it a digit is read interactively
+        "move-window" | "movew" => match arg_after(&args, "-t") {
+            Some(index) => BoundAction::MoveWindow(
+                index
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid window index: {index}"))?,
+            ),
+            None => BoundAction::UiMoveWindow,
+        },
+        "swap-window" | "swapw" => match arg_after(&args, "-t") {
+            Some(index) => BoundAction::SwapWindow(
+                index
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid window index: {index}"))?,
+            ),
+            None => BoundAction::UiSwapWindow,
+        },
         "select-pane" | "selectp" => match direction_flag(&args) {
             // `-L`/`-U` move backwards through the layout tree, hence the flip.
             Some((direction, up_or_left)) => BoundAction::SelectPaneDir {
@@ -325,16 +490,25 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
                 return Err("usage: resize-pane -Z | -L|-R|-U|-D | + | -".to_string());
             }
         }
-        "select-layout" | "selectl" => {
-            let name = args.first().ok_or_else(|| {
-                "usage: select-layout <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>"
-                    .to_string()
-            })?;
-            let layout =
-                LayoutType::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?;
-            BoundAction::SelectLayout(layout)
-        }
+        "select-layout" | "selectl" => match args.first().copied() {
+            // tmux: -n / -p cycle to the next / previous preset
+            Some("-n") => BoundAction::NextLayout,
+            Some("-p") => BoundAction::PrevLayout,
+            Some(name) => {
+                let layout =
+                    LayoutType::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?;
+                BoundAction::SelectLayout(layout)
+            }
+            None => {
+                return Err(
+                    "usage: select-layout <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled> | -n | -p"
+                        .to_string(),
+                )
+            }
+        },
         "next-layout" | "nextl" => BoundAction::NextLayout,
+        "previous-layout" | "prevl" => BoundAction::PrevLayout,
+        "list-keys" | "lsk" => BoundAction::UiListKeys,
         "swap-pane" | "swapp" => {
             if args.contains(&"-U") {
                 BoundAction::SwapPanePrev
@@ -343,7 +517,6 @@ pub fn parse_action(spec: &str) -> Result<BoundAction, String> {
             }
         }
         "rename-window" | "renamew" => BoundAction::UiRenameWindow,
-        "rename-pane" | "renamep" => BoundAction::UiRenamePane,
         "copy-mode" => BoundAction::UiCopyMode,
         "search" | "search-mode" => BoundAction::UiSearch,
         "choose-window" | "choosew" => BoundAction::UiWindowSelector,
@@ -534,6 +707,50 @@ impl BindTable {
         rows.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
         rows
     }
+
+    /// Lines of the `Prefix + ?` cheat sheet: prefix bindings grouped by
+    /// section, then prefix-less bindings. Reflects user overrides (the
+    /// last binding per key wins) and hides keys bound to `none`.
+    pub fn cheat_sheet(&self) -> Vec<CheatLine> {
+        fn effective(table: &[(BindKey, BoundAction)]) -> Vec<(BindKey, BoundAction)> {
+            let mut out: Vec<(BindKey, BoundAction)> = Vec::new();
+            for &(key, action) in table {
+                match out.iter_mut().find(|(k, _)| *k == key) {
+                    Some(slot) => slot.1 = action,
+                    None => out.push((key, action)),
+                }
+            }
+            out.retain(|(_, action)| *action != BoundAction::Noop);
+            out
+        }
+        fn row(key: &BindKey, action: BoundAction) -> CheatLine {
+            CheatLine::Row {
+                key: key.display_name(),
+                command: describe_action(action),
+                help: action.help(),
+            }
+        }
+
+        let prefix = effective(&self.prefix);
+        let mut lines = Vec::new();
+        for section in CHEAT_SHEET_SECTIONS {
+            let rows: Vec<CheatLine> = prefix
+                .iter()
+                .filter(|(_, action)| action.category() == section)
+                .map(|(key, action)| row(key, *action))
+                .collect();
+            if !rows.is_empty() {
+                lines.push(CheatLine::Section(section));
+                lines.extend(rows);
+            }
+        }
+        let root = effective(&self.root);
+        if !root.is_empty() {
+            lines.push(CheatLine::Section("Without prefix"));
+            lines.extend(root.iter().map(|(key, action)| row(key, *action)));
+        }
+        lines
+    }
 }
 
 /// Later entries win, so a user override pushed after a default shadows it
@@ -559,6 +776,11 @@ fn describe_action(action: BoundAction) -> String {
         B::PrevWindow => "previous-window".into(),
         B::LastWindow => "last-window".into(),
         B::SelectWindow(n) => format!("select-window -t {n}"),
+        B::MoveWindow(n) => format!("move-window -t {n}"),
+        B::SwapWindow(n) => format!("swap-window -t {n}"),
+        B::UiMoveWindow => "move-window".into(),
+        B::UiSwapWindow => "swap-window".into(),
+        B::UiListKeys => "list-keys".into(),
         B::SelectPaneDir { direction, forward } => {
             format!("select-pane {}", dir_flag(direction, !forward))
         }
@@ -570,6 +792,7 @@ fn describe_action(action: BoundAction) -> String {
         B::PrevPane => "previous-pane".into(),
         B::ToggleZoom => "resize-pane -Z".into(),
         B::NextLayout => "next-layout".into(),
+        B::PrevLayout => "previous-layout".into(),
         B::SelectLayout(layout) => format!("select-layout {}", layout.name()),
         B::ResizePane { grow } => {
             format!("resize-pane {}", if grow { "+" } else { "-" })
@@ -593,7 +816,6 @@ fn describe_action(action: BoundAction) -> String {
         } => format!("extend-selection {}", dir_flag(direction, arrow_up_or_left)),
         B::CopySelection => "copy-selection".into(),
         B::UiRenameWindow => "rename-window".into(),
-        B::UiRenamePane => "rename-pane".into(),
         B::UiCopyMode => "copy-mode".into(),
         B::UiSearch => "search".into(),
         B::UiThemeSelector => "choose-theme".into(),
@@ -639,6 +861,12 @@ fn default_prefix_binds(prefix_char: char) -> Vec<(BindKey, BoundAction)> {
         ("r", B::ResetCursorShape),
         ("z", B::ToggleZoom),
         ("Space", B::NextLayout),
+        // tmux's M-1..M-5 layout presets
+        ("M-1", B::SelectLayout(LayoutType::EvenHorizontal)),
+        ("M-2", B::SelectLayout(LayoutType::EvenVertical)),
+        ("M-3", B::SelectLayout(LayoutType::MainHorizontal)),
+        ("M-4", B::SelectLayout(LayoutType::MainVertical)),
+        ("M-5", B::SelectLayout(LayoutType::Tiled)),
         ("+", B::ResizePane { grow: true }),
         ("=", B::ResizePane { grow: true }),
         ("-", B::ResizePane { grow: false }),
@@ -646,7 +874,8 @@ fn default_prefix_binds(prefix_char: char) -> Vec<(BindKey, BoundAction)> {
         ("{", B::SwapPanePrev),
         ("d", B::Detach),
         (",", B::UiRenameWindow),
-        (".", B::UiRenamePane),
+        (".", B::UiMoveWindow),
+        ("?", B::UiListKeys),
         ("[", B::UiCopyMode),
         ("/", B::UiSearch),
         ("t", B::UiThemeSelector),
@@ -954,10 +1183,95 @@ mod tests {
             table.lookup_prefix(&ev(KeyCode::Char('p'), KeyModifiers::NONE)),
             Some(BoundAction::PrevWindow)
         );
+        // `.` is tmux's move-window (interactive: waits for a digit)
         assert_eq!(
             table.lookup_prefix(&ev(KeyCode::Char('.'), KeyModifiers::NONE)),
-            Some(BoundAction::UiRenamePane)
+            Some(BoundAction::UiMoveWindow)
         );
+    }
+
+    #[test]
+    fn layout_presets_have_tmux_default_keys_and_previous_layout_parses() {
+        let table = BindTable::build('b', &BTreeMap::new(), &BTreeMap::new(), &[]);
+        assert_eq!(
+            table.lookup_prefix(&ev(KeyCode::Char('1'), KeyModifiers::ALT)),
+            Some(BoundAction::SelectLayout(LayoutType::EvenHorizontal))
+        );
+        assert_eq!(
+            table.lookup_prefix(&ev(KeyCode::Char('5'), KeyModifiers::ALT)),
+            Some(BoundAction::SelectLayout(LayoutType::Tiled))
+        );
+        // Plain digits still select windows
+        assert_eq!(
+            table.lookup_prefix(&ev(KeyCode::Char('1'), KeyModifiers::NONE)),
+            Some(BoundAction::SelectWindow(1))
+        );
+        assert_eq!(parse_action("previous-layout").unwrap(), BoundAction::PrevLayout);
+        assert_eq!(parse_action("prevl").unwrap(), BoundAction::PrevLayout);
+        assert_eq!(parse_action("select-layout -p").unwrap(), BoundAction::PrevLayout);
+        assert_eq!(parse_action("select-layout -n").unwrap(), BoundAction::NextLayout);
+        assert_eq!(describe_action(BoundAction::PrevLayout), "previous-layout");
+    }
+
+    #[test]
+    fn cheat_sheet_groups_by_section_and_reflects_overrides() {
+        let bind = BTreeMap::from([
+            ("c".to_string(), "kill-pane".to_string()), // override a default
+            ("x".to_string(), "none".to_string()),      // unbind
+        ]);
+        let root = BTreeMap::from([("M-t".to_string(), "select-layout tiled".to_string())]);
+        let table = BindTable::build('b', &bind, &root, &[]);
+        assert!(table.errors().is_empty());
+        let lines = table.cheat_sheet();
+
+        // Sections appear in order, each followed by its rows
+        let sections: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| match l {
+                CheatLine::Section(s) => Some(*s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                "Windows",
+                "Panes",
+                "Layouts",
+                "Scrollback & selection",
+                "Tools",
+                "Other",
+                "Without prefix"
+            ]
+        );
+
+        let rows: Vec<(&str, &str, &str)> = lines
+            .iter()
+            .filter_map(|l| match l {
+                CheatLine::Row { key, command, help } => Some((key.as_str(), command.as_str(), *help)),
+                _ => None,
+            })
+            .collect();
+        // `c` shows once, with the override, not the default new-window
+        assert_eq!(rows.iter().filter(|(k, _, _)| *k == "c").count(), 1);
+        assert!(rows.contains(&("c", "kill-pane", "Close the current pane")));
+        // Unbound keys are hidden
+        assert!(!rows.iter().any(|(k, _, _)| *k == "x"));
+        // Root bindings land in the last section
+        assert!(rows.contains(&("Alt+t", "select-layout tiled", "Grid")));
+        // The cheat sheet key itself is listed
+        assert!(rows.contains(&("?", "list-keys", "This cheat sheet")));
+    }
+
+    #[test]
+    fn move_and_swap_window_parse_with_and_without_target() {
+        assert_eq!(parse_action("move-window").unwrap(), BoundAction::UiMoveWindow);
+        assert_eq!(parse_action("movew -t 3").unwrap(), BoundAction::MoveWindow(3));
+        assert_eq!(parse_action("swap-window").unwrap(), BoundAction::UiSwapWindow);
+        assert_eq!(parse_action("swapw -t 2").unwrap(), BoundAction::SwapWindow(2));
+        assert!(parse_action("move-window -t x").is_err());
+        assert_eq!(describe_action(BoundAction::MoveWindow(3)), "move-window -t 3");
+        assert_eq!(describe_action(BoundAction::UiSwapWindow), "swap-window");
     }
 
     #[test]

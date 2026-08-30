@@ -4,16 +4,10 @@ use std::time::Instant;
 
 use crate::copymode::CopyMode;
 use crate::history::HistorySelector;
+use crate::keybind::CheatLine;
 use crate::wm::{Pane, WindowManager};
 
 use super::{AgentDashboard, ContextMenu, MessageComposer, WindowSelector, WmOverlay, WmRenderer};
-
-/// What the rename popup (`UiMode::Rename`) is renaming.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RenameTarget {
-    Window,
-    Pane,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiMode {
@@ -23,8 +17,14 @@ pub(crate) enum UiMode {
     WindowSelector,
     AgentDashboard,
     PaneNumbers,
+    /// `move-window` waiting for a digit (target display position)
+    MoveWindow,
+    /// `swap-window` waiting for a digit (the other window's position)
+    SwapWindow,
     CopyMode,
     Rename,
+    /// Key cheat sheet (`Prefix + ?`)
+    KeyHelp,
     ContextMenu,
     CommandPrompt,
     Popup,
@@ -39,8 +39,8 @@ pub(crate) struct WmAppState {
     pub(crate) agent_dashboard: AgentDashboard,
     pub(crate) pane_numbers_started: Instant,
     pub(crate) copy_mode: CopyMode,
+    /// Input buffer for the window rename popup (`UiMode::Rename`)
     pub(crate) rename_buffer: String,
-    pub(crate) rename_target: RenameTarget,
     pub(crate) context_menu: ContextMenu,
     /// Input buffer for the command prompt (`Prefix + :`)
     pub(crate) command_buffer: String,
@@ -52,6 +52,10 @@ pub(crate) struct WmAppState {
     pub(crate) popup_hold: bool,
     /// Floating message composer (`Prefix + m`)
     pub(crate) message_composer: MessageComposer,
+    /// Cheat sheet lines (built once from the effective bindings)
+    pub(crate) key_help_lines: Vec<CheatLine>,
+    /// First visible cheat sheet line
+    pub(crate) key_help_scroll: usize,
 }
 
 impl WmAppState {
@@ -65,13 +69,14 @@ impl WmAppState {
             pane_numbers_started: Instant::now(),
             copy_mode: CopyMode::new(),
             rename_buffer: String::new(),
-            rename_target: RenameTarget::Window,
             context_menu: ContextMenu::new(),
             command_buffer: String::new(),
             popup: None,
             popup_prefix: false,
             popup_hold: false,
             message_composer: MessageComposer::new(),
+            key_help_lines: Vec::new(),
+            key_help_scroll: 0,
         }
     }
 
@@ -94,6 +99,7 @@ impl WmAppState {
         self.popup_prefix = false;
         self.popup_hold = false;
         self.message_composer.close();
+        self.key_help_scroll = 0;
         self.mode = UiMode::Normal;
     }
 
@@ -127,10 +133,15 @@ impl WmAppState {
             UiMode::WindowSelector => Some(WmOverlay::WindowSelector(&self.window_selector)),
             UiMode::AgentDashboard => Some(WmOverlay::AgentDashboard(&self.agent_dashboard)),
             UiMode::PaneNumbers => Some(WmOverlay::PaneNumbers),
+            // The prompt lives in the status bar message; no overlay needed
+            UiMode::MoveWindow | UiMode::SwapWindow => None,
             UiMode::CopyMode => Some(WmOverlay::CopyMode(&self.copy_mode)),
             UiMode::Rename => Some(WmOverlay::Rename {
                 buffer: &self.rename_buffer,
-                target: self.rename_target,
+            }),
+            UiMode::KeyHelp => Some(WmOverlay::KeyHelp {
+                lines: &self.key_help_lines,
+                scroll: self.key_help_scroll,
             }),
             UiMode::ContextMenu => Some(WmOverlay::ContextMenu(&self.context_menu)),
             UiMode::CommandPrompt => Some(WmOverlay::CommandPrompt(&self.command_buffer)),
@@ -143,7 +154,11 @@ impl WmAppState {
     pub(crate) fn defers_background_render(&self) -> bool {
         matches!(
             self.mode,
-            UiMode::CopyMode | UiMode::Rename | UiMode::ContextMenu | UiMode::MessageComposer
+            UiMode::CopyMode
+                | UiMode::Rename
+                | UiMode::KeyHelp
+                | UiMode::ContextMenu
+                | UiMode::MessageComposer
         )
     }
 }

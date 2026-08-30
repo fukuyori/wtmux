@@ -172,7 +172,7 @@ wtmux --help
 | `-w, --wsl` | WSLを使用 *（Windowsのみ）* |
 | `-s, --shell <CMD>` | カスタムシェルコマンド |
 | `--sjis` | Shift-JISエンコーディング（デフォルト: UTF-8）*（Windowsのみ）* |
-| `-P, --cwd-prompt-hook <on\|off>` | シェルの cwd 追跡用プロンプトフックを設定 |
+| `-P, --cwd-prompt-hook <on\|off>` | シェルの cwd 追跡用プロンプトフックを設定（デフォルト: on） |
 | `--no-cwd-prompt-hook` | シェルの cwd 追跡用プロンプトフックを無効化 |
 | `-v, --version` | バージョン表示 |
 | `-h, --help` | ヘルプ表示 |
@@ -201,6 +201,8 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `Ctrl+B, w` | ウィンドウ一覧を表示 |
 | `Ctrl+B, 0-9` | 番号でウィンドウを選択 |
 | `Ctrl+B, ,` | ウィンドウ名を変更 |
+| `Ctrl+B, .` のあと `1-9` | ウィンドウをその位置へ移動（tmux の `move-window`） |
+| `Ctrl+B, ?` | キーのチートシート（有効な全バインドと簡単な説明。`j/k`/`PgUp`/`PgDn` でスクロール、`q`/`Esc` で閉じる） |
 
 ウィンドウ一覧には各ウィンドウのペイン数と tmux 形式のフラグ
 （`*` 現在、`-` 直前）が表示され、下部に選択中ウィンドウのライブ
@@ -225,11 +227,29 @@ Windows専用オプションは macOS / Linux では非表示になります。m
 | `Ctrl+B, ←↑↓→` | 指定方向のペインにフォーカス移動 |
 | `Ctrl+B, Ctrl+←↑↓→` | ペインサイズ変更 |
 | `Ctrl+B, z` | ペインズーム切り替え |
-| `Ctrl+B, Space` | レイアウトプリセット切り替え |
+| `Ctrl+B, Space` | 次のレイアウトプリセット |
+| `Ctrl+B, Alt+1` … `Alt+5` | レイアウトプリセットを直接適用（下表参照） |
 | `Ctrl+B, q` | ペイン番号表示（その後0-9で選択） |
 | `Ctrl+B, {` | 前のペインと入れ替え |
 | `Ctrl+B, }` | 次のペインと入れ替え |
-| `Ctrl+B, .` | ペイン名を変更（空にするとデフォルトに戻る） |
+
+レイアウトプリセット（名前・キーとも tmux と同じ）:
+
+| キー | プリセット | 配置 |
+|-----|-----------|------|
+| `Alt+1` | `even-horizontal` | 全ペインを左右に均等配置 |
+| `Alt+2` | `even-vertical` | 全ペインを上下に均等配置 |
+| `Alt+3` | `main-horizontal` | 上に大きなメインペイン、下に残りを横並び |
+| `Alt+4` | `main-vertical` | 左に大きなメインペイン、右に残りを縦並び |
+| `Alt+5` | `tiled` | グリッド |
+
+`Space` はプリセットを順送り、`previous-layout`（デフォルトキーなし、割り当て可）
+は逆送りします。
+
+ペイン名は自動で付きます: 各ペインには作業ディレクトリの末尾ディレクトリ名
+（例: `D:\home\source\rust\wtmux` なら `wtmux`）が表示され、`cd` に追従します。
+同じウィンドウ内で同名になった場合は `wtmux`, `wtmux:2`, `wtmux:3`, … と
+番号が付きます。
 
 ### コピーモード
 
@@ -307,8 +327,11 @@ AIエージェント宛に便利です）。エージェントダッシュボー
 | `next-window` / `previous-window` / `last-window`（`next` / `prev` / `last`） | ウィンドウ切り替え |
 | `select-window -t <n>`（`selectw`） | 番号でウィンドウ選択 |
 | `rename-window <名前>`（`renamew`） | ウィンドウ名変更 |
-| `rename-pane [名前]`（`renamep`） | ペイン名変更（名前省略でデフォルトに戻る） |
+| `move-window -t <n>`（`movew`） | 現在のウィンドウを n 番目へ移動（他は詰める） |
+| `swap-window -t <n>`（`swapw`） | 現在のウィンドウと n 番目を入れ替え |
 | `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>`（`selectl`） | レイアウト適用 |
+| `select-layout -n` / `-p`、`next-layout`（`nextl`）、`previous-layout`（`prevl`） | 次 / 前のレイアウトプリセット |
+| `list-keys`（`lsk`） | キーのチートシートを開く |
 | `resize-pane -Z` | ペインズーム切り替え |
 | `set synchronize-panes [on\|off]` | 入力ブロードキャスト |
 | `pipe-pane` | ペイン出力ログの切り替え |
@@ -365,8 +388,9 @@ wtmuxは設定ディレクトリ内の `config.toml` から設定を読み込み
 # prefix_key = "C-a"  # Ctrl+Aに変更
 
 # cmd.exe / PowerShell にプロンプトフックを入れて pane cwd の変化を通知します。
-# プロンプトへの副作用を避けるため標準では無効です。
-# cwd_prompt_hook = false
+# 標準で有効です（ペイン名が作業ディレクトリに追従します）。カスタム
+# プロンプトと干渉する場合は false にしてください。
+# cwd_prompt_hook = true
 
 # 既定バインドの解除（tmux: unbind-key）
 # 配列なので、以下の [セクション] より前に置く必要があります
@@ -391,8 +415,8 @@ color_scheme = "tokyo-night"
 
 # プレフィックス配下のキーバインド（tmux: bind-key）
 [bind]
-# "M-4" = "select-layout main-vertical"
-# "M-5" = "select-layout tiled"
+# "M-p" = "previous-layout"
+# "M-s" = "swap-window"         # 続けて数字で相手のウィンドウを指定
 # "C-o" = "swap-pane -D"
 # "z"   = ""                    # 空文字で解除
 
@@ -446,9 +470,8 @@ lines = 10000
 unbind = ["d"]                 # 既定の Ctrl+B, d を解除（配列は [セクション] より前に）
 
 [bind]                         # プレフィックスの後に押すキー
-"M-1" = "select-layout even-horizontal"
-"M-4" = "select-layout main-vertical"
-"M-5" = "select-layout tiled"
+"M-p" = "previous-layout"
+"M-s" = "swap-window"
 "|"   = "split-window -h"
 "C-o" = "swap-pane -D"
 "z"   = ""                     # 空文字で解除（unbind と同じ）
@@ -468,10 +491,10 @@ unbind = ["d"]                 # 既定の Ctrl+B, d を解除（配列は [セ�
 
 | 分類 | コマンド |
 |------|---------|
-| ウィンドウ | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `rename-window` / `choose-window` |
-| ペイン | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` / `rename-pane` |
+| ウィンドウ | `new-window` / `kill-window` / `next-window` / `previous-window` / `last-window` / `select-window -t <n>` / `move-window [-t <n>]` / `swap-window [-t <n>]` / `rename-window` / `choose-window` |
+| ペイン | `split-window [-h]` / `kill-pane` / `next-pane` / `previous-pane` / `select-pane -L\|-R\|-U\|-D` / `swap-pane -U\|-D` / `display-panes` |
 | サイズ | `resize-pane -Z`（ズーム） / `resize-pane -L\|-R\|-U\|-D` / `resize-pane +` / `resize-pane -` |
-| レイアウト | `next-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` |
+| レイアウト | `next-layout` / `previous-layout` / `select-layout <even-horizontal\|even-vertical\|main-horizontal\|main-vertical\|tiled>` / `select-layout -n\|-p` / `M-1`…`M-5` |
 | モード | `copy-mode` / `search` / `command-prompt` / `choose-theme` / `agent-dashboard` / `compose-message` |
 | ターミナル操作 | `scroll-up [n]` / `scroll-down [n]` / `scroll-top` / `scroll-bottom` / `extend-selection -L\|-R\|-U\|-D` / `copy-selection` / `history-selector` |
 | その他 | `set synchronize-panes` / `pipe-pane` / `paste-buffer` / `send-prefix` / `detach-client` / `next-attention` / `reset-cursor` / `none` |
@@ -545,7 +568,7 @@ on_agent_blocked = 'powershell -NoProfile -Command "New-BurntToastNotification -
 フックはデタッチ実行され（Windowsは `cmd /C`、それ以外は `sh -c`）、
 遷移コンテキストは環境変数で渡されます: `WTMUX_HOOK_STATE`、
 `WTMUX_HOOK_PREV_STATE`、`WTMUX_HOOK_PANE`（`<ウィンドウ>.<ペイン>`）、
-`WTMUX_HOOK_WINDOW`、`WTMUX_HOOK_TITLE`。
+`WTMUX_HOOK_WINDOW`、`WTMUX_HOOK_TITLE`（ペイン名＝作業ディレクトリ名）。
 
 ### 状態の直接報告（`wtmux report-state`）
 
@@ -683,9 +706,8 @@ wtmuxは包括的なマウスサポートを提供しています。
 | 分割境界を左ドラッグ | ペインサイズ変更 | ペインサイズ変更 |
 | タブバーを左クリック | タブ切り替え | タブ切り替え |
 | タブバーの `[+]` を左クリック | 新規タブ作成 | 新規タブ作成 |
-| 右クリック | コンテキストメニュー（Paste, Zoom, Split, Rename Pane等） | コンテキストメニュー |
+| 右クリック | コンテキストメニュー（Paste, Zoom, Split等） | コンテキストメニュー |
 | タブバーを右クリック | そのウィンドウの名前変更 | そのウィンドウの名前変更 |
-| ペインタイトル（上枠）を右クリック | そのペインの名前変更 | そのペインの名前変更 |
 | スクロールホイール | バッファをスクロール | アプリに転送 |
 
 メッセージコンポーザー（`Ctrl+B, m`）表示中は、マウスはコンポーザー自体に

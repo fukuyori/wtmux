@@ -186,7 +186,7 @@ impl WindowManager {
         
         // Create initial tab
         let tab_id = 1;
-        let tab = Tab::new(tab_id, "1:main".to_string(), width, content_height);
+        let tab = Tab::new(tab_id, "main".to_string(), width, content_height);
         
         let mut tabs = HashMap::new();
         tabs.insert(tab_id, tab);
@@ -224,8 +224,8 @@ impl WindowManager {
         self.next_tab_id += 1;
         
         let (width, height) = self.content_size();
-        let tab_name = format!("{}:shell", tab_id);
-        let mut tab = Tab::new(tab_id, tab_name, width, height);
+        // Names carry no number: the tab bar prefixes the display index
+        let mut tab = Tab::new(tab_id, "shell".to_string(), width, height);
         
         // Start session in the initial pane
         if let Some(pane) = tab.focused_pane_mut() {
@@ -284,6 +284,37 @@ impl WindowManager {
         if num > 0 {
             self.select_tab_at(num - 1);
         }
+    }
+
+    /// Move the active tab to the given zero-based display position
+    /// (tmux `move-window -t`). Other tabs shift to make room. Returns true
+    /// when the order changed.
+    pub fn move_active_tab_to(&mut self, index: usize) -> bool {
+        let Some(pos) = self.tab_order.iter().position(|&id| id == self.active_tab) else {
+            return false;
+        };
+        let index = index.min(self.tab_order.len().saturating_sub(1));
+        if pos == index {
+            return false;
+        }
+        let id = self.tab_order.remove(pos);
+        self.tab_order.insert(index, id);
+        self.force_full_redraw();
+        true
+    }
+
+    /// Swap the active tab with the tab at the given zero-based display
+    /// position (tmux `swap-window -t`). Returns true when the order changed.
+    pub fn swap_active_tab_with(&mut self, index: usize) -> bool {
+        let Some(pos) = self.tab_order.iter().position(|&id| id == self.active_tab) else {
+            return false;
+        };
+        if index >= self.tab_order.len() || pos == index {
+            return false;
+        }
+        self.tab_order.swap(pos, index);
+        self.force_full_redraw();
+        true
     }
 
     /// Return the zero-based position of the active tab in display order.
@@ -423,28 +454,17 @@ impl WindowManager {
         }
     }
 
-    /// Rename the focused pane. An empty name restores the default title.
-    pub fn rename_focused_pane(&mut self, name: &str) {
-        if let Some(pane) = self.active_tab_mut().and_then(|tab| tab.focused_pane_mut()) {
-            pane.title = if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            };
-        }
-    }
-
-    /// Custom title of the focused pane, if one has been set.
-    pub fn focused_pane_title(&self) -> Option<String> {
-        self.active_tab()
-            .and_then(|tab| tab.panes.get(&tab.focused_pane))
-            .and_then(|pane| pane.title.clone())
-    }
-
     /// Switch to next layout
     pub fn next_layout(&mut self) {
         if let Some(tab) = self.active_tab_mut() {
             tab.next_layout();
+        }
+    }
+
+    /// Switch to previous layout
+    pub fn prev_layout(&mut self) {
+        if let Some(tab) = self.active_tab_mut() {
+            tab.prev_layout();
         }
     }
 
@@ -550,6 +570,10 @@ impl WindowManager {
                 if self.activity_monitor && tab.update_activity(is_active, self.quiet_threshold) {
                     changed = true;
                 }
+                // Follow cwd changes (OSC 7 / 9;9) with the pane titles
+                if tab.refresh_pane_titles() {
+                    changed = true;
+                }
                 // Clean up dead panes
                 if tab.cleanup_dead_panes() {
                     changed = true;
@@ -618,11 +642,12 @@ impl WindowManager {
     /// Get tab info for rendering tab bar
     /// Tab bar entries: (id, display name, is_active, needs_attention).
     ///
-    /// The display name carries the activity marker (`!` = a pane needs
-    /// attention, `*` = a pane is producing output) so that width-based hit
-    /// testing (`tab_at_position`) stays consistent with rendering.
+    /// The display name is `<index>:<name>` (tmux style, 1-based display
+    /// index) plus the activity marker (`!` = a pane needs attention, `*` =
+    /// a pane is producing output) so that width-based hit testing
+    /// (`tab_at_position`) stays consistent with rendering.
     pub fn tab_info(&self) -> Vec<(TabId, String, bool, bool)> {
-        self.tab_order.iter().filter_map(|&id| {
+        self.tab_order.iter().enumerate().filter_map(|(index, &id)| {
             // Skip ids that are missing from the map rather than panicking if
             // tab_order and tabs ever get out of sync
             let tab = self.tabs.get(&id)?;
@@ -640,7 +665,7 @@ impl WindowManager {
             };
             Some((
                 id,
-                format!("{}{}", tab.name, marker),
+                format!("{}:{}{}", index + 1, tab.name, marker),
                 id == self.active_tab,
                 attention,
             ))
@@ -943,21 +968,6 @@ impl WindowManager {
             }
         }
         None
-    }
-
-    /// Pane whose title row (top border) is at the given screen position.
-    ///
-    /// Borderless panes (single pane, zoomed) have no title row, so their
-    /// top row is ordinary content and never matches.
-    pub fn pane_title_at(&self, col: u16, row: u16) -> Option<PaneId> {
-        if row < self.tab_bar_height {
-            return None;
-        }
-        let content_row = row - self.tab_bar_height;
-        let tab = self.active_tab()?;
-        let pane_id = tab.pane_at(col, content_row)?;
-        let pane = tab.panes.get(&pane_id)?;
-        (pane.border != crate::wm::BorderStyle::None && content_row == pane.y).then_some(pane_id)
     }
 
     /// Handle mouse drag (extend selection)
@@ -1833,30 +1843,37 @@ mod tests {
         let mut wm = test_manager(80);
         wm.new_tab();
 
+        // Pin the cwd-derived pane titles to a fixed value
+        for (&id, tab) in wm.tabs.iter_mut() {
+            for pane in tab.panes.values_mut() {
+                pane.session.state.current_path = format!("C:\\work\\dir{id}");
+            }
+        }
+
         assert_eq!(
             wm.window_info(),
             vec![
                 WindowInfo {
                     id: 1,
                     number: 1,
-                    name: "1:main".to_string(),
+                    name: "main".to_string(),
                     is_active: false,
                     is_last: true,
                     panes: vec![PaneInfo {
                         number: 1,
-                        title: "Pane 1".to_string(),
+                        title: "dir1".to_string(),
                         is_active: true,
                     }],
                 },
                 WindowInfo {
                     id: 2,
                     number: 2,
-                    name: "2:shell".to_string(),
+                    name: "shell".to_string(),
                     is_active: true,
                     is_last: false,
                     panes: vec![PaneInfo {
                         number: 1,
-                        title: "Pane 1".to_string(),
+                        title: "dir2".to_string(),
                         is_active: true,
                     }],
                 },
@@ -1907,6 +1924,35 @@ mod tests {
     }
 
     #[test]
+    fn move_and_swap_active_tab_reorder_display_positions() {
+        let mut wm = test_manager(80);
+        wm.new_tab();
+        wm.new_tab(); // order: 1, 2, 3 (ids); active = 3
+        let names = |wm: &WindowManager| -> Vec<String> {
+            wm.tab_info().into_iter().map(|(_, name, _, _)| name).collect()
+        };
+        assert_eq!(names(&wm), ["1:main", "2:shell", "3:shell"]);
+
+        // move-window -t 1: the active tab goes first, others shift
+        assert!(wm.move_active_tab_to(0));
+        assert_eq!(wm.tab_order, [3, 1, 2]);
+        assert_eq!(wm.active_tab_index(), 0);
+        assert_eq!(names(&wm), ["1:shell", "2:main", "3:shell"]);
+        assert!(!wm.move_active_tab_to(0), "already there");
+
+        // swap-window -t 3: exchange with the last tab
+        assert!(wm.swap_active_tab_with(2));
+        assert_eq!(wm.tab_order, [2, 1, 3]);
+        assert_eq!(wm.active_tab_index(), 2);
+        assert!(!wm.swap_active_tab_with(99), "out of range");
+
+        // Out-of-range move clamps to the end
+        wm.select_tab_at(0);
+        assert!(wm.move_active_tab_to(99));
+        assert_eq!(wm.tab_order, [1, 3, 2]);
+    }
+
+    #[test]
     fn select_tab_at_switches_window_and_tracks_last_window() {
         let mut wm = test_manager(80);
         wm.new_tab();
@@ -1935,40 +1981,47 @@ mod tests {
     }
 
     #[test]
-    fn rename_focused_pane_sets_and_clears_custom_title() {
+    fn pane_titles_follow_cwd_and_number_duplicates() {
         let mut wm = test_manager(80);
-        assert_eq!(wm.focused_pane_title(), None);
+        wm.split_horizontal();
+        wm.split_horizontal();
 
-        wm.rename_focused_pane("build");
-        assert_eq!(wm.focused_pane_title().as_deref(), Some("build"));
-        let pane_title = wm
-            .active_tab()
-            .and_then(|tab| tab.panes.get(&tab.focused_pane))
-            .map(|pane| pane.display_title());
-        assert_eq!(pane_title.as_deref(), Some("build"));
-
-        // Empty name restores the default title
-        wm.rename_focused_pane("");
-        assert_eq!(wm.focused_pane_title(), None);
-    }
-
-    #[test]
-    fn pane_title_at_matches_only_top_border_row() {
-        let mut wm = test_manager(80);
-        let title_row = wm.tab_bar_height; // first content row = top border
-
-        // A single pane is borderless: it has no title row to click
-        assert_eq!(wm.pane_title_at(10, title_row), None);
-
-        // With a border, only the top border row is the title
-        let tab_id = wm.active_tab;
-        for pane in wm.tabs.get_mut(&tab_id).unwrap().panes.values_mut() {
-            pane.border = crate::wm::BorderStyle::Single;
+        let tab = wm.active_tab_mut().unwrap();
+        let order = tab.pane_order.clone();
+        assert_eq!(order.len(), 3);
+        for &id in &order[..2] {
+            tab.panes.get_mut(&id).unwrap().session.state.current_path =
+                "D:\\home\\source\\rust\\wtmux".to_string();
         }
-        assert!(wm.pane_title_at(10, title_row).is_some());
-        assert_eq!(wm.pane_title_at(10, title_row + 1), None);
-        // Tab bar rows are never a pane title
-        assert_eq!(wm.pane_title_at(10, 0), None);
+        tab.panes
+            .get_mut(&order[2])
+            .unwrap()
+            .session
+            .state
+            .current_path = "C:\\Users\\demo".to_string();
+
+        assert!(tab.refresh_pane_titles());
+        let titles: Vec<String> = order
+            .iter()
+            .map(|id| tab.panes.get(id).unwrap().display_title())
+            .collect();
+        assert_eq!(titles, ["wtmux", "wtmux:2", "demo"]);
+
+        // Unchanged directories: no redraw needed
+        assert!(!tab.refresh_pane_titles());
+
+        // A cd in the last pane is followed on the next refresh
+        tab.panes
+            .get_mut(&order[2])
+            .unwrap()
+            .session
+            .state
+            .current_path = "D:\\home\\source\\rust\\wtmux".to_string();
+        assert!(tab.refresh_pane_titles());
+        assert_eq!(
+            tab.panes.get(&order[2]).unwrap().display_title(),
+            "wtmux:3"
+        );
     }
 
     #[test]

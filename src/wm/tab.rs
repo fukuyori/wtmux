@@ -325,6 +325,35 @@ impl Tab {
         changed
     }
 
+    /// Recompute every pane's directory-derived title, numbering duplicates
+    /// (`wtmux`, `wtmux:2`, …) in pane order. Returns true when any title
+    /// changed so the caller can trigger a render.
+    pub fn refresh_pane_titles(&mut self) -> bool {
+        let mut seen: HashMap<String, u32> = HashMap::new();
+        let mut changed = false;
+        for i in 0..self.pane_order.len() {
+            let pane_id = self.pane_order[i];
+            let Some(pane) = self.panes.get_mut(&pane_id) else {
+                continue;
+            };
+            let base = pane.auto_title();
+            let count = seen.entry(base.clone()).or_insert(0);
+            *count += 1;
+            let resolved = if *count == 1 {
+                base
+            } else {
+                format!("{base}:{count}")
+            };
+            if pane.resolved_title != resolved {
+                pane.resolved_title = resolved;
+                // Repaint the pane so the border shows the new title
+                pane.session.state.active_screen_mut().full_redraw = true;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Check if any pane is still running
     pub fn is_running(&self) -> bool {
         self.panes.values().any(|p| p.session.is_running())
@@ -510,6 +539,14 @@ impl Tab {
             return; // No layout change needed for single pane
         }
         self.set_layout(self.current_layout.next());
+    }
+
+    /// Switch to the previous layout preset (tmux `select-layout -p`)
+    pub fn prev_layout(&mut self) {
+        if self.panes.len() <= 1 {
+            return;
+        }
+        self.set_layout(self.current_layout.prev());
     }
 
     /// Apply a specific layout preset (tmux select-layout)

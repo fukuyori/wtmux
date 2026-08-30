@@ -324,8 +324,12 @@ pub struct Pane {
     pub focused: bool,
     /// Border style
     pub border: BorderStyle,
-    /// Title (optional override)
+    /// Title (optional override, used for popups; regular panes are titled
+    /// automatically from their working directory)
     pub title: Option<String>,
+    /// Directory-derived title with duplicate numbering, computed by
+    /// [`Tab::refresh_pane_titles`](crate::wm::tab::Tab::refresh_pane_titles)
+    pub(crate) resolved_title: String,
     /// Activity monitor state (busy / needs-attention)
     pub activity: PaneActivity,
 }
@@ -364,6 +368,7 @@ impl Pane {
             focused: false,
             border: BorderStyle::default(),
             title: None,
+            resolved_title: String::new(),
             activity: PaneActivity::default(),
         }
     }
@@ -380,6 +385,7 @@ impl Pane {
             focused: false,
             border: BorderStyle::None,
             title: None,
+            resolved_title: String::new(),
             activity: PaneActivity::default(),
         }
     }
@@ -432,13 +438,24 @@ impl Pane {
         self.y = y;
     }
 
-    /// Get display title
+    /// Get display title: the explicit override (popups), then the
+    /// tab-computed directory title, then the bare directory name.
     pub fn display_title(&self) -> String {
         if let Some(ref title) = self.title {
             title.clone()
+        } else if !self.resolved_title.is_empty() {
+            self.resolved_title.clone()
         } else {
-            format!("Pane {}", self.id)
+            self.auto_title()
         }
+    }
+
+    /// Title derived from the pane's working directory: the last path
+    /// component (`wtmux` for `D:\home\source\rust\wtmux`). Falls back to
+    /// "Pane N" when no directory is known.
+    pub fn auto_title(&self) -> String {
+        dir_display_name(&self.session.state.current_path)
+            .unwrap_or_else(|| format!("Pane {}", self.id))
     }
 
     /// Check if a position is inside this pane
@@ -446,6 +463,20 @@ impl Pane {
         col >= self.x && col < self.x + self.width &&
         row >= self.y && row < self.y + self.height
     }
+}
+
+/// Last path component of `path`, accepting both `\` and `/` separators
+/// (`wtmux` for `D:\home\source\rust\wtmux`). `None` when the path is empty.
+pub(crate) fn dir_display_name(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        // "/" (or all separators): show the root itself
+        return (!path.is_empty()).then(|| "/".to_string());
+    }
+    trimmed
+        .rsplit(['\\', '/'])
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -472,6 +503,42 @@ mod tests {
         a.tick(true, QUIET, PromptHint::None);
         assert_eq!(a.attention(), None);
         assert_eq!(a.state(), AgentState::Done);
+    }
+
+    #[test]
+    fn dir_display_name_takes_last_component_of_either_separator_style() {
+        assert_eq!(
+            dir_display_name("D:\\home\\source\\rust\\wtmux").as_deref(),
+            Some("wtmux")
+        );
+        assert_eq!(
+            dir_display_name("D:\\home\\source\\rust\\wtmux\\").as_deref(),
+            Some("wtmux")
+        );
+        assert_eq!(dir_display_name("/home/user/proj").as_deref(), Some("proj"));
+        assert_eq!(dir_display_name("C:\\").as_deref(), Some("C:"));
+        assert_eq!(dir_display_name("/").as_deref(), Some("/"));
+        assert_eq!(dir_display_name(""), None);
+    }
+
+    #[test]
+    fn display_title_prefers_override_then_directory_name() {
+        let mut pane = Pane::new(3, 20, 10);
+        pane.session.state.current_path = "C:\\Users\\demo\\project".to_string();
+        assert_eq!(pane.display_title(), "project");
+
+        // Tab-computed title (duplicate numbering) wins over the raw name
+        pane.resolved_title = "project:2".to_string();
+        assert_eq!(pane.display_title(), "project:2");
+
+        // Explicit override (popups) wins over everything
+        pane.title = Some("popup: build".to_string());
+        assert_eq!(pane.display_title(), "popup: build");
+
+        // No directory known: fall back to "Pane N"
+        let mut bare = Pane::new(7, 20, 10);
+        bare.session.state.current_path = String::new();
+        assert_eq!(bare.display_title(), "Pane 7");
     }
 
     #[test]

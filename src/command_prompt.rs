@@ -20,16 +20,24 @@ pub enum PromptAction {
     LastWindow,
     /// select-window -t <n> (1-based display number)
     SelectWindow(usize),
+    /// move-window -t <n>: move the current window to display position n
+    MoveWindow(usize),
+    /// swap-window -t <n>: swap the current window with the one at n
+    SwapWindow(usize),
     RenameWindow(String),
-    /// rename-pane [name]; empty name restores the default "Pane N" title
-    RenamePane(String),
     SelectLayout(LayoutType),
+    /// next-layout / select-layout -n
+    NextLayout,
+    /// previous-layout / select-layout -p
+    PrevLayout,
     /// resize-pane -Z
     ToggleZoom,
     /// set synchronize-panes [on|off]; None = toggle
     SetSyncPanes(Option<bool>),
     /// pipe-pane (toggle output logging on the focused pane)
     PipePane,
+    /// list-keys: open the key cheat sheet popup
+    ListKeys,
     /// display-popup [-E] [command]; `hold` keeps the popup open after the
     /// command exits (tmux semantics: no -E = stay open)
     DisplayPopup {
@@ -82,20 +90,42 @@ pub fn parse(line: &str) -> Result<PromptAction, String> {
                 .map_err(|_| "invalid window number".to_string())?;
             Ok(PromptAction::SelectWindow(n))
         }
+        "move-window" | "movew" => {
+            let n = option_value(&args, "-t")
+                .ok_or("usage: move-window -t <number>")?
+                .parse::<usize>()
+                .map_err(|_| "invalid window number".to_string())?;
+            Ok(PromptAction::MoveWindow(n))
+        }
+        "swap-window" | "swapw" => {
+            let n = option_value(&args, "-t")
+                .ok_or("usage: swap-window -t <number>")?
+                .parse::<usize>()
+                .map_err(|_| "invalid window number".to_string())?;
+            Ok(PromptAction::SwapWindow(n))
+        }
         "rename-window" | "renamew" => {
             if args.is_empty() {
                 return Err("usage: rename-window <name>".to_string());
             }
             Ok(PromptAction::RenameWindow(args.join(" ")))
         }
-        "rename-pane" | "renamep" => Ok(PromptAction::RenamePane(args.join(" "))),
-        "select-layout" | "selectl" => {
-            let name = args.first().ok_or(
-                "usage: select-layout <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>",
-            )?;
-            let layout = LayoutType::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?;
-            Ok(PromptAction::SelectLayout(layout))
-        }
+        "select-layout" | "selectl" => match args.first().copied() {
+            Some("-n") => Ok(PromptAction::NextLayout),
+            Some("-p") => Ok(PromptAction::PrevLayout),
+            Some(name) => {
+                let layout =
+                    LayoutType::parse(name).ok_or_else(|| format!("unknown layout: {name}"))?;
+                Ok(PromptAction::SelectLayout(layout))
+            }
+            None => Err(
+                "usage: select-layout <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled> | -n | -p"
+                    .to_string(),
+            ),
+        },
+        "next-layout" | "nextl" => Ok(PromptAction::NextLayout),
+        "previous-layout" | "prevl" => Ok(PromptAction::PrevLayout),
+        "list-keys" | "lsk" => Ok(PromptAction::ListKeys),
         "resize-pane" | "resizep" => match args.first() {
             Some(&"-Z") => Ok(PromptAction::ToggleZoom),
             _ => Err("only resize-pane -Z (zoom toggle) is supported".to_string()),
@@ -202,6 +232,10 @@ mod tests {
             parse("select-window -t 3").unwrap(),
             PromptAction::SelectWindow(3)
         );
+        assert_eq!(parse("move-window -t 2").unwrap(), PromptAction::MoveWindow(2));
+        assert_eq!(parse("movew -t 1").unwrap(), PromptAction::MoveWindow(1));
+        assert_eq!(parse("swap-window -t 3").unwrap(), PromptAction::SwapWindow(3));
+        assert!(parse("swapw").is_err());
     }
 
     #[test]
@@ -210,15 +244,9 @@ mod tests {
             parse("rename-window \"my window\"").unwrap(),
             PromptAction::RenameWindow("my window".to_string())
         );
-        assert_eq!(
-            parse("rename-pane build").unwrap(),
-            PromptAction::RenamePane("build".to_string())
-        );
-        // No name = restore the default pane title
-        assert_eq!(
-            parse("renamep").unwrap(),
-            PromptAction::RenamePane(String::new())
-        );
+        // Pane titles are automatic (directory-derived); rename-pane is gone
+        assert!(parse("rename-pane build").is_err());
+        assert!(parse("renamep").is_err());
         assert_eq!(
             parse("renamew ビルド").unwrap(),
             PromptAction::RenameWindow("ビルド".to_string())
@@ -232,6 +260,12 @@ mod tests {
             PromptAction::SelectLayout(LayoutType::Tiled)
         );
         assert!(parse("select-layout bogus").is_err());
+        assert_eq!(parse("select-layout -n").unwrap(), PromptAction::NextLayout);
+        assert_eq!(parse("select-layout -p").unwrap(), PromptAction::PrevLayout);
+        assert_eq!(parse("next-layout").unwrap(), PromptAction::NextLayout);
+        assert_eq!(parse("prevl").unwrap(), PromptAction::PrevLayout);
+        assert_eq!(parse("list-keys").unwrap(), PromptAction::ListKeys);
+        assert_eq!(parse("lsk").unwrap(), PromptAction::ListKeys);
         assert_eq!(parse("resize-pane -Z").unwrap(), PromptAction::ToggleZoom);
         assert_eq!(
             parse("set synchronize-panes on").unwrap(),

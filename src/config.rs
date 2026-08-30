@@ -90,7 +90,7 @@ impl Default for Config {
             codepage: None,
             prefix_key: "C-b".to_string(),
             color_scheme: "default".to_string(),
-            cwd_prompt_hook: false,
+            cwd_prompt_hook: true,
             unbind: Vec::new(),
             keybindings: KeyBindingsConfig::default(),
             bind: BTreeMap::new(),
@@ -112,7 +112,7 @@ impl Default for Config {
 /// The command receives the transition context through environment variables:
 /// `WTMUX_HOOK_STATE`, `WTMUX_HOOK_PREV_STATE`, `WTMUX_HOOK_PANE`
 /// (`<window>.<pane>`), `WTMUX_HOOK_WINDOW` (window name), and
-/// `WTMUX_HOOK_TITLE` (pane title). Empty string = hook disabled.
+/// `WTMUX_HOOK_TITLE` (pane title, i.e. the working directory name). Empty string = hook disabled.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -378,6 +378,24 @@ pub struct ParsedKeyBindings {
 }
 
 impl ParsedKeyBindings {
+    /// `(key, setting name, description)` rows for the key cheat sheet.
+    /// These legacy prefix-less bindings live outside the `[bind]` tables,
+    /// so the sheet lists them from here.
+    pub fn cheat_rows(&self) -> Vec<(String, &'static str, &'static str)> {
+        vec![
+            (self.history_selector.display_name(), "history_selector", "Command history picker"),
+            (self.scrollback_up.display_name(), "scrollback_up", "Scroll back"),
+            (self.scrollback_down.display_name(), "scrollback_down", "Scroll forward"),
+            (self.scrollback_top.display_name(), "scrollback_top", "Jump to the top of scrollback"),
+            (self.scrollback_bottom.display_name(), "scrollback_bottom", "Return to the live view"),
+            (self.selection_left.display_name(), "selection_left", "Extend the selection left"),
+            (self.selection_right.display_name(), "selection_right", "Extend the selection right"),
+            (self.selection_up.display_name(), "selection_up", "Extend the selection up"),
+            (self.selection_down.display_name(), "selection_down", "Extend the selection down"),
+            (self.copy_selection.display_name(), "copy_selection", "Copy the selection"),
+        ]
+    }
+
     pub fn from_config(config: &KeyBindingsConfig) -> Self {
         let defaults = KeyBindingsConfig::default();
 
@@ -631,15 +649,28 @@ mod tests {
     }
 
     #[test]
-    fn cwd_prompt_hook_defaults_to_disabled() {
-        assert!(!Config::default().cwd_prompt_hook);
+    fn legacy_keybindings_cheat_rows_follow_the_config() {
+        let config: Config =
+            toml::from_str("[keybindings]\nhistory_selector = \"C-h\"").unwrap();
+        let rows = ParsedKeyBindings::from_config(&config.keybindings).cheat_rows();
+        assert_eq!(rows.len(), 10);
+        assert_eq!(rows[0].0, "Ctrl+H");
+        assert_eq!(rows[0].1, "history_selector");
+        // Defaults fill in the rest
+        assert!(rows.iter().any(|(_, name, _)| *name == "copy_selection"));
     }
 
     #[test]
-    fn cwd_prompt_hook_can_be_enabled_from_toml() {
-        let config: Config = toml::from_str("cwd_prompt_hook = true").unwrap();
+    fn cwd_prompt_hook_defaults_to_enabled() {
+        // Pane titles follow the working directory, which needs the hook
+        assert!(Config::default().cwd_prompt_hook);
+    }
 
-        assert!(config.cwd_prompt_hook);
+    #[test]
+    fn cwd_prompt_hook_can_be_disabled_from_toml() {
+        let config: Config = toml::from_str("cwd_prompt_hook = false").unwrap();
+
+        assert!(!config.cwd_prompt_hook);
     }
 }
 

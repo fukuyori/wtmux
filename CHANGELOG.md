@@ -1,3 +1,50 @@
+## [Unreleased]
+
+### Added
+
+- **Key cheat sheet** (`Prefix + ?`, tmux's `list-keys`): a scrollable
+  popup listing every effective binding — after `config.toml` overrides
+  and unbinds — grouped into Windows / Panes / Layouts / Scrollback &
+  selection / Tools / Other, each with the command name and a one-line
+  description. The legacy `[keybindings]` keys (history selector,
+  scrollback, selection) are listed in their own section. `j`/`k`,
+  `PgUp`/`PgDn`, `g`/`G` scroll; `q`, `Esc` or `?` close. Also
+  `list-keys` (`lsk`) at the command prompt and as a bindable command.
+- **tmux's layout keys**: `Prefix + M-1` … `M-5` now apply
+  `even-horizontal`, `even-vertical`, `main-horizontal`, `main-vertical`
+  and `tiled` directly (previously only reachable by cycling with
+  `Space` or via `select-layout`).
+- **`previous-layout`** (`prevl`) cycles the presets backwards; also
+  available as `select-layout -p` (and `-n` for next), as a prompt
+  command and as a bindable command. No default key.
+- **`move-window` / `swap-window`** (tmux window reordering). `Prefix + .`
+  then a digit `1-9` moves the current window to that position; the
+  status bar shows the prompt and any other key cancels. Both are also
+  prompt commands (`move-window -t <n>` / `movew`, `swap-window -t <n>`
+  / `swapw`) and bindable commands (`move-window [-t <n>]`,
+  `swap-window [-t <n>]`; without `-t` the key waits for a digit).
+
+### Changed
+
+- Window names no longer embed a number: new windows are named `main` /
+  `shell` and the tab bar prefixes the current display position
+  (`1:main`, `2:shell`), so the number stays correct after windows are
+  moved, swapped, or closed. `rename-window` names show the same way
+  (`3:build`).
+- **Automatic pane titles**: panes are now titled after their working
+  directory's last component (e.g. `wtmux` for
+  `D:\home\source\rust\wtmux`) and follow `cd` as it happens. Panes in
+  the same window that end up with the same name are numbered
+  `wtmux`, `wtmux:2`, `wtmux:3`, … in pane order.
+- Manual pane renaming was removed: the `rename-pane` prompt command
+  and key binding (`Prefix + .`), the context menu's "Rename Pane"
+  item, and right-click-on-title renaming are gone. Window renaming is
+  unchanged.
+- `cwd_prompt_hook` now defaults to **on** so pane titles can track the
+  working directory out of the box. Set `cwd_prompt_hook = false` in
+  `config.toml` (or pass `--no-cwd-prompt-hook`) to opt out; titles
+  then stay at each pane's starting directory.
+
 ## [3.3.1] - 2026-08-21
 
 ### Fixed

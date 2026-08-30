@@ -25,8 +25,10 @@
 # prefix_key = "C-b"
 
 # Inject a prompt hook into cmd.exe / PowerShell to publish the pane cwd.
-# Disabled by default to avoid interfering with custom prompts.
-# cwd_prompt_hook = false
+# Enabled by default: pane titles follow the working directory. Set to false
+# if the hook interferes with a custom prompt (titles then stay at the
+# pane's starting directory).
+# cwd_prompt_hook = true
 
 # Remove built-in bindings (tmux: unbind-key). Being a plain array this must
 # stay above every [section] below, or TOML reads it as part of one.
@@ -75,13 +77,15 @@ color_scheme = "default"
 #   new-window  kill-pane  kill-window  detach-client
 #   split-window [-h]      next-window  previous-window  last-window
 #   select-window -t <n>   next-pane    previous-pane
+#   move-window [-t <n>]   swap-window [-t <n>]   (no -t: prompts for a digit)
 #   select-pane -L|-R|-U|-D
 #   resize-pane -Z | -L|-R|-U|-D | + | -
 #   select-layout <even-horizontal|even-vertical|main-horizontal|
-#                  main-vertical|tiled>
-#   next-layout   swap-pane -U|-D       set synchronize-panes   pipe-pane
-#   copy-mode  search  choose-window  choose-theme  command-prompt
-#   display-panes  rename-window  rename-pane  paste-buffer  send-prefix
+#                  main-vertical|tiled> | -n | -p
+#   next-layout   previous-layout   (defaults: Space, and M-1..M-5 for presets)
+#   swap-pane -U|-D       set synchronize-panes   pipe-pane
+#   copy-mode  search  choose-window  choose-theme  command-prompt  list-keys
+#   display-panes  rename-window  paste-buffer  send-prefix
 #   agent-dashboard  compose-message  next-attention  reset-cursor
 #   scroll-up [n]  scroll-down [n]  scroll-top  scroll-bottom   (default n: 10)
 #   extend-selection -L|-R|-U|-D    copy-selection  history-selector
