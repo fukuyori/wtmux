@@ -1,3 +1,13 @@
+## [3.4.1] - 2026-08-30
+
+### Fixed
+
+- Copy mode: copying text containing wide (CJK, etc.) characters no
+  longer inserts a space after each one (`日本語` came out as
+  `日 本 語`). Multi-codepoint graphemes (combining marks, emoji) are
+  also copied intact, and a selection starting on the right half of a
+  wide character now includes that character. (#7)
+
 ## [3.4.0] - 2026-08-30
 
 ### Added

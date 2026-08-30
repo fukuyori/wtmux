@@ -36,7 +36,50 @@
 //! | n | Next match |
 //! | N | Previous match |
 
+use crate::core::term::state::{cells_text_range, ScreenBuffer};
 use crate::wm::WindowManager;
+
+/// Text of the inclusive cell range `from..=to` ((row, col) in absolute
+/// buffer coordinates, `from <= to`), joined with newlines and with trailing
+/// whitespace trimmed per line.
+///
+/// Wide characters occupy two cells. The cursor moves one cell at a time, so
+/// a selection boundary can land on the right half (continuation cell) of a
+/// wide char. The highlight covers that whole char, so the copied text does
+/// too: a start on a continuation cell is widened left to the char's lead
+/// cell; an end on one already includes the lead cell.
+fn selection_text(screen: &ScreenBuffer, from: (usize, u16), to: (usize, u16)) -> Option<String> {
+    let (from_row, from_col) = from;
+    let (to_row, to_col) = to;
+    let mut text = String::new();
+
+    for row in from_row..=to_row {
+        let line = screen.get_line_at_absolute(row)?;
+
+        let mut start_c = if row == from_row { from_col as usize } else { 0 };
+        if start_c > 0
+            && line.get(start_c).is_some_and(|c| c.is_continuation())
+            && !line[start_c - 1].is_continuation()
+        {
+            start_c -= 1;
+        }
+        let end_c = if row == to_row { to_col as usize + 1 } else { line.len() };
+
+        text.push_str(&cells_text_range(line, start_c, end_c));
+
+        if row < to_row {
+            text.push('\n');
+        }
+    }
+
+    let text = text
+        .lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(text)
+}
 
 /// Copy mode state
 pub struct CopyMode {
@@ -252,32 +295,11 @@ impl CopyMode {
         let tab = wm.active_tab()?;
         let pane = tab.focused_pane()?;
         let screen = pane.session.state.active_screen();
-        
-        let mut text = String::new();
-        
-        for row in from_row..=to_row {
-            let line = screen.get_line_at_absolute(row)?;
-            
-            let start_c = if row == from_row { from_col as usize } else { 0 };
-            let end_c = if row == to_row { to_col as usize + 1 } else { line.len() };
-            
-            for col in start_c..end_c.min(line.len()) {
-                text.push(line[col].c());
-            }
-            
-            if row < to_row {
-                text.push('\n');
-            }
-        }
-        
-        // Trim trailing whitespace per line but keep structure
-        let text = text.lines()
-            .map(|l| l.trim_end())
-            .collect::<Vec<_>>()
-            .join("\n");
-        
+
+        let text = selection_text(screen, (from_row, from_col), (to_row, to_col))?;
+
         self.selection_start = None;
-        
+
         Some(text)
     }
 
@@ -551,5 +573,54 @@ impl CopyMode {
 impl Default for CopyMode {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::session::Session;
+
+    fn screen_with(lines: &[&str]) -> Session {
+        let mut s = Session::new(0, 40, 5);
+        s.feed_bytes(lines.join("\r\n").as_bytes());
+        s
+    }
+
+    #[test]
+    fn wide_chars_have_no_stray_spaces() {
+        let s = screen_with(&["echo 日本語", "abc"]);
+        let screen = s.state.active_screen();
+        // "echo " = cols 0..5, 日=5-6, 本=7-8, 語=9-10.
+        assert_eq!(selection_text(screen, (0, 0), (0, 10)).unwrap(), "echo 日本語");
+        // Mixed line: only wide chars were affected, ASCII stays as-is.
+        assert_eq!(selection_text(screen, (0, 0), (1, 2)).unwrap(), "echo 日本語\nabc");
+    }
+
+    #[test]
+    fn issue_7_sample() {
+        let s = screen_with(&["## 既知の制限"]);
+        let screen = s.state.active_screen();
+        assert_eq!(selection_text(screen, (0, 0), (0, 39)).unwrap(), "## 既知の制限");
+    }
+
+    #[test]
+    fn start_on_continuation_cell_includes_whole_char() {
+        let s = screen_with(&["日本語"]);
+        let screen = s.state.active_screen();
+        // col 1 is the right half of 日: widen left so the char is not lost.
+        assert_eq!(selection_text(screen, (0, 1), (0, 5)).unwrap(), "日本語");
+        // col 2 is the lead of 本: 日 is excluded.
+        assert_eq!(selection_text(screen, (0, 2), (0, 5)).unwrap(), "本語");
+        // end on 本's continuation (col 3) still includes 本.
+        assert_eq!(selection_text(screen, (0, 0), (0, 3)).unwrap(), "日本");
+    }
+
+    #[test]
+    fn multi_codepoint_grapheme_is_kept() {
+        // é as e + combining acute: two codepoints, one cell.
+        let s = screen_with(&["e\u{301}x"]);
+        let screen = s.state.active_screen();
+        assert_eq!(selection_text(screen, (0, 0), (0, 1)).unwrap(), "e\u{301}x");
     }
 }

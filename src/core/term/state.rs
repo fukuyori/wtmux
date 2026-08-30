@@ -1262,9 +1262,17 @@ impl ScreenBuffer {
 }
 
 fn row_text_range(row: &Row, start_col: usize, end_col: usize) -> String {
+    cells_text_range(&row.cells, start_col, end_col)
+}
+
+/// Text of `cells[start_col..end_col]` as the user would read it: wide-char
+/// continuation cells contribute nothing (otherwise every CJK character
+/// would be followed by a stray space), empty cells become a space, and the
+/// full grapheme is kept so combining marks and multi-codepoint emoji
+/// survive.
+pub(crate) fn cells_text_range(cells: &[Cell], start_col: usize, end_col: usize) -> String {
     let mut text = String::new();
-    for col_idx in start_col..end_col.min(row.cells.len()) {
-        let cell = &row.cells[col_idx];
+    for cell in cells.iter().take(end_col.min(cells.len())).skip(start_col) {
         if cell.is_continuation() {
             continue;
         }
