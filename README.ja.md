@@ -4,17 +4,19 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.3.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.4.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [English README](README.md)
 
-## 3.0.0 の主な変更
+## 3.4.0 の主な変更
 
-- **キーバインドを設定ファイルで変更可能に** — プレフィックス配下の全キーを tmux の `bind-key` と同じように `config.toml` で再割り当て・解除できるようになりました。プレフィックス不要のキー（tmux の `bind-key -n`）も `[bind_root]` で設定できます。「[キーバインドのカスタマイズ](#キーバインドのカスタマイズ)」を参照。
-- **`wtmux list-keys`**（省略形 `lsk`）— 設定適用後の全バインドを `[bind]` と同じ記法で一覧表示します。
-- **プレフィックス配下で修飾キーを判定するようになりました** — `Prefix, C-x` がより適切なバインドのない場合を除き `x` のバインドを発動しなくなります。Ctrl を押しっぱなしにする操作（`C-b C-n`）は従来どおり動作します。
+- **キーのチートシート** — `Prefix + ?` で、`config.toml` 適用後の有効な全バインドを簡単な説明付きで一覧表示（Windows / Panes / Layouts / Scrollback / Tools に分類、スクロール可）。
+- **ペイン名の自動付与** — 作業ディレクトリ名（`D:\home\source\rust\wtmux` なら `wtmux`）がペイン名になり、`cd` に追従します。同一ウィンドウ内で重複すると `wtmux:2`, `wtmux:3` と番号付き。手動のペイン名変更は廃止し、`cwd_prompt_hook` は標準で有効になりました。
+- **ウィンドウの並べ替え** — `Prefix + .` のあと数字でウィンドウを移動（tmux の `move-window`）。`swap-window` も利用可能。タブ表示は現在位置を反映した `1:main`, `2:shell` 形式です。
+- **tmux のレイアウトキー** — `Prefix + Alt+1` 〜 `Alt+5` で5種のプリセットを直接適用。`previous-layout` / `select-layout -n|-p` で前後に切り替え。
+- 3.0.0 より: **キーバインドを設定ファイルで変更可能に** — プレフィックス配下の全キーを tmux の `bind-key` と同じように `config.toml` で再割り当て・解除できます。プレフィックス不要のキー（tmux の `bind-key -n`）も `[bind_root]` で設定可能。「[キーバインドのカスタマイズ](#キーバインドのカスタマイズ)」を参照。`wtmux list-keys`（省略形 `lsk`）で設定適用後の一覧を表示。
 - 2.3.4 より: **ペインの枠とタイトルを見やすく改善** — ペインタイトルを枠線と同じ色で描くようにし、非フォーカスの枠色を全8テーマで明るくしました。
 - 2.3.0〜2.3.3 より: **エージェント向け機能** — `Prefix + m` のメッセージコンポーザ（複数行メッセージをペインに送信、IME対応）と、全ペインの WORKING / BLOCKED / DONE / IDLE 状態を Nerd Font スピナー付きで監視する `wtmux agents` CLI（`Prefix + g` ダッシュボードでも表示）。
 
