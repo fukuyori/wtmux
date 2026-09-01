@@ -1145,7 +1145,11 @@ fn run_wm_main_loop(
                     popup.apply_geometry(x, y, w, h, crate::wm::BorderStyle::Single);
                 }
                 ui.render(renderer, wm, &theme_list)?;
-                wm.clear_all_dirty();
+                // Copy mode paints only the focused pane's scrollback view.
+                // Keep live-screen dirty rows for the normal render on exit.
+                if ui.mode != UiMode::CopyMode {
+                    wm.clear_rendered_dirty();
+                }
                 pending_resize = None;
             }
         }
@@ -1157,7 +1161,7 @@ fn run_wm_main_loop(
             ui.close_mode();
             wm.force_full_redraw();
             renderer.render(wm)?;
-            wm.clear_all_dirty();
+            wm.clear_rendered_dirty();
         }
 
         // Process output and closed panes/tabs.
@@ -1291,14 +1295,14 @@ fn run_wm_main_loop(
             ui.render(renderer, wm, &theme_list)?;
             // Clear dirty state after rendering so the next frame only redraws
             // rows that have genuinely changed.
-            wm.clear_all_dirty();
+            wm.clear_rendered_dirty();
         } else if ui.mode == UiMode::AgentDashboard
             && last_spinner_tick.elapsed() >= spinner_interval
         {
             // Keep the WORKING spinner animating while the dashboard is open
             last_spinner_tick = std::time::Instant::now();
             ui.render(renderer, wm, &theme_list)?;
-            wm.clear_all_dirty();
+            wm.clear_rendered_dirty();
         }
 
         // Poll for events
@@ -1363,7 +1367,7 @@ fn run_wm_main_loop(
                             } else {
                                 ui.render(renderer, wm, &theme_list)?;
                             }
-                            wm.clear_all_dirty();
+                            wm.clear_rendered_dirty();
                             continue;
                         }
                         let prefix_pressed = key_event
@@ -1376,7 +1380,7 @@ fn run_wm_main_loop(
                                 ui.close_popup();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                                 continue;
                             }
                             // Any other key falls through to the popup
@@ -1404,7 +1408,7 @@ fn run_wm_main_loop(
                                 ui.close_mode();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                             }
                             KeyCode::Enter => {
                                 let line = ui.command_buffer.trim().to_string();
@@ -1434,7 +1438,7 @@ fn run_wm_main_loop(
                                     }
                                 }
                                 ui.render(renderer, wm, &theme_list)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                             }
                             KeyCode::Backspace => {
                                 ui.command_buffer.pop();
@@ -1465,7 +1469,7 @@ fn run_wm_main_loop(
                                 pop_composer_key_reporting();
                                 wm.force_full_redraw();
                                 renderer.render(wm)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                                 continue;
                             }
                             // Ctrl+Enter sends; Ctrl+S is the fallback for
@@ -1475,7 +1479,7 @@ fn run_wm_main_loop(
                             {
                                 send_composer_message(wm, &mut ui, renderer);
                                 ui.render(renderer, wm, &theme_list)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                                 continue;
                             }
                             KeyCode::Char('s')
@@ -1483,7 +1487,7 @@ fn run_wm_main_loop(
                             {
                                 send_composer_message(wm, &mut ui, renderer);
                                 ui.render(renderer, wm, &theme_list)?;
-                                wm.clear_all_dirty();
+                                wm.clear_rendered_dirty();
                                 continue;
                             }
                             // Enter inserts a newline like a normal editor
@@ -2402,7 +2406,7 @@ fn run_wm_main_loop(
                                     // panes underneath before the overlay
                                     wm.force_full_redraw();
                                     renderer.render(wm)?;
-                                    wm.clear_all_dirty();
+                                    wm.clear_rendered_dirty();
                                     ui.render(renderer, wm, &theme_list)?;
                                 }
                                 Some(ComposerDrag::Select) => {

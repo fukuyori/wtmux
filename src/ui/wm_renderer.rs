@@ -206,6 +206,8 @@ pub struct WmRenderer {
     history_selector_shortcut: String,
     /// Last rendered layout generation (for detecting changes)
     last_generation: u64,
+    /// Last rendered tab (switching tabs always requires a full repaint)
+    last_tab_id: Option<u64>,
     cursor: CursorPresenter,
     /// When true, SGR 1 (Bold) is suppressed.
     /// Use this when the Nerd Font installed lacks a Bold face and the OS
@@ -283,6 +285,7 @@ impl WmRenderer {
             color_scheme: ColorScheme::default(),
             history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
+            last_tab_id: None,
             cursor: CursorPresenter::default(),
             suppress_bold: false,
             status_message: None,
@@ -296,6 +299,7 @@ impl WmRenderer {
             color_scheme,
             history_selector_shortcut: "Ctrl+R".to_string(),
             last_generation: 0,
+            last_tab_id: None,
             cursor: CursorPresenter::default(),
             suppress_bold: false,
             status_message: None,
@@ -1990,14 +1994,18 @@ impl WmRenderer {
             None => return Ok(()),
         };
 
-        // Full redraw if generation changed (layout change: split, close, resize)
-        let needs_full_redraw = tab.layout_generation != self.last_generation;
+        // Full redraw if the active tab or its layout changed. Different tabs
+        // can have the same generation, so generation alone cannot detect a
+        // window switch.
+        let needs_full_redraw = self.last_tab_id != Some(tab.id)
+            || tab.layout_generation != self.last_generation;
         if needs_full_redraw {
             execute!(stdout, ResetColor)?;
             for row in wm.tab_bar_height..(wm.height.saturating_sub(1)) {
                 execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
             }
             self.last_generation = tab.layout_generation;
+            self.last_tab_id = Some(tab.id);
         }
 
         // If zoomed, only render the zoomed pane
@@ -2462,6 +2470,49 @@ mod tests {
         assert_eq!(truncate_to_display_width("abc日本語", 5), "abc日");
         assert_eq!(truncate_to_display_width("日本語abc", 4), "日本");
         assert_eq!(truncate_to_display_width("abc", 2), "ab");
+    }
+
+    #[test]
+    fn switching_tabs_with_the_same_generation_forces_a_full_redraw() {
+        use crate::config::PrefixKey;
+        use crate::wm::WindowManager;
+
+        let mut wm = WindowManager::new(80, 24, None, None, PrefixKey { char: 'b' }, true);
+        let first_tab = wm.active_tab().expect("active tab").id;
+        let first_generation = wm.active_tab().expect("active tab").layout_generation;
+        let mut renderer = WmRenderer::new();
+        let mut out = Vec::new();
+
+        renderer
+            .render_panes(&mut out, &wm)
+            .expect("render first tab");
+        assert_eq!(renderer.last_tab_id, Some(first_tab));
+
+        let second_tab = wm.new_tab();
+        assert_eq!(
+            wm.active_tab().expect("active tab").layout_generation,
+            first_generation,
+            "the regression requires equal per-tab generations"
+        );
+        wm.active_tab_mut()
+            .expect("active tab")
+            .focused_pane_mut()
+            .expect("focused pane")
+            .session
+            .state
+            .active_screen_mut()
+            .clear_dirty();
+
+        out.clear();
+        renderer
+            .render_panes(&mut out, &wm)
+            .expect("render switched tab");
+
+        assert_eq!(renderer.last_tab_id, Some(second_tab));
+        assert!(
+            !out.is_empty(),
+            "switching tabs must repaint even when no rows are dirty"
+        );
     }
 
     #[cfg(windows)]

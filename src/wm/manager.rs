@@ -609,21 +609,30 @@ impl WindowManager {
         !self.tabs.is_empty() && self.tabs.values().any(|t| t.is_running())
     }
 
-    /// Clear dirty-line tracking on all panes after a render pass.
+    /// Clear dirty-line tracking for panes painted by the normal renderer.
     ///
-    /// Call this after every render so the next frame only redraws rows that
-    /// have actually changed since the last paint, not the entire screen.
-    pub fn clear_all_dirty(&mut self) {
-        for tab in self.tabs.values_mut() {
-            for pane in tab.panes.values_mut() {
-                // A settling pane was skipped by the renderer; keep its dirty
-                // lines so the deferred paint after the resize replay still
-                // covers everything that changed.
-                if pane.session.is_settling() {
-                    continue;
-                }
-                pane.session.state.active_screen_mut().clear_dirty();
+    /// Only the active tab is painted. Background tabs must retain their dirty
+    /// rows until they become active, otherwise their output is parsed into the
+    /// grid but never reaches the host terminal. In zoom mode the renderer only
+    /// paints the zoomed pane, so hidden sibling panes retain their dirty rows
+    /// for the same reason.
+    pub fn clear_rendered_dirty(&mut self) {
+        let Some(tab) = self.tabs.get_mut(&self.active_tab) else {
+            return;
+        };
+        let zoomed_pane = tab.zoomed_pane_id();
+
+        for pane in tab.panes.values_mut() {
+            if zoomed_pane.is_some_and(|pane_id| pane.id != pane_id) {
+                continue;
             }
+            // A settling pane was skipped by the renderer; keep its dirty
+            // lines so the deferred paint after the resize replay still
+            // covers everything that changed.
+            if pane.session.is_settling() {
+                continue;
+            }
+            pane.session.state.active_screen_mut().clear_dirty();
         }
     }
 
@@ -1836,6 +1845,44 @@ mod tests {
 
         assert!(wm.process_output());
         assert!(wm.tabs.is_empty());
+    }
+
+    #[test]
+    fn clear_rendered_dirty_preserves_background_tab_output() {
+        let mut wm = test_manager(80);
+        let background_tab = wm.active_tab;
+        let active_tab = wm.new_tab();
+
+        for tab in wm.tabs.values_mut() {
+            let screen = tab
+                .focused_pane_mut()
+                .expect("focused pane")
+                .session
+                .state
+                .active_screen_mut();
+            screen.clear_dirty();
+            screen.mark_dirty(0);
+        }
+
+        wm.clear_rendered_dirty();
+
+        let is_dirty = |wm: &WindowManager, tab_id| {
+            wm.tabs[&tab_id]
+                .focused_pane()
+                .expect("focused pane")
+                .session
+                .state
+                .active_screen()
+                .is_line_dirty(0)
+        };
+        assert!(
+            !is_dirty(&wm, active_tab),
+            "the pane painted in the active tab should be clean"
+        );
+        assert!(
+            is_dirty(&wm, background_tab),
+            "an unpainted background tab must retain pending output"
+        );
     }
 
     #[test]

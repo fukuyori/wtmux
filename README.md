@@ -4,18 +4,19 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.4.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.5.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 3.4.0 Highlights
+## 3.5.0 Highlights
 
-- **Key cheat sheet** — `Prefix + ?` opens a scrollable list of every effective binding (after your `config.toml` overrides) with a one-line description, grouped by Windows / Panes / Layouts / Scrollback / Tools.
-- **Automatic pane titles** — panes are named after their working directory (`wtmux` for `D:\home\source\rust\wtmux`) and follow `cd`; duplicates in a window are numbered `wtmux:2`, `wtmux:3`. Manual pane renaming was removed, and `cwd_prompt_hook` is now on by default.
-- **Window reordering** — `Prefix + .` then a digit moves the window (tmux `move-window`); `swap-window` is available too. Tab labels show the live position (`1:main`, `2:shell`).
-- **tmux layout keys** — `Prefix + Alt+1` … `Alt+5` apply the five presets directly, and `previous-layout` / `select-layout -n|-p` cycle backwards and forwards.
+- **Reliable background pane redraws** — output produced in inactive windows remains pending until rendered, and switching windows always repaints the complete pane layout.
+- From 3.4.0: **key cheat sheet** — `Prefix + ?` opens a scrollable list of every effective binding (after your `config.toml` overrides) with a one-line description, grouped by Windows / Panes / Layouts / Scrollback / Tools.
+- From 3.4.0: **automatic pane titles** — panes are named after their working directory (`wtmux` for `D:\home\source\rust\wtmux`) and follow `cd`; duplicates in a window are numbered `wtmux:2`, `wtmux:3`. Manual pane renaming was removed, and `cwd_prompt_hook` is now on by default.
+- From 3.4.0: **window reordering** — `Prefix + .` then a digit moves the window (tmux `move-window`); `swap-window` is available too. Tab labels show the live position (`1:main`, `2:shell`).
+- From 3.4.0: **tmux layout keys** — `Prefix + Alt+1` … `Alt+5` apply the five presets directly, and `previous-layout` / `select-layout -n|-p` cycle backwards and forwards.
 - From 3.0.0: **configurable key bindings** — every key in the prefix table can be reassigned or removed from `config.toml` the way tmux's `bind-key` does, and prefix-less bindings (tmux's `bind-key -n`) are supported through `[bind_root]`. See [Custom Key Bindings](#custom-key-bindings). `wtmux list-keys` (alias `lsk`) prints the effective table.
 - From 2.3.4: **more visible pane borders and titles** — pane titles are drawn in the same color as their border, and the unfocused border color was brightened in all eight built-in themes.
 - From 2.3.0-2.3.3: **agent workflow tools** — the `Prefix + m` message composer (multi-line floating editor for sending messages to a pane, IME-friendly) and `wtmux agents`, a monitor CLI showing every pane's WORKING / BLOCKED / DONE / IDLE state with a Nerd Font spinner, also visible in the `Prefix + g` dashboard.

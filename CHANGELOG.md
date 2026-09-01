@@ -1,3 +1,12 @@
+## [3.5.0] - 2026-09-01
+
+### Fixed
+
+- Output produced by panes in inactive windows is no longer left visually
+  stale until the pane receives focus. Dirty rows are retained until their
+  window is rendered, and switching windows now forces a full repaint even
+  when both windows have the same layout generation.
+
 ## [3.4.1] - 2026-08-30
 
 ### Fixed
