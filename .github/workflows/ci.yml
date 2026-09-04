@@ -17,13 +17,13 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -37,7 +37,40 @@ jobs:
       # On Windows the default shell is pwsh; cargo test must not run under
       # Git Bash because the ConPTY tests hang there.
       - name: Test
+        if: runner.os != 'macOS'
         run: cargo test --locked
+
+      # macOS: wm::manager::tests::focus_next_attention_jumps_to_flagged_pane_across_windows
+      # hung in CI (run 33927716506) with no output. Run the suite under a
+      # watchdog and, if it stalls, dump every thread's stack of the test
+      # process with `sample` so the log shows where it is stuck.
+      - name: Test (macOS, hang diagnostics)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -uo pipefail
+          cargo test --locked --no-run
+          cargo test --locked &
+          cargo_pid=$!
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$cargo_pid" 2>/dev/null; then
+              wait "$cargo_pid"
+              exit $?
+            fi
+            sleep 5
+          done
+          echo "::error::cargo test still running after 5 minutes; sampling test process threads"
+          for pid in $(pgrep -f 'target/debug/deps/wtmux-' || true); do
+            echo "=== ps for pid $pid ==="
+            ps -o pid,ppid,stat,command -p "$pid" || true
+            echo "=== sample pid $pid ==="
+            sample "$pid" 1 -mayDie 2>&1 | head -800 || true
+          done
+          echo "=== child processes of the test binary ==="
+          ps -ef | grep -v grep | grep -E 'wtmux-|/bin/(ba|z)?sh' || true
+          pkill -f 'target/debug/deps/wtmux-' || true
+          kill "$cargo_pid" 2>/dev/null || true
+          exit 1
 
       # Warnings are reported but not fatal: the codebase currently carries
       # ~20 clippy warnings.
