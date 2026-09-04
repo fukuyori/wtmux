@@ -4,15 +4,16 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.5.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-3.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 3.5.0 Highlights
+## 3.5.1 Highlights
 
-- **Reliable background pane redraws** — output produced in inactive windows remains pending until rendered, and switching windows always repaints the complete pane layout.
+- **Emoji sequences survive copy mode** — zero-width joiners, variation selectors and combining marks that follow a double-width character (e.g. 👨‍👩‍👧) are no longer dropped when copying.
+- From 3.5.0: **Reliable background pane redraws** — output produced in inactive windows remains pending until rendered, and switching windows always repaints the complete pane layout.
 - From 3.4.0: **key cheat sheet** — `Prefix + ?` opens a scrollable list of every effective binding (after your `config.toml` overrides) with a one-line description, grouped by Windows / Panes / Layouts / Scrollback / Tools.
 - From 3.4.0: **automatic pane titles** — panes are named after their working directory (`wtmux` for `D:\home\source\rust\wtmux`) and follow `cd`; duplicates in a window are numbered `wtmux:2`, `wtmux:3`. Manual pane renaming was removed, and `cwd_prompt_hook` is now on by default.
 - From 3.4.0: **window reordering** — `Prefix + .` then a digit moves the window (tmux `move-window`); `swap-window` is available too. Tab labels show the live position (`1:main`, `2:shell`).

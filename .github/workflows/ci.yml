@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      # On Windows the default shell is pwsh; cargo test must not run under
+      # Git Bash because the ConPTY tests hang there.
+      - name: Test
+        run: cargo test --locked
+
+      # Warnings are reported but not fatal: the codebase currently carries
+      # ~20 clippy warnings.
+      - name: Clippy
+        run: cargo clippy --locked --all-targets

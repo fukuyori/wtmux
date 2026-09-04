@@ -1,3 +1,20 @@
+## [3.5.1] - 2026-09-05
+
+### Added
+
+- GitHub Actions CI: build, test and clippy on Windows, macOS and Linux
+  for every push to `main` and every pull request.
+- Copy-mode regression tests for emoji: double-width glyphs, selection
+  starting on a continuation cell, VS16 presentation selectors, skin-tone
+  modifiers and ZWJ sequences.
+
+### Fixed
+
+- Zero-width characters (ZWJ, VS16, combining marks) typed right after a
+  double-width character were attached to that character's continuation
+  cell and silently dropped, so ZWJ emoji sequences such as 👨‍👩‍👧 lost their
+  joiners in copy mode. They now join the lead cell's grapheme.
+
 ## [3.5.0] - 2026-09-01
 
 ### Fixed

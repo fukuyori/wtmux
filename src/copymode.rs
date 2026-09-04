@@ -623,4 +623,57 @@ mod tests {
         let screen = s.state.active_screen();
         assert_eq!(selection_text(screen, (0, 0), (0, 1)).unwrap(), "e\u{301}x");
     }
+
+    #[test]
+    fn wide_emoji_has_no_stray_space() {
+        // 😀 is double-width: it occupies cols 1-2 with a continuation cell.
+        let s = screen_with(&["a\u{1F600}b"]);
+        let screen = s.state.active_screen();
+        assert_eq!(selection_text(screen, (0, 0), (0, 3)).unwrap(), "a\u{1F600}b");
+    }
+
+    #[test]
+    fn selection_starting_on_emoji_continuation_includes_emoji() {
+        let s = screen_with(&["\u{1F600}\u{1F601}"]);
+        let screen = s.state.active_screen();
+        // col 1 is the right half of 😀: widen left so it is not lost.
+        assert_eq!(
+            selection_text(screen, (0, 1), (0, 3)).unwrap(),
+            "\u{1F600}\u{1F601}"
+        );
+        // col 2 is the lead of 😁: 😀 is excluded.
+        assert_eq!(selection_text(screen, (0, 2), (0, 3)).unwrap(), "\u{1F601}");
+    }
+
+    #[test]
+    fn vs16_emoji_presentation_is_kept() {
+        // ☺ + VS16 (U+FE0F): a narrow base with a zero-width selector.
+        let s = screen_with(&["\u{263A}\u{FE0F}x"]);
+        let screen = s.state.active_screen();
+        assert_eq!(
+            selection_text(screen, (0, 0), (0, 1)).unwrap(),
+            "\u{263A}\u{FE0F}x"
+        );
+    }
+
+    #[test]
+    fn skin_tone_modifier_sequence_is_kept() {
+        // 👍 + 🏽 (U+1F3FD): both double-width, so the sequence spans 4 cells.
+        let s = screen_with(&["\u{1F44D}\u{1F3FD}"]);
+        let screen = s.state.active_screen();
+        assert_eq!(
+            selection_text(screen, (0, 0), (0, 3)).unwrap(),
+            "\u{1F44D}\u{1F3FD}"
+        );
+    }
+
+    #[test]
+    fn zwj_sequence_is_kept() {
+        // 👨 ZWJ 👩 ZWJ 👧 (family): the zero-width joiners follow a
+        // double-width base and must survive the round trip.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let s = screen_with(&[family]);
+        let screen = s.state.active_screen();
+        assert_eq!(selection_text(screen, (0, 0), (0, 39)).unwrap(), family);
+    }
 }

@@ -420,7 +420,18 @@ impl TerminalState {
 
         if col > 0 {
             let screen = self.active_screen_mut();
-            screen.rows[row].cells[col - 1].grapheme.push(ch);
+            let cells = &mut screen.rows[row].cells;
+            // After a wide char the cursor sits past its continuation cell;
+            // the grapheme lives in the lead cell one further left. Appending
+            // to the continuation cell would silently drop the character
+            // (continuation cells contribute nothing to rendering or copy),
+            // which broke ZWJ emoji sequences such as 👨‍👩‍👧.
+            let target = if cells[col - 1].is_continuation() && col > 1 {
+                col - 2
+            } else {
+                col - 1
+            };
+            cells[target].grapheme.push(ch);
             screen.mark_dirty(row);
         }
     }
@@ -1956,6 +1967,23 @@ mod tests {
         assert_eq!(row.cells[0].width, 1);
         assert!(row.cells[0].grapheme.is_empty());
         assert!(row.cells.iter().all(|c| !c.is_continuation()));
+    }
+
+    #[test]
+    fn zero_width_char_after_wide_char_joins_the_lead_cell() {
+        // 👨 (cols 0-1) followed by ZWJ: the joiner must attach to the lead
+        // cell's grapheme, not to the continuation cell (where it would be
+        // invisible to rendering and copy mode).
+        let mut state = TerminalState::new(10, 2);
+        state.put_char('\u{1F468}');
+        state.put_char('\u{200D}');
+        state.put_char('\u{1F469}');
+
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "\u{1F468}\u{200D}");
+        assert!(row.cells[1].is_continuation());
+        assert!(row.cells[1].grapheme.is_empty());
+        assert_eq!(row.cells[2].grapheme, "\u{1F469}");
     }
 
     #[test]
