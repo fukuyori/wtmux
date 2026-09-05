@@ -44,7 +44,9 @@ pub type Result<T> = std::result::Result<T, PtyError>;
 
 /// POSIX pty wrapper (master side) with the spawned shell process.
 pub struct UnixPty {
-    master: OwnedFd,
+    /// `None` only during `Drop`, where the master is closed before the
+    /// final blocking wait on the child (see the comment there).
+    master: Option<OwnedFd>,
     /// Mutex because `is_running`/`exit_code` take `&self` (the pty is shared
     /// through an `Arc` with the reader thread) but `Child::try_wait` needs
     /// `&mut Child`.
@@ -103,7 +105,7 @@ impl UnixPty {
         let child = cmd.spawn().map_err(PtyError::ProcessSpawn)?;
 
         Ok(UnixPty {
-            master,
+            master: Some(master),
             child: Mutex::new(child),
             cols,
             rows,
@@ -127,7 +129,7 @@ impl UnixPty {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let rc = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) };
+        let rc = unsafe { libc::ioctl(self.master_fd(), libc::TIOCSWINSZ as _, &ws) };
         if rc != 0 {
             return Err(PtyError::Resize(io::Error::last_os_error()));
         }
@@ -136,7 +138,7 @@ impl UnixPty {
 
     /// Write bytes to the pty (input to shell). Writes the whole buffer.
     pub fn write(&self, data: &[u8]) -> Result<usize> {
-        let fd = self.master.as_raw_fd();
+        let fd = self.master_fd();
         let mut written = 0;
         while written < data.len() {
             let n = unsafe {
@@ -167,7 +169,7 @@ impl UnixPty {
     pub fn read(&self, buffer: &mut [u8]) -> Result<usize> {
         let n = unsafe {
             libc::read(
-                self.master.as_raw_fd(),
+                self.master_fd(),
                 buffer.as_mut_ptr() as *mut libc::c_void,
                 buffer.len(),
             )
@@ -218,6 +220,16 @@ impl UnixPty {
     /// Cancel pending read operations. Reads are non-blocking on Unix and the
     /// reader thread polls its stop flag, so nothing to do here.
     pub fn cancel_read(&self) {}
+
+    fn master_fd(&self) -> libc::c_int {
+        self.master.as_ref().map(|m| m.as_raw_fd()).unwrap_or(-1)
+    }
+
+    /// Discard whatever the child has written since the last read.
+    fn drain_master(&self) {
+        let mut buf = [0u8; 4096];
+        while matches!(self.read(&mut buf), Ok(n) if n > 0) {}
+    }
 }
 
 impl Drop for UnixPty {
@@ -225,22 +237,38 @@ impl Drop for UnixPty {
         let Ok(mut child) = self.child.lock() else {
             return;
         };
-        if matches!(child.try_wait(), Ok(None)) {
-            // Ask the shell to hang up first (what closing a terminal does),
-            // then force-kill if it doesn't exit promptly. Always reap so no
-            // zombie is left behind.
-            unsafe {
-                libc::kill(child.id() as libc::pid_t, libc::SIGHUP);
-            }
-            for _ in 0..50 {
-                if !matches!(child.try_wait(), Ok(None)) {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            let _ = child.kill();
-            let _ = child.wait();
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
         }
+
+        // Ask the shell to hang up first (what closing a terminal does),
+        // then force-kill if it doesn't exit promptly. Always reap so no
+        // zombie is left behind.
+        //
+        // Keep draining the master while waiting. By the time we get here
+        // the reader thread is gone, and on macOS a pty slave's final close
+        // (part of the child's exit) blocks until pending output has been
+        // read from the master. Sitting in a blocking `wait()` with unread
+        // output therefore deadlocked: the child could not finish exiting
+        // and we could not finish waiting. Seen in CI as manager tests
+        // hanging in `Child::wait` after SIGHUP + SIGKILL.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGHUP);
+        }
+        for _ in 0..50 {
+            self.drain_master();
+            if !matches!(child.try_wait(), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = child.kill();
+
+        // Close the master before the blocking wait for the same reason:
+        // with the master gone the kernel drops the pending output instead
+        // of holding the child in its exit path.
+        drop(self.master.take());
+        let _ = child.wait();
     }
 }
 
