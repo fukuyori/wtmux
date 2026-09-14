@@ -175,6 +175,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_version() {
     eprintln!("wtmux {}", VERSION);
+    #[cfg(windows)]
+    eprintln!("ConPTY: {}", crate::core::pty::conpty_api().backend());
 }
 
 /// Print the effective binding table (`wtmux list-keys`), after `config.toml`

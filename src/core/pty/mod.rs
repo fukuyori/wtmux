@@ -9,8 +9,13 @@
 #[cfg(windows)]
 mod conpty;
 #[cfg(windows)]
+mod conpty_api;
+#[cfg(windows)]
 #[allow(unused_imports)]
 pub use conpty::{ConPty, ConPty as Pty, PtyError, Result};
+#[cfg(windows)]
+#[allow(unused_imports)]
+pub use conpty_api::{api as conpty_api, Backend as ConPtyBackend};
 
 #[cfg(unix)]
 mod unix;

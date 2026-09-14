@@ -173,6 +173,18 @@ Copy-Item $exePath "$stagingDir\wtmux.exe"
 Copy-Item ".\installer\license.rtf" "$stagingDir\license.rtf"
 Copy-Item ".\assets\generated\wtmux.ico" "$stagingDir\wtmux.ico"
 
+# Optional modern ConPTY (conpty.dll + OpenConsole.exe, see vendor\conpty\README.md).
+# Installed next to wtmux.exe; the MSI is built without them when absent.
+$bundleConPty = (Test-Path ".\vendor\conpty\conpty.dll") -and (Test-Path ".\vendor\conpty\OpenConsole.exe")
+if ($bundleConPty) {
+    Copy-Item ".\vendor\conpty\conpty.dll" "$stagingDir\conpty.dll"
+    Copy-Item ".\vendor\conpty\OpenConsole.exe" "$stagingDir\OpenConsole.exe"
+    Copy-Item ".\vendor\conpty\LICENSE-ConPTY.txt" "$stagingDir\LICENSE-ConPTY.txt"
+    Write-Host "  bundling vendor\conpty (conpty.dll + OpenConsole.exe + LICENSE-ConPTY.txt)" -ForegroundColor Gray
+} else {
+    Write-Host "  vendor\conpty not found - MSI uses the inbox conhost" -ForegroundColor Yellow
+}
+
 $msiPath = "$OutputDir\wtmux-$Version-windows-x64.msi"
 
 if ($wixVersion -ge 4) {
@@ -181,6 +193,18 @@ if ($wixVersion -ge 4) {
     
     # Create WiX v4+ compatible wxs file
     $wxsV4Path = "$stagingDir\wtmux-v4.wxs"
+    $conptyComponentV4 = ""
+    $conptyRefV4 = ""
+    if ($bundleConPty) {
+        $conptyRefV4 = '<ComponentRef Id="ConPtyFiles" />'
+        $conptyComponentV4 = @"
+                    <Component Id="ConPtyFiles" Guid="7C1E9A3B-5D2F-4E8A-9B6C-0F3D5A7E9C21">
+                        <File Id="ConPtyDll" Source="conpty.dll" KeyPath="yes" />
+                        <File Id="OpenConsoleExe" Source="OpenConsole.exe" />
+                        <File Id="ConPtyLicense" Source="LICENSE-ConPTY.txt" />
+                    </Component>
+"@
+    }
     $wxsV4Content = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -202,6 +226,7 @@ if ($wixVersion -ge 4) {
                     <Component Id="WtmuxExe" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
                         <File Id="WtmuxExeFile" Source="wtmux.exe" />
                     </Component>
+$conptyComponentV4
                 </Directory>
             </Directory>
         </StandardDirectory>
@@ -236,6 +261,7 @@ if ($wixVersion -ge 4) {
         
         <Feature Id="ProductFeature" Title="wtmux">
             <ComponentRef Id="WtmuxExe" />
+            $conptyRefV4
             <ComponentRef Id="PathEnvComponent" />
             <ComponentRef Id="StartMenuShortcutComponent" />
         </Feature>
@@ -284,7 +310,9 @@ if ($wixVersion -ge 4) {
     # Compile WiX source
     Write-Host "Compiling WiX source..." -ForegroundColor Green
     $wixobjPath = "$stagingDir\wtmux.wixobj"
-    & $candle -nologo -arch x64 -dSourceDir="$stagingDir" -out $wixobjPath ".\installer\wtmux.wxs"
+    $candleDefines = @("-dSourceDir=$stagingDir")
+    if ($bundleConPty) { $candleDefines += "-dConPty=1" }
+    & $candle -nologo -arch x64 @candleDefines -out $wixobjPath ".\installer\wtmux.wxs"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Error: candle.exe failed" -ForegroundColor Red
         exit 1

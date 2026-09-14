@@ -1545,4 +1545,240 @@ Start-Sleep -Milliseconds 300
         }
         println!("host hop OK — no stray spaces after conhost re-encoding");
     }
+
+    /// Diagnostic: measure how conhost (the ConPTY a wtmux pane runs in)
+    /// advances the cursor for every East Asian Ambiguous code point, via
+    /// DSR/CPR issued by a child python script. Prints the summary.
+    /// Env: WTMUX_WIDTH_PROBE_SCRIPT (path to width_probe.py),
+    ///      WTMUX_WIDTH_PROBE_EAW (EastAsianWidth.txt),
+    ///      WTMUX_WIDTH_PROBE_CONSOLE_JSON (optional locale-eaw eaw-console.json),
+    ///      WTMUX_WIDTH_PROBE_CODEPAGES (comma list, default "65001,932").
+    /// Run with: cargo test conpty_ambiguous_width_probe -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_ambiguous_width_probe() {
+        let script = std::env::var("WTMUX_WIDTH_PROBE_SCRIPT").expect("WTMUX_WIDTH_PROBE_SCRIPT");
+        let eaw = std::env::var("WTMUX_WIDTH_PROBE_EAW").expect("WTMUX_WIDTH_PROBE_EAW");
+        let console_json = std::env::var("WTMUX_WIDTH_PROBE_CONSOLE_JSON").unwrap_or_default();
+        let codepages = std::env::var("WTMUX_WIDTH_PROBE_CODEPAGES").unwrap_or_else(|_| "65001,932".into());
+        let mode = std::env::var("WTMUX_WIDTH_PROBE_MODE").unwrap_or_else(|_| "amb".into());
+        let dir = std::env::temp_dir().join("wtmux_width_probe");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        for cp in codepages.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let out = dir.join(format!("conpty_cp{}", cp));
+            let cmd = format!(
+                "python \"{}\" \"{}\" \"{}\" {} {} {}",
+                script, eaw, out.display(), cp,
+                if console_json.is_empty() { "-".to_string() } else { format!("\"{}\"", console_json) },
+                mode
+            );
+            let pty = crate::core::pty::ConPty::new(120, 40, Some(&cmd)).expect("spawn conpty");
+            let mut buf = [0u8; 4096];
+            let start = std::time::Instant::now();
+            let mut quiet_after_exit = 0;
+            // Act as the host: a bundled OpenConsole forwards the child's DSR
+            // to us instead of answering it, so track the stream in a grid and
+            // reply with *our* cursor position (the inbox conhost answers itself).
+            let mut host = Session::new(0, 120, 40);
+            let mut dsr_answered = 0usize;
+            loop {
+                match pty.read(&mut buf) {
+                    Ok(0) => {
+                        if !pty.is_running() {
+                            quiet_after_exit += 1;
+                            if quiet_after_exit > 30 { break; }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Ok(n) => {
+                        quiet_after_exit = 0;
+                        host.feed_bytes(&buf[..n]);
+                        let queries = buf[..n].windows(4).filter(|w| *w == b"\x1b[6n").count();
+                        for _ in 0..queries {
+                            let c = host.state.active_cursor();
+                            let _ = pty.write(format!("\x1b[{};{}R", c.row + 1, c.col + 1).as_bytes());
+                            dsr_answered += 1;
+                        }
+                    }
+                    Err(_) => break,
+                }
+                if start.elapsed().as_secs() > 120 { break; }
+            }
+            println!("=== ConPTY child codepage {} (exit {:?}, backend {}, DSR forwarded to host: {}) ===",
+                cp, pty.exit_code(), crate::core::pty::conpty_api().backend(), dsr_answered);
+            match std::fs::read_to_string(format!("{}.summary.txt", out.display())) {
+                Ok(s) => {
+                    println!("{}", s);
+                    if mode == "seq" {
+                        // wtmux's own cell count for each sequence (sum of char_width,
+                        // which is what put_char does: zero-width chars join the previous cell).
+                        for line in s.lines().filter(|l| l.starts_with("seq ")) {
+                            let hex: String = line
+                                .split_whitespace()
+                                .skip(2)
+                                .take_while(|t| *t != "->")
+                                .filter_map(|h| u32::from_str_radix(h, 16).ok())
+                                .filter_map(char::from_u32)
+                                .collect();
+                            println!("wtmux {:24} -> {}", line.split_whitespace().nth(1).unwrap_or(""),
+                                crate::core::term::width::str_display_width(&hex));
+                        }
+                    }
+                }
+                Err(e) => println!("no summary written: {}", e),
+            }
+
+            // Diff conhost's measured width against wtmux's own char_width.
+            let Ok(tsv) = std::fs::read_to_string(format!("{}.tsv", out.display())) else { continue };
+            // (cp, conhost, wtmux, eaw, gc)
+            let mut mism: Vec<(u32, i64, usize, String, String)> = Vec::new();
+            let mut total = 0usize;
+            for line in tsv.lines() {
+                let f: Vec<&str> = line.split('\t').collect();
+                if f.len() < 4 { continue; }
+                let Ok(cp) = f[0].parse::<u32>() else { continue };
+                let Some(ch) = char::from_u32(cp) else { continue };
+                let Ok(conhost) = f[3].parse::<i64>() else { continue };
+                total += 1;
+                let ours = crate::core::term::width::char_width(ch);
+                if conhost != ours as i64 {
+                    mism.push((cp, conhost, ours, f[1].to_string(), f[2].to_string()));
+                }
+            }
+            println!("--- conhost vs wtmux char_width: {} mismatches of {} ---", mism.len(), total);
+            // Class summary: (conhost, wtmux, gc) -> count
+            let mut classes: std::collections::BTreeMap<(i64, usize, String), usize> = Default::default();
+            for m in &mism {
+                *classes.entry((m.1, m.2, m.4.clone())).or_default() += 1;
+            }
+            for ((c, o, gc), n) in &classes {
+                println!("  class conhost={} wtmux={} gc={}: {}", c, o, gc, n);
+            }
+            // Group into runs of consecutive code points with the same (conhost, ours, eaw, gc).
+            let mut full = String::new();
+            let mut i = 0;
+            while i < mism.len() {
+                let (a, c, o, ref cat, ref gc) = mism[i];
+                let mut j = i;
+                while j + 1 < mism.len()
+                    && mism[j + 1].0 == mism[j].0 + 1
+                    && mism[j + 1].1 == c && mism[j + 1].2 == o
+                    && mism[j + 1].3 == *cat && mism[j + 1].4 == *gc
+                { j += 1; }
+                let b = mism[j].0;
+                let sample: String = char::from_u32(a).map(|c| c.to_string()).unwrap_or_default();
+                let line = if a == b {
+                    format!("  U+{:04X}          conhost={} wtmux={} eaw={} gc={} [{}]", a, c, o, cat, gc, sample)
+                } else {
+                    format!("  U+{:04X}-U+{:04X} ({:4}) conhost={} wtmux={} eaw={} gc={} [{}]", a, b, b - a + 1, c, o, cat, gc, sample)
+                };
+                full.push_str(&line);
+                full.push('\n');
+                // Inline: everything except the zero-width classes (marks / format chars).
+                if !matches!(gc.as_str(), "Mn" | "Mc" | "Me" | "Cf") {
+                    println!("{}", line);
+                }
+                i = j + 1;
+            }
+            let full_path = dir.join(format!("mismatch_cp{}.txt", cp));
+            std::fs::write(&full_path, full).expect("write mismatch list");
+            println!("full mismatch list -> {}", full_path.display());
+        }
+    }
+
+    /// Diagnostic: what the multi-pane renderer emits for a row of emoji /
+    /// combining / flag / dakuten text (bytes + code points), and how a
+    /// wtmux-parsed host would place it.
+    /// Run with: cargo test render_emoji_line_dump -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn render_emoji_line_dump() {
+        let line = "a\u{0300}b|\u{2764}\u{FE0F}x|\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}y|\u{1F1EF}\u{1F1F5}z|\u{FF76}\u{FF9E}w|end\r\n";
+        let mut pane = crate::wm::pane::Pane::new(1, 60, 6);
+        pane.focused = true;
+        pane.session.feed_bytes(line.as_bytes());
+        let renderer = crate::ui::wm_renderer::WmRenderer::new();
+        let mut out: Vec<u8> = Vec::new();
+        renderer.render_pane(&mut out, &pane, 0, false).expect("render_pane");
+        let s = String::from_utf8_lossy(&out);
+        println!("--- renderer bytes ({}) ---", out.len());
+        println!("{}", s.replace('\x1b', "\\e"));
+        println!("--- code points of the text row ---");
+        for seg in s.split('\x1b') {
+            if seg.contains("end") {
+                let cps: Vec<String> = seg.chars().map(|c| if (c as u32) > 127 { format!("U+{:04X}", c as u32) } else { c.to_string() }).collect();
+                println!("{}", cps.join(" "));
+            }
+        }
+        let mut host = Session::new(9, 120, 10);
+        host.feed_bytes(&out);
+        for (i, row) in repro_dump_grid(&host, 4).iter().enumerate() {
+            println!("host {:2}|{}|", i, row.trim_end_matches('·'));
+        }
+    }
+
+    /// Diagnostic: show the raw bytes the inner ConPTY emits for text whose
+    /// width conhost and wtmux judge differently (combining marks, VS16,
+    /// regional indicators, ambiguous symbols), so we can see whether the
+    /// disagreement is visible in the byte stream (explicit CUP/padding).
+    /// Run with: cargo test conpty_width_divergence_dump -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_width_divergence_dump() {
+        let dir = std::env::temp_dir().join("wtmux_width_probe");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let cases: &[(&str, &str)] = &[
+            ("combining", "a\u{0300}b|\r\n"),
+            ("vs16", "\u{2764}\u{FE0F}b|\r\n"),
+            ("regional", "\u{1F1EF}\u{1F1F5}b|\r\n"),
+            ("ambiguous", "\u{203B}\u{2460}\u{25CB}b|\r\n"),
+            ("jamo", "\u{1100}\u{1161}b|\r\n"),
+            ("dakuten", "\u{FF76}\u{FF9E}b|\r\n"),
+            ("zwj", "\u{1F468}\u{200D}\u{1F469}b|\r\n"),
+            // Does this ConPTY answer DSR itself or forward it to the host?
+            ("dsr", "\x1b[6nQ|\r\n"),
+        ];
+        let mut frame = Vec::new();
+        for (_, text) in cases {
+            frame.extend_from_slice(text.as_bytes());
+        }
+        // Edge cases: fill the 40-col row by conhost's own count, then "X".
+        // If conhost wraps where wtmux would not, the wrap is visible in the
+        // byte stream and the grid.
+        let edge: &[(&str, &str, usize)] = &[
+            ("ascii-calibration", "a", 45),   // must wrap in a 40-col buffer
+            ("combining", "a\u{0300}", 20),   // conhost: 2 cells each -> 40
+            ("vs16", "\u{2764}\u{FE0F}", 20), // conhost: 1+1 each -> 40
+            ("regional", "\u{1F1EF}", 20),    // conhost: 2 each -> 40
+            ("ambiguous", "\u{203B}", 40),    // conhost: 1 each -> 40
+            ("jamo-v", "\u{1161}", 40),       // conhost: 1 each -> 40
+        ];
+        for (_, unit, n) in edge {
+            for _ in 0..*n {
+                frame.extend_from_slice(unit.as_bytes());
+            }
+            frame.extend_from_slice(b"X\r\n");
+        }
+        // Absolute positioning after a divergent sequence: conhost fills the
+        // gap from *its* cursor column, so Z's column in wtmux's grid shows
+        // whether conhost's width model leaks into the byte stream.
+        for (_, unit, _) in edge {
+            frame.extend_from_slice(unit.as_bytes());
+            frame.extend_from_slice(b"\x1b[10GZ\r\n");
+        }
+        let chunks = repro_run_conpty(&dir, "divergence", &[frame], false, 40, 20);
+        let all: Vec<u8> = chunks.into_iter().flatten().collect();
+        let s = String::from_utf8_lossy(&all);
+        println!("--- raw ConPTY output ({} bytes) ---", all.len());
+        println!("{}", s.replace('\x1b', "\\e").replace('\r', "\\r").replace('\n', "\\n\n"));
+        let mut sess = Session::new(0, 40, 20);
+        sess.feed_bytes(&all);
+        println!("--- wtmux grid after feeding those bytes ---");
+        for (i, row) in repro_dump_grid(&sess, 20).iter().enumerate() {
+            println!("{:2}|{}|", i, row.trim_end_matches('·'));
+        }
+    }
 }

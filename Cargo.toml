@@ -1,6 +1,6 @@
 [package]
 name = "wtmux"
-version = "3.5.1"
+version = "4.0.0"
 edition = "2021"
 rust-version = "1.70"
 description = "A tmux-like terminal multiplexer for Windows, macOS and Linux"
@@ -47,6 +47,7 @@ libc = "0.2"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Console",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_Storage_FileSystem",

@@ -14,6 +14,7 @@
 
 pub mod keymapper;
 pub mod input;
+pub(crate) mod host_probe;
 pub(crate) mod app_state;
 mod cursor;
 mod frame;

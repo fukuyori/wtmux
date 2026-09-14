@@ -108,6 +108,12 @@ impl Renderer {
             Clear(ClearType::All),
             MoveTo(0, 0)
         )?;
+        stdout.flush()?;
+
+        // Learn how this host lays out VS16 emoji before any pane output
+        // reaches the grid (see host_probe).
+        let vs16 = super::host_probe::measure_vs16_emoji_cells();
+        crate::core::term::width::set_vs16_emoji_wide(vs16 == Some(2));
         
         // Enable SGR extended mouse mode for better compatibility
         write!(stdout, "\x1b[?1000h")?; // Enable mouse click tracking

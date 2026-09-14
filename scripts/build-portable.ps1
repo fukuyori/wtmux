@@ -77,6 +77,19 @@ if ($Sign) {
 }
 Copy-Item $exePath "$packageDir\wtmux.exe"
 
+# Optional modern ConPTY (conpty.dll + OpenConsole.exe from microsoft/terminal).
+# Place the pair in vendor\conpty\ to bundle it; wtmux falls back to the inbox
+# conhost when the files are absent.
+$bundledConPty = (Test-Path ".\vendor\conpty\conpty.dll") -and (Test-Path ".\vendor\conpty\OpenConsole.exe")
+if ($bundledConPty) {
+    Copy-Item ".\vendor\conpty\conpty.dll" "$packageDir\"
+    Copy-Item ".\vendor\conpty\OpenConsole.exe" "$packageDir\"
+    Copy-Item ".\vendor\conpty\LICENSE-ConPTY.txt" "$packageDir\"
+    Write-Host "  bundled vendor\conpty (conpty.dll + OpenConsole.exe + LICENSE-ConPTY.txt)" -ForegroundColor Gray
+} else {
+    Write-Host "  vendor\conpty not found - package uses the inbox conhost (see vendor\conpty\README.md)" -ForegroundColor Yellow
+}
+
 # Documentation
 Copy-Item ".\README.md" "$packageDir\"
 Copy-Item ".\README.ja.md" "$packageDir\"
@@ -136,6 +149,11 @@ Write-Host "  - config.example.toml (configuration template)" -ForegroundColor G
 Write-Host "  - README.md           (English documentation)" -ForegroundColor Gray
 Write-Host "  - README.ja.md        (Japanese documentation)" -ForegroundColor Gray
 Write-Host "  - LICENSE             (MIT license)" -ForegroundColor Gray
+if ($bundledConPty) {
+    Write-Host "  - conpty.dll          (modern ConPTY, microsoft/terminal)" -ForegroundColor Gray
+    Write-Host "  - OpenConsole.exe     (console host used by conpty.dll)" -ForegroundColor Gray
+    Write-Host "  - LICENSE-ConPTY.txt  (MIT license of the two files above)" -ForegroundColor Gray
+}
 Write-Host "  - CHANGELOG.md        (version history)" -ForegroundColor Gray
 Write-Host "  - PORTABLE            (portable mode marker)" -ForegroundColor Gray
 Write-Host ""

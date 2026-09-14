@@ -66,12 +66,14 @@ if (-not (Test-Path $MakeAppx)) {
 Write-Host "Using Windows SDK: $($SdkPath.Name)" -ForegroundColor Cyan
 
 # Step 1: Build release binary
-Write-Host "`n[1/5] Building release binary..." -ForegroundColor Green
+Write-Host "`n[1/5] Checking release binary..." -ForegroundColor Green
+# Packaging never builds (same rule as the other scripts): run
+# `cargo build --release` first, so every package format wraps one binary.
 Push-Location $ProjectRoot
 try {
-    cargo build --release
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Cargo build failed"
+    if (-not (Test-Path (Join-Path $OutputDir "wtmux.exe"))) {
+        Write-Host "Error: wtmux.exe not found in $OutputDir" -ForegroundColor Red
+        Write-Host "Please build first: cargo build --release" -ForegroundColor Yellow
         exit 1
     }
 } finally {
@@ -91,6 +93,18 @@ Write-Host "`n[3/5] Copying files..." -ForegroundColor Green
 
 # Copy executable
 Copy-Item (Join-Path $OutputDir "wtmux.exe") $PackageDir
+
+# Optional modern ConPTY (conpty.dll + OpenConsole.exe, see vendor\conpty\README.md),
+# installed next to wtmux.exe. Skipped when vendor\conpty is empty.
+$VendorConPty = Join-Path $ProjectRoot "vendor\conpty"
+if ((Test-Path (Join-Path $VendorConPty "conpty.dll")) -and (Test-Path (Join-Path $VendorConPty "OpenConsole.exe"))) {
+    Copy-Item (Join-Path $VendorConPty "conpty.dll") $PackageDir
+    Copy-Item (Join-Path $VendorConPty "OpenConsole.exe") $PackageDir
+    Copy-Item (Join-Path $VendorConPty "LICENSE-ConPTY.txt") $PackageDir
+    Write-Host "  bundling vendor\conpty (conpty.dll + OpenConsole.exe + LICENSE-ConPTY.txt)" -ForegroundColor Gray
+} else {
+    Write-Host "  vendor\conpty not found - package uses the inbox conhost" -ForegroundColor Yellow
+}
 
 # Copy manifest
 $manifestPath = Join-Path $PackageDir "AppxManifest.xml"

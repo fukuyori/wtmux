@@ -4,15 +4,17 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 3.5.1 Highlights
+## 4.0.0 Highlights
 
-- **Emoji sequences survive copy mode** — zero-width joiners, variation selectors and combining marks that follow a double-width character (e.g. 👨‍👩‍👧) are no longer dropped when copying.
+- **Modern ConPTY, bundled** — panes can run in `conpty.dll` + `OpenConsole.exe` (microsoft/terminal, MIT) instead of the inbox `conhost.exe`, which counted combining marks, VS16 emoji, ZWJ sequences and flags as extra cells and shifted positioned output. The Windows packages ship the pair; `wtmux --version` shows which implementation is active. See [Troubleshooting](#emoji-combining-marks-or-flags-shift-text-by-a-column-windows).
+- **Grapheme-cluster width model** — 👨‍👩‍👧 is one two-cell cluster (was six cells), 🇯🇵 and ｶﾞ are one cluster each, and ❤️ is widened to two cells only when the host terminal draws it that way (measured at startup). Design notes in `docs/design-width-model.md`.
+- From 3.5.1: **Emoji sequences survive copy mode** — zero-width joiners, variation selectors and combining marks that follow a double-width character (e.g. 👨‍👩‍👧) are no longer dropped when copying.
 - From 3.5.0: **Reliable background pane redraws** — output produced in inactive windows remains pending until rendered, and switching windows always repaints the complete pane layout.
 - From 3.4.0: **key cheat sheet** — `Prefix + ?` opens a scrollable list of every effective binding (after your `config.toml` overrides) with a one-line description, grouped by Windows / Panes / Layouts / Scrollback / Tools.
 - From 3.4.0: **automatic pane titles** — panes are named after their working directory (`wtmux` for `D:\home\source\rust\wtmux`) and follow `cd`; duplicates in a window are numbered `wtmux:2`, `wtmux:3`. Manual pane renaming was removed, and `cwd_prompt_hook` is now on by default.
@@ -119,6 +121,13 @@ cp target/release/wtmux /usr/local/bin/
 # The generated .ico is embedded into wtmux.exe and reused by the installers.
 .\scripts\generate-icons.ps1
 ```
+
+To ship the modern ConPTY with the packages, put `conpty.dll` and
+`OpenConsole.exe` (Microsoft-signed builds from microsoft/terminal, MIT) in
+`vendor\conpty\` before running any of the scripts above; every package then
+installs them next to `wtmux.exe` together with `LICENSE-ConPTY.txt`. Without
+them the packages are built as before and wtmux uses the inbox `conhost.exe`.
+See `vendor/conpty/README.md`.
 
 ### Building the macOS Installer
 
@@ -891,6 +900,33 @@ The trace is written to `vt_trace.log` in the config directory
 (`%LOCALAPPDATA%\wtmux` on Windows, `~/.config/wtmux` on macOS / Linux)
 in hex + UTF-8 format. Attach this file when filing a bug report.
 
+### Emoji, combining marks or flags shift text by a column (Windows)
+
+Each wtmux pane runs inside a ConPTY. The inbox implementation reached through
+kernel32 (`conhost.exe`) counts text width per code point, so a combining mark,
+a VS16 emoji such as ❤️, a ZWJ sequence such as 👨‍👩‍👧 or a flag occupies more
+cells there than in any modern terminal, and positioned output after such text
+lands one or more columns off. Windows Terminal and WezTerm avoid this by
+shipping their own ConPTY (`conpty.dll` + `OpenConsole.exe` from
+[microsoft/terminal](https://github.com/microsoft/terminal), MIT), and wtmux
+uses the same pair.
+
+The release packages (ZIP, Inno Setup, MSI, MSIX) install the two files next
+to `wtmux.exe`, so nothing needs to be done there. Check with:
+
+```powershell
+wtmux --version
+# ConPTY: bundled (C:\...\conpty.dll)      <- modern ConPTY in use
+# ConPTY: system (kernel32 / conhost)       <- inbox conhost, no DLL found
+```
+
+If you built wtmux from source, copy `conpty.dll` and `OpenConsole.exe` next
+to `wtmux.exe` (both files must be in the same directory) or point
+`WTMUX_CONPTY_DIR` at a directory that contains them, for example the WezTerm
+install directory. Where to get the files is described in
+`vendor/conpty/README.md`. `WTMUX_CONPTY=system` forces the inbox
+implementation; when no DLL is found, wtmux silently falls back to it.
+
 ## Known Limitations
 
 - Shell shortcuts (`-c`/`-p`/`-7`/`-w`) and Shift-JIS encoding are Windows-only
@@ -909,5 +945,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [tmux](https://github.com/tmux/tmux) - The inspiration for this project
 - Windows ConPTY team for the pseudo-terminal API
+- [microsoft/terminal](https://github.com/microsoft/terminal) - `conpty.dll` and `OpenConsole.exe` bundled with the Windows packages (MIT)
 - [crossterm](https://github.com/crossterm-rs/crossterm) - Cross-platform terminal manipulation
 - [unicode-width](https://github.com/unicode-rs/unicode-width) - Unicode character width calculation

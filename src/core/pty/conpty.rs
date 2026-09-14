@@ -8,9 +8,9 @@ use thiserror::Error;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
-use windows::Win32::System::Console::{
-    ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
-};
+use windows::Win32::System::Console::{COORD, HPCON};
+
+use super::conpty_api::api as conpty_api;
 use windows::Win32::System::Pipes::{CreatePipe, PeekNamedPipe};
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
@@ -114,7 +114,7 @@ impl HpcGuard {
 impl Drop for HpcGuard {
     fn drop(&mut self) {
         if let Some(hpc) = self.0.take() {
-            unsafe { ClosePseudoConsole(hpc) };
+            unsafe { conpty_api().close(hpc) };
         }
     }
 }
@@ -184,7 +184,8 @@ impl ConPty {
             Y: rows as i16,
         };
 
-        let hpc = CreatePseudoConsole(size, pty_input_read.get(), pty_output_write.get(), 0)
+        let hpc = conpty_api()
+            .create(size, pty_input_read.get(), pty_output_write.get(), 0)
             .map_err(PtyError::ConPtyCreation)?;
         let hpc = HpcGuard(Some(hpc));
 
@@ -275,7 +276,7 @@ impl ConPty {
         };
 
         unsafe {
-            ResizePseudoConsole(self.hpc, size).map_err(PtyError::Resize)?;
+            conpty_api().resize(self.hpc, size).map_err(PtyError::Resize)?;
         }
 
         self.cols = cols;
@@ -291,7 +292,7 @@ impl ConPty {
         };
 
         unsafe {
-            ResizePseudoConsole(self.hpc, size).map_err(PtyError::Resize)?;
+            conpty_api().resize(self.hpc, size).map_err(PtyError::Resize)?;
         }
 
         Ok(())
@@ -398,7 +399,7 @@ impl Drop for ConPty {
     fn drop(&mut self) {
         unsafe {
             // Close the pseudo console first
-            ClosePseudoConsole(self.hpc);
+            conpty_api().close(self.hpc);
 
             // Close handles
             let _ = CloseHandle(self.input_write);

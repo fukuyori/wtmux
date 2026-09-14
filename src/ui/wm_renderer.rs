@@ -354,7 +354,12 @@ impl WmRenderer {
             Clear(ClearType::All)
         )?;
         stdout.flush()?;
-        
+
+        // Learn how this host lays out VS16 emoji before any pane output
+        // reaches the grid (see host_probe).
+        let vs16 = super::host_probe::measure_vs16_emoji_cells();
+        crate::core::term::width::set_vs16_emoji_wide(vs16 == Some(2));
+
         self.initialized = true;
         self.invalidate_cursor_cache();
         Ok(())

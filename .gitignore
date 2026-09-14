@@ -28,6 +28,11 @@ Thumbs.db
 /installer/output/
 /installer/staging/
 
+# Bundled ConPTY binaries (Microsoft-signed, obtained separately; see
+# vendor/conpty/README.md). README and LICENSE-ConPTY.txt stay tracked.
+/vendor/conpty/conpty.dll
+/vendor/conpty/OpenConsole.exe
+
 # Local config (user may have custom settings)
 # config.toml
 

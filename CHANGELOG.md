@@ -1,3 +1,127 @@
+## [4.0.0] - 2026-09-14
+
+This release reworks how wtmux decides how many cells a character occupies,
+and lets the pane ConPTY come from a modern OpenConsole instead of the inbox
+`conhost.exe`. Together they remove the one-column drift that combining
+marks, VS16 emoji (❤️ ✔️ ⚠️), ZWJ sequences (👨‍👩‍👧), flags (🇯🇵) and halfwidth
+dakuten (ｶﾞ) caused in positioned TUI output. Design notes and the
+measurement procedure are in `docs/design-width-model.md`.
+
+### Background (measured 2026-09-14, Windows 11 26200)
+
+wtmux sits between two ConPTY hops: the pane's ConPTY feeds it, and the host
+terminal's ConPTY consumes its output. Each layer has its own width model.
+Cell counts measured with DSR/CPR (`tools/width_probe.py`):
+
+| Sequence | inbox conhost 26100 | OpenConsole / WezTerm 1.22 | Windows Terminal 1.24 | wtmux 3.5.1 |
+|---|---|---|---|---|
+| East Asian Ambiguous (※ ① ○ … 1285 code points) | 1 | 1 | 1 | 1 |
+| a + U+0300 (combining) | 2 | 1 | 1 | 1 |
+| ❤ + U+FE0F (VS16) | 2 | 1 | 2 | 1 |
+| 👨‍👩‍👧 (ZWJ sequence) | 8 | 2 | 2 | 6 |
+| 🇯🇵 (regional indicator pair) | 4 | 2 | 2 | 2 |
+| ｶ + ﾞ (halfwidth dakuten) | 2 | 2 | 2 | 1 |
+| か + U+3099 | 4 | 2 | 2 | 2 |
+
+Two consequences drove the changes below:
+
+- The inbox conhost counts width per code point and re-lays out the
+  application's absolute cursor moves with its own count, so a `CSI 10 G`
+  after `à`, `❤️`, `🇯` or a Hangul jamo arrived at column 9 in wtmux's
+  grid. Neither wtmux nor the host terminal can correct that after the fact.
+- wtmux's renderer re-anchors the cursor around every multi-byte cell. A
+  grapheme cluster split over two cells (🇯 + 🇵, ｶ + ﾞ) was therefore
+  emitted as two positioned writes, and WezTerm dropped the character that
+  followed such a pair (`z` in `🇯🇵z`, `w` in `ｶﾞw`;
+  `tools/host_cluster_probe.py` reproduces this in a bare WezTerm pane).
+
+Ambiguous-width characters agree across every layer and were not changed.
+
+### Added
+
+- **Bundled modern ConPTY (Windows).** The pane ConPTY can now be created
+  through `conpty.dll` + `OpenConsole.exe` from microsoft/terminal (MIT),
+  the same pair Windows Terminal and WezTerm ship. `src/core/pty/conpty_api.rs`
+  resolves `CreatePseudoConsole` / `ResizePseudoConsole` /
+  `ClosePseudoConsole` once, looking for `conpty.dll` in `WTMUX_CONPTY_DIR`,
+  then next to `wtmux.exe`, and falling back to kernel32 (`WTMUX_CONPTY=system`
+  forces the fallback). `wtmux --version` prints
+  `ConPTY: bundled (<path>)` or `ConPTY: system (kernel32 / conhost)`.
+  OpenConsole passes the application's escape sequences through unchanged
+  and forwards DSR/DA queries to wtmux, which answers from its own grid
+  (`Response::CursorPosition`), so an application inside the pane sees
+  exactly wtmux's widths. Verified end to end: inside a wtmux hosted by
+  Windows Terminal, a child measured ❤️=2, 👨‍👩‍👧=2, 🇯🇵=2, ｶﾞ=2 — identical to
+  Windows Terminal's own layout — and the `CSI 10 G` cases above land on
+  column 10. All existing ConPTY harnesses (CJK repaint, closed-loop render,
+  host hop, kitty and win32-input round trips) pass with OpenConsole
+  1.24.2607.10001 and with the inbox conhost.
+- **Packages bundle the pair.** The portable ZIP, Inno Setup installer, WiX
+  MSI and MSIX now install `conpty.dll`, `OpenConsole.exe` and
+  `LICENSE-ConPTY.txt` next to `wtmux.exe` when they are present in
+  `vendor\conpty\`; without them the packages are built as before.
+  `vendor/conpty/README.md` documents the source (NuGet
+  `Microsoft.Windows.Console.ConPTY`, also attached to every Windows Terminal
+  GitHub release; x64 files at `runtimes/win-x64/native/conpty.dll` and
+  `build/native/runtimes/x64/OpenConsole.exe`). The binaries are
+  Microsoft-signed and ignored by git. The Windows App Certification Kit
+  reports no finding attributable to the two files (the pre-existing
+  optional "blocked executables" note about `cmd.exe` / `powershell.exe`
+  references and the high-DPI warning are unchanged).
+- **Host VS16 policy measured at startup.** Windows Terminal 1.24 draws a
+  text-default emoji followed by U+FE0F (❤️) in two cells, WezTerm 1.22 in
+  one. Right after entering the alternate screen, `ui::host_probe` writes
+  `❤\u{FE0F}`, reads the cursor back with DSR (500 ms deadline) and clears
+  the line; the lead cell is widened to two cells only when the host
+  answered 2. Without an answer (no tty, headless) the one-cell layout of
+  `unicode-width` is kept. The set of affected characters is generated from
+  UCD `emoji-data.txt` (Emoji=Yes, Emoji_Presentation=No; 119 ranges,
+  Unicode 17.0) by `tools/gen_emoji_table.py` into
+  `src/core/term/emoji_text_default.rs`. The renderer already strips VS16
+  from one-cell cells and keeps it on two-cell cells, so both policies stay
+  consistent with what the host draws.
+- **Diagnostic harnesses** (`cargo test <name> -- --ignored --nocapture`):
+  `conpty_ambiguous_width_probe` runs `tools/width_probe.py` inside a real
+  ConPTY and diffs its cell counts against `char_width` (modes: `amb`,
+  `all`, `seq`; it answers forwarded DSR like a host);
+  `conpty_width_divergence_dump` shows the raw bytes and the resulting grid
+  for text whose width the layers disagree on; `render_emoji_line_dump`
+  prints what the multi-pane renderer emits for such a row.
+  `tools/compare_probe.py` diffs two probe results.
+
+### Fixed
+
+- **ZWJ sequences** (👨‍👩‍👧) occupied one cell pair per emoji (six cells)
+  while every terminal draws them as one two-cell cluster; the character
+  after a ZWJ now joins the previous grapheme, also at the right margin,
+  where a terminal never wraps inside a cluster.
+- **Regional indicator pairs** (🇯🇵) were two one-cell glyphs emitted with a
+  cursor move in between; WezTerm then dropped the character that followed.
+  The pair is now one two-cell cluster written in one go
+  (`TerminalState::extend_cluster_before_cursor`). A lone regional
+  indicator stays one cell, as measured on both hosts.
+- **Halfwidth dakuten / handakuten** (U+FF9E/U+FF9F) and the halfwidth
+  Hangul filler (U+FFA0) were treated as zero-width; every measured terminal
+  draws them in their own cell. Halfwidth katakana + (han)dakuten (ｶﾞ ﾊﾟ)
+  form one two-cell cluster so the renderer writes them together.
+- `build-msix.ps1` ran `cargo build --release`; like the other packaging
+  scripts it now only checks that the release binary exists.
+
+### Not changed / known limitations
+
+- East Asian Ambiguous characters remain one cell; applying a locale-eaw
+  style table on the host side would only create a mismatch with the
+  ConPTY.
+- Hangul jamo (U+1160–11FF, U+D7B0–D7FB) differ between hosts (WezTerm 0,
+  Windows Terminal 1) and keep `unicode-width`'s zero width.
+- U+17A4 / U+17D8 are reported as 2 / 3 cells by `unicode-width` 0.1 while
+  terminals draw 1; left for a crate update.
+- The startup probe writes and clears one line on the alternate screen;
+  it needs a tty that answers DSR.
+- Without `conpty.dll` next to `wtmux.exe` the pane still runs in the inbox
+  conhost, and its per-code-point layout of positioned output is not
+  corrected; only the wtmux-side fixes above apply.
+
 ## [3.5.1] - 2026-09-05
 
 ### Added

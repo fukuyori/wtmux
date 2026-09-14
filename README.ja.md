@@ -4,15 +4,17 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-3.5.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [English README](README.md)
 
-## 3.5.1 の主な変更
+## 4.0.0 の主な変更
 
-- **絵文字シーケンスをコピーモードで保持** — 全角文字の直後に続くゼロ幅接合子（ZWJ）・異体字セレクタ・結合文字（👨‍👩‍👧 など）がコピー時に脱落しなくなりました。
+- **新しい ConPTY を同梱** — ペインを Windows 標準の `conhost.exe` ではなく `conpty.dll` + `OpenConsole.exe`（microsoft/terminal、MIT）の中で動かせます。標準の conhost は結合文字・VS16 絵文字・ZWJ 列・国旗を余分なセルに数え、その後ろの位置指定付き出力をずらしていました。Windows 向けパッケージには 2 ファイルを同梱し、`wtmux --version` でどちらが使われているかを確認できます。「[トラブルシューティング](#絵文字結合文字国旗の後ろで文字が-1-列ずれるwindows)」を参照。
+- **書記素クラスタ単位の幅モデル** — 👨‍👩‍👧 は 2 セルの 1 クラスタ（従来は 6 セル）、🇯🇵 と ｶﾞ もそれぞれ 1 クラスタになり、❤️ はホスト端末がそう描く場合にだけ 2 セルに広げます（起動時に測定）。設計は `docs/design-width-model.md` を参照。
+- 3.5.1 より: **絵文字シーケンスをコピーモードで保持** — 全角文字の直後に続くゼロ幅接合子（ZWJ）・異体字セレクタ・結合文字（👨‍👩‍👧 など）がコピー時に脱落しなくなりました。
 - 3.5.0 より: **バックグラウンドペインの確実な再描画** — 非アクティブウィンドウの出力を描画時まで保持し、ウィンドウ切替時にはペイン全体を必ず再描画します。
 - 3.4.0 より: **キーのチートシート** — `Prefix + ?` で、`config.toml` 適用後の有効な全バインドを簡単な説明付きで一覧表示（Windows / Panes / Layouts / Scrollback / Tools に分類、スクロール可）。
 - 3.4.0 より: **ペイン名の自動付与** — 作業ディレクトリ名（`D:\home\source\rust\wtmux` なら `wtmux`）がペイン名になり、`cd` に追従します。同一ウィンドウ内で重複すると `wtmux:2`, `wtmux:3` と番号付き。手動のペイン名変更は廃止し、`cwd_prompt_hook` は標準で有効になりました。
@@ -115,6 +117,13 @@ cp target/release/wtmux /usr/local/bin/
 # 生成された .ico は wtmux.exe に埋め込まれ、各インストーラーでも再利用されます。
 .\scripts\generate-icons.ps1
 ```
+
+新しい ConPTY をパッケージに同梱するには、上記スクリプトを実行する前に
+`conpty.dll` と `OpenConsole.exe`（microsoft/terminal の Microsoft 署名付きビルド、
+MIT ライセンス）を `vendor\conpty\` に置きます。どのパッケージも 2 ファイルを
+`wtmux.exe` と同じディレクトリに `LICENSE-ConPTY.txt` と一緒にインストールします。
+無い場合は従来どおりのパッケージになり、wtmux は Windows 標準の `conhost.exe` を
+使います。詳細は `vendor/conpty/README.md` を参照してください。
 
 ### macOSインストーラーのビルド
 
@@ -831,6 +840,33 @@ wtmux --vt-trace
 `~/.config/wtmux`）の `vt_trace.log` に Hex + UTF-8 形式で出力されます。
 バグ報告にこのファイルを添付してください。
 
+### 絵文字・結合文字・国旗の後ろで文字が 1 列ずれる（Windows）
+
+wtmux の各ペインは ConPTY の中で動きます。kernel32 経由で使われる Windows 標準の
+実装（`conhost.exe`）は文字幅をコードポイント単位で数えるため、結合文字、
+❤️ のような VS16 付き絵文字、👨‍👩‍👧 のような ZWJ 列、国旗が最近の端末より多くの
+セルを占め、その後ろの位置指定付き出力が 1 列以上ずれます。Windows Terminal と
+WezTerm は自前の ConPTY（[microsoft/terminal](https://github.com/microsoft/terminal)
+の `conpty.dll` + `OpenConsole.exe`、MIT ライセンス）を同梱してこれを避けており、
+wtmux も同じ 2 ファイルを使います。
+
+リリースパッケージ（ZIP、Inno Setup、MSI、MSIX）は 2 ファイルを `wtmux.exe` と
+同じディレクトリにインストールするので、通常は何もする必要はありません。
+次のコマンドで確認できます。
+
+```powershell
+wtmux --version
+# ConPTY: bundled (C:\...\conpty.dll)      <- 新しい ConPTY を使用中
+# ConPTY: system (kernel32 / conhost)       <- 標準の conhost（DLL が見つからない）
+```
+
+ソースからビルドした場合は、`conpty.dll` と `OpenConsole.exe` を `wtmux.exe` と
+同じディレクトリに置くか（2 ファイルは必ず同じディレクトリに置きます）、
+それらを含むディレクトリを環境変数 `WTMUX_CONPTY_DIR` で指定します。WezTerm の
+インストール先を指定することもできます。入手方法は `vendor/conpty/README.md` を
+参照してください。`WTMUX_CONPTY=system` を設定すると標準実装を強制します。
+DLL が見つからない場合は自動的に標準実装に戻ります。
+
 ## 既知の制限
 
 - シェルショートカット（`-c`/`-p`/`-7`/`-w`）とShift-JISエンコーディングはWindows専用
@@ -849,5 +885,6 @@ wtmux --vt-trace
 
 - [tmux](https://github.com/tmux/tmux) - このプロジェクトのインスピレーション
 - Windows ConPTYチーム - 擬似端末API
+- [microsoft/terminal](https://github.com/microsoft/terminal) - Windows向けパッケージに同梱する `conpty.dll` と `OpenConsole.exe`（MIT）
 - [crossterm](https://github.com/crossterm-rs/crossterm) - クロスプラットフォームターミナル操作
 - [unicode-width](https://github.com/unicode-rs/unicode-width) - Unicode文字幅計算

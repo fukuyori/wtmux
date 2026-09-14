@@ -2,7 +2,7 @@
 ; Download Inno Setup from: https://jrsoftware.org/isinfo.php
 
 #define MyAppName "wtmux"
-#define MyAppVersion "3.5.1"
+#define MyAppVersion "4.0.0"
 #define MyAppPublisher "wtmux"
 #define MyAppURL "https://github.com/fukuyori/wtmux"
 #define MyAppExeName "wtmux.exe"
@@ -46,6 +46,11 @@ Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}\bin"; Flags: ignore
 Source: "..\assets\generated\wtmux.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\config.example.toml"; DestDir: "{userappdata}\.wtmux"; DestName: "config.toml"; Flags: onlyifdoesntexist
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+; Bundled ConPTY (optional; see vendor\conpty\README.md). Both binaries must
+; sit next to wtmux.exe. Skipped silently when vendor\conpty is empty.
+Source: "..\vendor\conpty\conpty.dll"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\vendor\conpty\OpenConsole.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\vendor\conpty\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"; IconFilename: "{app}\wtmux.ico"

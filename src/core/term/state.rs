@@ -3,7 +3,7 @@
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
 use super::resize::{host_resize_screen, reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
-use super::width::char_width;
+use super::width::{char_width, is_text_default_emoji, vs16_emoji_wide};
 use bitflags::bitflags;
 use std::collections::VecDeque;
 
@@ -39,6 +39,10 @@ pub struct TerminalState {
     pub bell: bool,
     /// Kitty keyboard protocol flag stacks (CSI = / > / < / ? u).
     pub kitty_keyboard: KittyKeyboardState,
+    /// Per-state override of the host's VS16 emoji layout (`None` = use the
+    /// value measured at startup, see `width::vs16_emoji_wide`). Tests set
+    /// it explicitly; the application leaves it `None`.
+    pub vs16_emoji_wide: Option<bool>,
     /// Decoded OSC 52 clipboard payload from the child, waiting to be
     /// written to the host clipboard. Consumed (`take()`) by the event
     /// loop, which owns clipboard access.
@@ -99,6 +103,7 @@ impl TerminalState {
             keystroke_tracker: KeystrokeTracker::default(),
             bell: false,
             kitty_keyboard: KittyKeyboardState::default(),
+            vs16_emoji_wide: None,
             osc52: None,
         }
     }
@@ -334,8 +339,31 @@ impl TerminalState {
         let width = char_width(ch) as u16;
 
         if width == 0 {
+            // VARIATION SELECTOR-16 asks for emoji presentation. On hosts
+            // that honour it (measured at startup) a text-default emoji such
+            // as ❤ grows from one cell to two, so the lead cell is widened.
+            let host_widens = self.vs16_emoji_wide.unwrap_or_else(vs16_emoji_wide);
+            if ch == '\u{FE0F}'
+                && host_widens
+                && self.extend_cluster_before_cursor(ch, is_text_default_emoji)
+            {
+                return;
+            }
             // Combining character - append to previous cell
             self.append_to_previous_cell(ch);
+            return;
+        }
+
+        // Two regional indicators form one flag; halfwidth katakana plus a
+        // halfwidth (han)dakuten form one glyph pair. Both are drawn as a
+        // single two-cell cluster by terminals, so keep them in one cell.
+        let is_regional_indicator = |c: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+        if is_regional_indicator(ch) && self.extend_cluster_before_cursor(ch, is_regional_indicator) {
+            return;
+        }
+        if matches!(ch, '\u{FF9E}' | '\u{FF9F}')
+            && self.extend_cluster_before_cursor(ch, |c| ('\u{FF66}'..='\u{FF9D}').contains(&c))
+        {
             return;
         }
 
@@ -344,6 +372,15 @@ impl TerminalState {
             let cursor = self.active_cursor();
             (cursor.row, cursor.col)
         };
+
+        // A character right after a ZERO WIDTH JOINER continues the previous
+        // grapheme cluster (👨‍👩‍👧 is one cluster, not three emoji), which is
+        // how every measured terminal — and the applications' own width
+        // libraries — lay it out. Fold it into the lead cell instead of
+        // opening new cells, so the cluster stays 2 cells wide.
+        if cursor_col > 0 && self.join_after_zwj(cursor_row as usize, cursor_col as usize, ch) {
+            return;
+        }
 
         // Handle line wrap - either the cursor is completely beyond the screen
         // edge, or a wide char lands exactly on the last column: it has no
@@ -410,6 +447,71 @@ impl TerminalState {
 
         // Move cursor by character width
         self.active_cursor_mut().col += width;
+    }
+
+    /// Grow the one-cell grapheme cluster just before the cursor by `ch`
+    /// into a two-cell cluster: continuation at the cursor column, cursor
+    /// advanced by one. `base_ok` decides whether the lead cell's single
+    /// code point may start such a cluster with `ch`. Returns `false` (and
+    /// changes nothing) when the previous cell is not a one-cell single code
+    /// point accepted by `base_ok`.
+    ///
+    /// Terminals lay these clusters out as one two-cell glyph (a flag from
+    /// two regional indicators, ❤️ from ❤ + VS16, ｶﾞ from ｶ + dakuten).
+    /// Keeping them in one cell means the renderer emits them in one write,
+    /// which matters: at least WezTerm drops the character that follows a
+    /// cluster whose second half arrived through a separate positioned write.
+    fn extend_cluster_before_cursor(&mut self, ch: char, base_ok: impl Fn(char) -> bool) -> bool {
+        let (row, col) = {
+            let cursor = self.active_cursor();
+            (cursor.row as usize, cursor.col as usize)
+        };
+        if col == 0 {
+            return false;
+        }
+        let cols = self.cols as usize;
+        {
+            let lead = &self.active_screen().rows[row].cells[col - 1];
+            let mut chars = lead.grapheme.chars();
+            let single_base = matches!((chars.next(), chars.next()), (Some(c), None) if base_ok(c));
+            if lead.is_continuation() || lead.width != 1 || !single_base {
+                return false;
+            }
+        }
+        if col >= cols {
+            // No room for a second cell at the right margin: keep one cell
+            // (the host has the same problem and wraps or clips there).
+            self.active_screen_mut().rows[row].cells[col - 1].grapheme.push(ch);
+            self.active_screen_mut().mark_dirty(row);
+            return true;
+        }
+        self.handle_wide_char_overwrite(row, col);
+        let screen = self.active_screen_mut();
+        let attrs = screen.rows[row].cells[col - 1].attrs.clone();
+        screen.rows[row].cells[col - 1].grapheme.push(ch);
+        screen.rows[row].cells[col - 1].width = 2;
+        screen.rows[row].cells[col] = Cell::continuation(&attrs);
+        screen.mark_dirty(row);
+        self.active_cursor_mut().col += 1;
+        true
+    }
+
+    /// If the grapheme just before the cursor ends with U+200D, append `ch`
+    /// to it and report `true`; the cursor does not move.
+    fn join_after_zwj(&mut self, row: usize, col: usize, ch: char) -> bool {
+        let screen = self.active_screen_mut();
+        let cells = &mut screen.rows[row].cells;
+        let target = if cells[col - 1].is_continuation() && col > 1 {
+            col - 2
+        } else {
+            col - 1
+        };
+        if !cells[target].grapheme.ends_with('\u{200D}') {
+            return false;
+        }
+        cells[target].grapheme.push(ch);
+        screen.mark_dirty(row);
+        true
     }
 
     fn append_to_previous_cell(&mut self, ch: char) {
@@ -1979,11 +2081,150 @@ mod tests {
         state.put_char('\u{200D}');
         state.put_char('\u{1F469}');
 
+        // ...and the emoji after the joiner continues the same cluster: one
+        // 2-cell grapheme, exactly as Windows Terminal, WezTerm and the
+        // applications' width libraries lay it out.
         let row = &state.active_screen().rows[0];
-        assert_eq!(row.cells[0].grapheme, "\u{1F468}\u{200D}");
+        assert_eq!(row.cells[0].grapheme, "\u{1F468}\u{200D}\u{1F469}");
+        assert_eq!(row.cells[0].width, 2);
         assert!(row.cells[1].is_continuation());
         assert!(row.cells[1].grapheme.is_empty());
-        assert_eq!(row.cells[2].grapheme, "\u{1F469}");
+        assert!(row.cells[2].grapheme.is_empty());
+        assert_eq!(state.active_cursor().col, 2);
+    }
+
+    #[test]
+    fn zwj_family_occupies_two_cells_and_text_continues_after_it() {
+        let mut state = TerminalState::new(10, 2);
+        for ch in "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x".chars() {
+            state.put_char(ch);
+        }
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}");
+        assert!(row.cells[1].is_continuation());
+        assert_eq!(row.cells[2].grapheme, "x");
+        assert_eq!(state.active_cursor().col, 3);
+    }
+
+    #[test]
+    fn zwj_join_at_the_right_margin_stays_in_the_lead_cell() {
+        // 👨‍ fills the last two columns (cursor in the pending-wrap position).
+        // The continuation of the cluster still belongs to that cell — a
+        // terminal never wraps in the middle of a grapheme cluster.
+        let mut state = TerminalState::new(4, 2);
+        for ch in "ab\u{1F468}\u{200D}".chars() {
+            state.put_char(ch);
+        }
+        state.put_char('\u{1F469}');
+        let screen = state.active_screen();
+        assert_eq!(screen.rows[0].cells[2].grapheme, "\u{1F468}\u{200D}\u{1F469}");
+        assert!(screen.rows[1].cells[0].grapheme.is_empty());
+        assert_eq!(state.active_cursor().col, 4);
+        // ...and the next real character wraps as usual.
+        state.put_char('x');
+        assert_eq!(state.active_screen().rows[1].cells[0].grapheme, "x");
+    }
+
+    #[test]
+    fn vs16_widens_text_default_emoji_only_when_host_does() {
+        // Host draws ❤️ in one cell (WezTerm 1.22): selector is a plain mark.
+        let mut state = TerminalState::new(10, 2);
+        state.vs16_emoji_wide = Some(false);
+        for ch in "\u{2764}\u{FE0F}x".chars() {
+            state.put_char(ch);
+        }
+        {
+            let row = &state.active_screen().rows[0];
+            assert_eq!(row.cells[0].grapheme, "\u{2764}\u{FE0F}");
+            assert_eq!(row.cells[0].width, 1);
+            assert_eq!(row.cells[1].grapheme, "x");
+        }
+
+        // Host draws ❤️ in two cells (Windows Terminal 1.24): widen the lead.
+        let mut state = TerminalState::new(10, 2);
+        state.vs16_emoji_wide = Some(true);
+        for ch in "\u{2764}\u{FE0F}x".chars() {
+            state.put_char(ch);
+        }
+        {
+            let row = &state.active_screen().rows[0];
+            assert_eq!(row.cells[0].grapheme, "\u{2764}\u{FE0F}");
+            assert_eq!(row.cells[0].width, 2);
+            assert!(row.cells[1].is_continuation());
+            assert_eq!(row.cells[2].grapheme, "x");
+            assert_eq!(state.active_cursor().col, 3);
+        }
+
+        // Not a text-default emoji: 'a' + VS16 and 😀 + VS16 stay as they are.
+        let mut state = TerminalState::new(10, 2);
+        state.vs16_emoji_wide = Some(true);
+        for ch in "a\u{FE0F}\u{1F600}\u{FE0F}x".chars() {
+            state.put_char(ch);
+        }
+        {
+            let row = &state.active_screen().rows[0];
+            assert_eq!(row.cells[0].grapheme, "a\u{FE0F}");
+            assert_eq!(row.cells[0].width, 1);
+            assert_eq!(row.cells[1].grapheme, "\u{1F600}\u{FE0F}");
+            assert_eq!(row.cells[1].width, 2);
+            assert_eq!(row.cells[3].grapheme, "x");
+        }
+    }
+
+    #[test]
+    fn vs16_widening_at_right_margin_keeps_one_cell() {
+        let mut state = TerminalState::new(3, 2);
+        state.vs16_emoji_wide = Some(true);
+        for ch in "ab\u{2764}\u{FE0F}".chars() {
+            state.put_char(ch);
+        }
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[2].grapheme, "\u{2764}\u{FE0F}");
+        assert_eq!(row.cells[2].width, 1);
+        assert_eq!(state.active_cursor().col, 3);
+    }
+
+    #[test]
+    fn halfwidth_kana_and_dakuten_form_one_two_cell_cluster() {
+        let mut state = TerminalState::new(10, 2);
+        for ch in "\u{FF76}\u{FF9E}x".chars() {
+            state.put_char(ch);
+        }
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "\u{FF76}\u{FF9E}");
+        assert_eq!(row.cells[0].width, 2);
+        assert!(row.cells[1].is_continuation());
+        assert_eq!(row.cells[2].grapheme, "x");
+        assert_eq!(state.active_cursor().col, 3);
+
+        // A dakuten with no halfwidth kana before it stands in its own cell.
+        let mut state = TerminalState::new(10, 2);
+        for ch in "a\u{FF9E}x".chars() {
+            state.put_char(ch);
+        }
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "a");
+        assert_eq!(row.cells[1].grapheme, "\u{FF9E}");
+        assert_eq!(row.cells[2].grapheme, "x");
+    }
+
+    #[test]
+    fn regional_indicator_pair_forms_one_flag_cluster() {
+        let mut state = TerminalState::new(12, 2);
+        // 🇯🇵 then 🇺🇸 then a lone 🇯 then x
+        for ch in "\u{1F1EF}\u{1F1F5}\u{1F1FA}\u{1F1F8}\u{1F1EF}x".chars() {
+            state.put_char(ch);
+        }
+        let row = &state.active_screen().rows[0];
+        assert_eq!(row.cells[0].grapheme, "\u{1F1EF}\u{1F1F5}");
+        assert_eq!(row.cells[0].width, 2);
+        assert!(row.cells[1].is_continuation());
+        assert_eq!(row.cells[2].grapheme, "\u{1F1FA}\u{1F1F8}");
+        assert_eq!(row.cells[2].width, 2);
+        assert_eq!(row.cells[4].grapheme, "\u{1F1EF}");
+        assert_eq!(row.cells[4].width, 1);
+        assert_eq!(row.cells[5].grapheme, "x");
+        assert_eq!(state.active_cursor().col, 6);
     }
 
     #[test]
