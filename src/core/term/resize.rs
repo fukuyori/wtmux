@@ -7,9 +7,23 @@ use super::state::{Cell, Row, ScreenBuffer};
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizePolicy {
+    /// Keep every physical row and show the bottom `rows` of them, trusting
+    /// the host to repaint afterwards (the inbox conhost re-emits its whole
+    /// viewport after a resize; a bundled OpenConsole emits nothing).
     HostDriven,
     LocalReflow,
     NoReflow,
+    /// Mirror the Windows console buffer, whose geometry the pane's ConPTY
+    /// and every Console-API application go by (measured on the inbox
+    /// conhost 26100 and OpenConsole 1.22/1.24, both identical):
+    /// - width change: the visible rows are rewrapped and the cursor follows
+    ///   its logical position;
+    /// - height shrink: rows leave through the top only as far as needed to
+    ///   keep the cursor visible; rows below the cursor that no longer fit
+    ///   are discarded;
+    /// - height grow: blank rows are appended at the bottom, nothing is
+    ///   pulled back from scrollback.
+    ConsoleBuffer,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,7 +46,7 @@ pub(crate) struct ScreenResizePlan {
 }
 
 #[cfg(windows)]
-pub const DEFAULT_SESSION_RESIZE_POLICY: ResizePolicy = ResizePolicy::HostDriven;
+pub const DEFAULT_SESSION_RESIZE_POLICY: ResizePolicy = ResizePolicy::ConsoleBuffer;
 
 #[cfg(not(windows))]
 pub const DEFAULT_SESSION_RESIZE_POLICY: ResizePolicy = ResizePolicy::LocalReflow;
@@ -187,6 +201,141 @@ pub(crate) fn reflow_screen(
 
     ScreenResizePlan {
         rows,
+        scrollback,
+        scroll_offset: remap_scroll_offset(old_scroll_offset, old_visible_start, new_scrollback_len),
+        anchor_positions,
+    }
+}
+
+/// Resize plan with Windows console-buffer semantics (see
+/// [`ResizePolicy::ConsoleBuffer`]). `anchors[0]` must be the cursor; every
+/// anchor's `abs_row` is an index into the *visible* rows (the console buffer
+/// has no scrollback, so only the viewport takes part in the rewrap).
+/// Scrollback rows are kept as they are, only padded/truncated to the new
+/// width.
+pub(crate) fn console_buffer_resize_screen(
+    screen: &ScreenBuffer,
+    new_cols: u16,
+    new_rows: u16,
+    anchors: &[ReflowAnchor],
+) -> ScreenResizePlan {
+    let new_cols = new_cols.max(1);
+    let new_rows = new_rows.max(1) as usize;
+    let old_scroll_offset = screen.scroll_offset;
+    let old_visible_start = (old_scroll_offset > 0).then(|| screen.screen_to_buffer_row(0));
+    let old_cols = screen.rows.first().map_or(new_cols, |row| row.cells.len() as u16);
+
+    let mut scrollback: VecDeque<Row> = screen.scrollback.iter().cloned().collect();
+    for row in &mut scrollback {
+        row.resize(new_cols);
+    }
+
+    // Rows that take part: everything up to the last content row, and at
+    // least up to every anchor (the cursor may sit on a blank row).
+    let last_content_row = screen.rows.iter().rposition(row_has_content);
+    let visible_len = last_content_row
+        .map(|idx| idx + 1)
+        .into_iter()
+        .chain(anchors.iter().map(|a| a.abs_row + 1))
+        .max()
+        .unwrap_or(0)
+        .min(screen.rows.len());
+
+    let mut physical_rows: Vec<Row> = Vec::new();
+    let mut anchor_positions_abs: Vec<Option<(usize, u16)>> = vec![None; anchors.len()];
+
+    if new_cols == old_cols {
+        // Height-only change: rows keep their physical layout.
+        physical_rows.extend(screen.rows.iter().take(visible_len).cloned());
+        for (idx, anchor) in anchors.iter().enumerate() {
+            if anchor.abs_row < physical_rows.len() {
+                anchor_positions_abs[idx] = Some((anchor.abs_row, anchor.col));
+            }
+        }
+    } else {
+        // Width change: rewrap the visible logical lines; anchors follow
+        // their logical offset like the console's own reflow does.
+        let mut anchor_meta: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
+        let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
+        let mut current_line: Vec<Cell> = Vec::new();
+        let mut current_width = 0usize;
+        for (row_idx, row) in screen.rows.iter().take(visible_len).enumerate() {
+            let mut preserve_until_col = None;
+            for (idx, anchor) in anchors.iter().enumerate() {
+                if anchor.abs_row == row_idx {
+                    let offset = current_width + display_offset_before_col(row, anchor.col);
+                    anchor_meta[idx] = Some((logical_lines.len(), offset));
+                    preserve_until_col =
+                        Some(preserve_until_col.map_or(anchor.col, |col: u16| col.max(anchor.col)));
+                }
+            }
+            let extracted = extract_reflow_cells(row, preserve_until_col);
+            current_width += extracted.iter().map(|cell| cell.width.max(1) as usize).sum::<usize>();
+            current_line.extend(extracted);
+            if !row.wrapped {
+                logical_lines.push(current_line);
+                current_line = Vec::new();
+                current_width = 0;
+            }
+        }
+        if !current_line.is_empty() {
+            logical_lines.push(current_line);
+        }
+
+        for (line_idx, line_cells) in logical_lines.into_iter().enumerate() {
+            let line_start_abs_row = physical_rows.len();
+            let row_start_offsets = append_wrapped_line(&mut physical_rows, line_cells, new_cols);
+            for (anchor_idx, meta) in anchor_meta.iter().enumerate() {
+                let Some((anchor_line_idx, anchor_offset)) = meta else {
+                    continue;
+                };
+                if *anchor_line_idx != line_idx {
+                    continue;
+                }
+                let mut row_in_line = 0usize;
+                while row_in_line + 1 < row_start_offsets.len()
+                    && row_start_offsets[row_in_line + 1] <= *anchor_offset
+                {
+                    row_in_line += 1;
+                }
+                let row_start = row_start_offsets[row_in_line];
+                let col = anchor_offset
+                    .saturating_sub(row_start)
+                    .min(new_cols.saturating_sub(1) as usize) as u16;
+                anchor_positions_abs[anchor_idx] = Some((line_start_abs_row + row_in_line, col));
+            }
+        }
+    }
+
+    // Height rule: rows leave through the top only as far as the cursor
+    // needs to stay visible; rows below that no longer fit are discarded;
+    // growing only appends blank rows.
+    let cursor_row = anchor_positions_abs
+        .first()
+        .copied()
+        .flatten()
+        .map(|(row, _)| row)
+        .unwrap_or(physical_rows.len().saturating_sub(1));
+    let drop_top = (cursor_row + 1).saturating_sub(new_rows);
+    scrollback.extend(physical_rows.drain(..drop_top.min(physical_rows.len())));
+    physical_rows.truncate(new_rows);
+    while physical_rows.len() < new_rows {
+        physical_rows.push(Row::new(new_cols));
+    }
+
+    let anchor_positions = anchor_positions_abs
+        .into_iter()
+        .map(|pos| {
+            pos.and_then(|(abs_row, col)| {
+                let row = abs_row.checked_sub(drop_top)?;
+                (row < new_rows).then_some((row as u16, col))
+            })
+        })
+        .collect();
+
+    let new_scrollback_len = scrollback.len();
+    ScreenResizePlan {
+        rows: physical_rows,
         scrollback,
         scroll_offset: remap_scroll_offset(old_scroll_offset, old_visible_start, new_scrollback_len),
         anchor_positions,

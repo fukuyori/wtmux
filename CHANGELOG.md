@@ -1,3 +1,23 @@
+## [4.0.2] - 2026-09-14
+
+### Fixed
+
+- Windows: after repeatedly creating and closing panes the cursor could be
+  drawn several rows above the prompt. The `HostDriven` resize policy kept
+  every physical row and showed the bottom ones, pulling lines back from
+  scrollback when a pane grew; the inbox conhost used to repaint its whole
+  viewport after every resize and paper over the difference, but the
+  bundled OpenConsole emits nothing on resize, so wtmux's layout stayed
+  while Console-API applications (PSReadLine, cmd) positioned the cursor by
+  the ConPTY buffer's rows. The Windows default is now
+  `ResizePolicy::ConsoleBuffer`, which mirrors the console buffer as
+  measured on both conhost and OpenConsole: a width change rewraps the
+  visible rows with the cursor following, a height decrease scrolls rows
+  out through the top only as far as the cursor needs, and a height
+  increase appends blank rows without pulling anything back. Side effect:
+  enlarging a pane no longer moves the prompt to the bottom row — the same
+  behaviour as Windows Terminal.
+
 ## [4.0.1] - 2026-09-14
 
 ### Changed

@@ -59,6 +59,25 @@ wtmux のグリッドが 1 文字に割り当てるセル数は、隣接する�
    UCD `emoji-data.txt` から生成した `emoji_text_default.rs`
    （Emoji=Yes かつ Emoji_Presentation=No）に限る。
 
+## リサイズ時の画面変形（ConsoleBuffer ポリシー）
+
+ConPTY のバッファは、ペインのリサイズ時に次のように動く（`D:\tmp\conpty_resize_probe.py` で
+受信箱 conhost 26100 と OpenConsole 1.24 を実測。両者は同一）。
+
+| 操作 | バッファの動き |
+|---|---|
+| 幅の変更 | 表示中の行を折り返し直し、カーソルは論理行上の位置に追従 |
+| 高さを縮める | カーソルが見えなくなる分だけ上の行を捨てる。収まっていれば行は動かない |
+| 高さを広げる | 下に空行を足すだけ。スクロールバックから引き戻さない |
+| 送ってくるもの | 受信箱 conhost は画面全体を絶対位置で描き直す。OpenConsole は**何も送らない** |
+
+Console API を使うアプリ（PSReadLine、cmd）はこのバッファの座標でカーソルを置くので、
+wtmux の画面も同じ規則で変形しなければならない。従来の `HostDriven` は末尾の行を表示し、
+広げたときにスクロールバックから引き戻していたが、受信箱 conhost の描き直しに上書きされて
+問題が見えなかった。OpenConsole では描き直しが無いので、Windows の既定を
+`ResizePolicy::ConsoleBuffer`（`resize.rs` の `console_buffer_resize_screen`）に変えた。
+副作用として、ペインを広げてもプロンプトは最下行に降りてこない（Windows Terminal と同じ）。
+
 ## 触らないもの
 
 - 曖昧幅文字。locale-eaw の EAW-CONSOLE をホスト側に入れると、逆に ConPTY との不一致を生む。

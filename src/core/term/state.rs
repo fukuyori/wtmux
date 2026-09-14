@@ -2,7 +2,10 @@
 //!
 //! This module defines the terminal's screen buffer, cursor state, and attributes.
 
-use super::resize::{host_resize_screen, reflow_screen, ReflowAnchor, ResizeOutcome, ResizePolicy, ScreenResizePlan};
+use super::resize::{
+    console_buffer_resize_screen, host_resize_screen, reflow_screen, ReflowAnchor, ResizeOutcome,
+    ResizePolicy, ScreenResizePlan,
+};
 use super::width::{char_width, is_text_default_emoji, vs16_emoji_wide};
 use bitflags::bitflags;
 use std::collections::VecDeque;
@@ -311,6 +314,55 @@ impl TerminalState {
                         .copied()
                         .flatten()
                         .map(|(row, _)| row);
+                }
+            }
+            ResizePolicy::ConsoleBuffer => {
+                // Anchor rows are indices into the visible screen (the
+                // console buffer has no scrollback). anchors[0] = cursor.
+                let mut anchors = vec![ReflowAnchor {
+                    abs_row: self.primary_cursor.row as usize,
+                    col: self.primary_cursor.col,
+                }];
+                let prompt_end_idx = match (
+                    self.shell_integration.prompt_end_row,
+                    self.shell_integration.prompt_end_col,
+                ) {
+                    (Some(row), Some(col)) => {
+                        anchors.push(ReflowAnchor { abs_row: row as usize, col });
+                        Some(anchors.len() - 1)
+                    }
+                    _ => None,
+                };
+                let prompt_start_idx = self.shell_integration.prompt_start_row.map(|row| {
+                    anchors.push(ReflowAnchor { abs_row: row as usize, col: 0 });
+                    anchors.len() - 1
+                });
+
+                let plan = console_buffer_resize_screen(&self.primary_screen, cols, rows, &anchors);
+                let positions = plan.anchor_positions.clone();
+                self.primary_screen.apply_resize_plan(plan, cols, rows);
+
+                if let Some(Some((row, col))) = positions.first() {
+                    self.primary_cursor.row = *row;
+                    self.primary_cursor.col = *col;
+                    outcome.primary_cursor = Some((*row, *col));
+                }
+                if let Some(idx) = prompt_end_idx {
+                    match positions.get(idx).copied().flatten() {
+                        Some((row, col)) => {
+                            self.shell_integration.prompt_end_row = Some(row);
+                            self.shell_integration.prompt_end_col = Some(col);
+                            outcome.prompt_anchor = Some((row, col));
+                        }
+                        None => {
+                            self.shell_integration.prompt_end_row = None;
+                            self.shell_integration.prompt_end_col = None;
+                        }
+                    }
+                }
+                if let Some(idx) = prompt_start_idx {
+                    self.shell_integration.prompt_start_row =
+                        positions.get(idx).copied().flatten().map(|(row, _)| row);
                 }
             }
             ResizePolicy::HostDriven | ResizePolicy::NoReflow => {
@@ -2508,5 +2560,91 @@ mod tests {
         assert_eq!(state.primary_screen.total_lines(), total_before);
         state.primary_screen.scroll_view_up(usize::MAX);
         assert_eq!(visible_row_text(&state, 0), "l01");
+    }
+
+    // --- ConsoleBuffer policy: mirrors the console buffer measured on the
+    // inbox conhost and OpenConsole (tools: D:\tmp\conpty_resize_probe.py) ---
+
+    fn type_lines(state: &mut TerminalState, lines: usize, long_line_at: Option<usize>) {
+        for i in 0..lines {
+            let text = match long_line_at {
+                Some(idx) if idx == i => "L".repeat(100),
+                _ => format!("line {:02}", i),
+            };
+            for ch in text.chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+        }
+        for ch in "> ".chars() {
+            state.put_char(ch);
+        }
+    }
+
+    #[test]
+    fn console_buffer_shrink_keeps_cursor_row_while_it_fits() {
+        // Experiment B: 5 lines + prompt in 20 rows, cursor at row 5.
+        let mut state = TerminalState::new(80, 20);
+        type_lines(&mut state, 5, None);
+        assert_eq!(state.primary_cursor.row, 5);
+
+        state.resize_with_policy(80, 10, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 5, "cursor still fits: row unchanged");
+        assert_eq!(visible_row_text(&state, 0), "line 00");
+        assert_eq!(state.primary_screen.scrollback.len(), 0);
+
+        state.resize_with_policy(80, 3, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 2, "only as many top rows leave as needed");
+        assert_eq!(visible_row_text(&state, 0), "line 03");
+        assert_eq!(visible_row_text(&state, 2), ">");
+        assert_eq!(state.primary_screen.scrollback.len(), 3);
+
+        state.resize_with_policy(80, 20, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 2, "growing appends rows below, never pulls back");
+        assert_eq!(visible_row_text(&state, 0), "line 03");
+        assert_eq!(visible_row_text(&state, 3), "");
+        assert_eq!(state.primary_screen.scrollback.len(), 3);
+    }
+
+    #[test]
+    fn console_buffer_grow_after_shrink_keeps_prompt_row() {
+        // Experiment A: 30 lines in 20 rows, 20 -> 10 -> 15 -> 20.
+        let mut state = TerminalState::new(80, 20);
+        type_lines(&mut state, 30, None);
+        assert_eq!(state.primary_cursor.row, 19);
+
+        state.resize_with_policy(80, 10, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 9);
+        assert_eq!(visible_row_text(&state, 0), "line 21");
+
+        state.resize_with_policy(80, 15, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 9);
+        assert_eq!(visible_row_text(&state, 9), ">");
+        assert_eq!(visible_row_text(&state, 10), "");
+
+        state.resize_with_policy(80, 20, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 9);
+        assert_eq!(visible_row_text(&state, 0), "line 21");
+    }
+
+    #[test]
+    fn console_buffer_width_change_rewraps_and_cursor_follows() {
+        // Experiment C: 10 lines, the 3rd is 100 chars; 80 -> 40 -> 80 cols.
+        let mut state = TerminalState::new(80, 20);
+        type_lines(&mut state, 10, Some(2));
+        assert_eq!(state.primary_cursor.row, 11);
+
+        state.resize_with_policy(40, 20, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 12);
+        assert_eq!(state.primary_cursor.col, 2);
+        assert_eq!(visible_row_text(&state, 2), "L".repeat(40));
+        assert_eq!(visible_row_text(&state, 4), "L".repeat(20));
+        assert_eq!(visible_row_text(&state, 12), ">");
+
+        state.resize_with_policy(80, 20, ResizePolicy::ConsoleBuffer);
+        assert_eq!(state.primary_cursor.row, 11);
+        assert_eq!(visible_row_text(&state, 2), "L".repeat(80));
+        assert_eq!(visible_row_text(&state, 11), ">");
     }
 }
