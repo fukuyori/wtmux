@@ -4,13 +4,13 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-4.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 4.0.0 Highlights
+## 4.0.1 Highlights
 
 - **Modern ConPTY, bundled** — panes can run in `conpty.dll` + `OpenConsole.exe` (microsoft/terminal, MIT) instead of the inbox `conhost.exe`, which counted combining marks, VS16 emoji, ZWJ sequences and flags as extra cells and shifted positioned output. The Windows packages ship the pair; `wtmux --version` shows which implementation is active. See [Troubleshooting](#emoji-combining-marks-or-flags-shift-text-by-a-column-windows).
 - **Grapheme-cluster width model** — 👨‍👩‍👧 is one two-cell cluster (was six cells), 🇯🇵 and ｶﾞ are one cluster each, and ❤️ is widened to two cells only when the host terminal draws it that way (measured at startup). Design notes in `docs/design-width-model.md`.

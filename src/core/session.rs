@@ -1688,6 +1688,194 @@ Start-Sleep -Milliseconds 300
         }
     }
 
+    /// Benchmark: ConPTY throughput and latency for the active backend
+    /// (`WTMUX_CONPTY=system` vs `WTMUX_CONPTY_DIR=<dir>` — the backend is
+    /// fixed per process, so run the test once per setting). Two workloads:
+    /// sequential text (20k mixed ASCII/CJK/emoji lines) and a TUI-style
+    /// repaint stream (300 full-screen frames with cursor positioning).
+    /// Reports bytes received, time to first byte, time to last byte.
+    /// Run with: cargo test conpty_throughput_bench -- --nocapture --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn conpty_throughput_bench() {
+        const COLS: u16 = 120;
+        const ROWS: u16 = 40;
+        let dir = std::env::temp_dir().join("wtmux_conpty_bench");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // Workload 1: sequential lines.
+        let mut seq = Vec::new();
+        for i in 0..20_000u32 {
+            seq.extend_from_slice(
+                format!("{:05} line: The quick brown fox 日本語のテキストと絵文字 🚀 ❤️ 👨‍👩‍👧 end\r\n", i).as_bytes(),
+            );
+        }
+        // Workload 2: TUI-style repaints (home, 40 positioned rows, per frame).
+        let mut tui = Vec::new();
+        for f in 0..300u32 {
+            tui.extend_from_slice(b"\x1b[H");
+            for r in 0..ROWS {
+                tui.extend_from_slice(
+                    format!("\x1b[{};1H\x1b[K frame {:03} row {:02} │ 状態: WORKING ● 進捗 {:3}% ░░░░▒▒▒▒▓▓▓▓████ ", r + 1, f, r, (f * 100 / 300)).as_bytes(),
+                );
+            }
+        }
+        let workloads: Vec<(&str, Vec<u8>)> = vec![("sequential-20k-lines", seq), ("tui-300-frames", tui)];
+
+        // Reader model: defaults mirror the session reader thread (4 KiB
+        // buffer, 5 ms sleep on an empty poll). WTMUX_BENCH_SLEEP_MS=0 and
+        // WTMUX_BENCH_BUF=65536 show the raw pipe capability instead.
+        let sleep_ms: u64 = std::env::var("WTMUX_BENCH_SLEEP_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
+        let buf_size: usize = std::env::var("WTMUX_BENCH_BUF").ok().and_then(|v| v.parse().ok()).unwrap_or(4096);
+        println!(
+            "backend: {}  reader: buf={} B, sleep={} ms",
+            crate::core::pty::conpty_api().backend(),
+            buf_size,
+            sleep_ms
+        );
+        for (name, payload) in &workloads {
+            let p = dir.join(format!("{}.vt", name));
+            std::fs::write(&p, payload).expect("write payload");
+            // Writer: cmd `type` (many small console writes, the default) or
+            // python writing the whole payload in one call
+            // (WTMUX_BENCH_WRITER=python), to separate per-write cost from
+            // pure throughput.
+            let script = dir.join(format!("{}.cmd", name));
+            let writer = std::env::var("WTMUX_BENCH_WRITER").unwrap_or_default();
+            let body = if writer == "python" {
+                format!(
+                    "@echo off\r\nchcp 65001 >nul\r\npython -c \"import sys;d=open(r'{}','rb').read();h=open('CONOUT$','wb',buffering=0);h.write(d)\"\r\n",
+                    p.display()
+                )
+            } else {
+                format!("@echo off\r\nchcp 65001 >nul\r\ntype \"{}\" >CON\r\n", p.display())
+            };
+            std::fs::write(&script, body).expect("write script");
+
+            // Warm-up + 3 timed runs, report the median.
+            let mut results = Vec::new();
+            for run in 0..4 {
+                let start = std::time::Instant::now();
+                let pty = crate::core::pty::ConPty::new(
+                    COLS,
+                    ROWS,
+                    Some(&format!("cmd.exe /c \"{}\"", script.display())),
+                )
+                .expect("spawn conpty");
+                let mut buf = vec![0u8; buf_size];
+                let mut bytes = 0usize;
+                let mut chunks = 0usize;
+                let mut first: Option<std::time::Duration> = None;
+                let mut last = start.elapsed();
+                let mut quiet_after_exit = 0;
+                loop {
+                    match pty.read(&mut buf) {
+                        Ok(0) => {
+                            if !pty.is_running() {
+                                quiet_after_exit += 1;
+                                if quiet_after_exit > 20 {
+                                    break;
+                                }
+                            }
+                            if sleep_ms > 0 {
+                                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                            } else {
+                                std::thread::yield_now();
+                            }
+                        }
+                        Ok(n) => {
+                            quiet_after_exit = 0;
+                            bytes += n;
+                            chunks += 1;
+                            let now = start.elapsed();
+                            first.get_or_insert(now);
+                            last = now;
+                        }
+                        Err(_) => break,
+                    }
+                    if start.elapsed().as_secs() > 120 {
+                        break;
+                    }
+                }
+                if run > 0 {
+                    results.push((bytes, chunks, first.unwrap_or_default(), last));
+                }
+            }
+            results.sort_by_key(|r| r.3);
+            let (bytes, chunks, first, last) = results[results.len() / 2];
+            println!(
+                "{:22} in={:>8} B  out={:>8} B in {:>5} reads (avg {:>5} B)  first-byte={:>6.1} ms  last-byte={:>8.1} ms  {:>6.2} MB/s (median of 3)",
+                name,
+                payload.len(),
+                bytes,
+                chunks,
+                bytes / chunks.max(1),
+                first.as_secs_f64() * 1e3,
+                last.as_secs_f64() * 1e3,
+                payload.len() as f64 / 1e6 / last.as_secs_f64()
+            );
+        }
+
+        // Workload 3: interactive echo latency. An idle cmd.exe; each
+        // keystroke is written to the pty and the time until its echo comes
+        // back through the ConPTY is measured (spinning reader, so this is
+        // the ConPTY's own latency; the session reader adds up to 5 ms).
+        let pty = crate::core::pty::ConPty::new(COLS, ROWS, Some("cmd.exe")).expect("spawn cmd");
+        let mut buf = vec![0u8; 65536];
+        let drain = |pty: &crate::core::pty::ConPty, buf: &mut [u8], quiet_ms: u64| {
+            let mut last = std::time::Instant::now();
+            loop {
+                match pty.read(buf) {
+                    Ok(0) => {
+                        if last.elapsed() > std::time::Duration::from_millis(quiet_ms) {
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
+                    Ok(_) => last = std::time::Instant::now(),
+                    Err(_) => break,
+                }
+            }
+        };
+        drain(&pty, &mut buf, 500); // banner + prompt
+        let mut lat = Vec::new();
+        for i in 0..40u32 {
+            let key = if i % 2 == 0 { b"a" } else { b"b" };
+            let t0 = std::time::Instant::now();
+            pty.write(key).expect("write key");
+            loop {
+                match pty.read(&mut buf) {
+                    Ok(0) => {
+                        if t0.elapsed() > std::time::Duration::from_secs(2) {
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
+                    Ok(_) => {
+                        lat.push(t0.elapsed());
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            drain(&pty, &mut buf, 20);
+        }
+        let _ = pty.write(b"\x03exit\r");
+        lat.sort();
+        if !lat.is_empty() {
+            let med = lat[lat.len() / 2];
+            let p90 = lat[(lat.len() * 9 / 10).min(lat.len() - 1)];
+            println!(
+                "keystroke-echo          samples={:>3}  median={:>6.2} ms  p90={:>6.2} ms  min={:>6.2} ms",
+                lat.len(),
+                med.as_secs_f64() * 1e3,
+                p90.as_secs_f64() * 1e3,
+                lat[0].as_secs_f64() * 1e3
+            );
+        }
+    }
+
     /// Diagnostic: what the multi-pane renderer emits for a row of emoji /
     /// combining / flag / dakuten text (bytes + code points), and how a
     /// wtmux-parsed host would place it.

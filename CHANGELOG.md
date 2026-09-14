@@ -1,3 +1,12 @@
+## [4.0.1] - 2026-09-14
+
+### Changed
+
+- Version bump only, for the Microsoft Store: the pending submission already
+  held a `4.0.0.0` MSIX built before the ConPTY files were bundled, and
+  Partner Center rejects a second package with the same full name. No
+  functional changes since 4.0.0.
+
 ## [4.0.0] - 2026-09-14
 
 This release reworks how wtmux decides how many cells a character occupies,

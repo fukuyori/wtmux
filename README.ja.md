@@ -4,13 +4,13 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-4.0.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.0.1-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [English README](README.md)
 
-## 4.0.0 の主な変更
+## 4.0.1 の主な変更
 
 - **新しい ConPTY を同梱** — ペインを Windows 標準の `conhost.exe` ではなく `conpty.dll` + `OpenConsole.exe`（microsoft/terminal、MIT）の中で動かせます。標準の conhost は結合文字・VS16 絵文字・ZWJ 列・国旗を余分なセルに数え、その後ろの位置指定付き出力をずらしていました。Windows 向けパッケージには 2 ファイルを同梱し、`wtmux --version` でどちらが使われているかを確認できます。「[トラブルシューティング](#絵文字結合文字国旗の後ろで文字が-1-列ずれるwindows)」を参照。
 - **書記素クラスタ単位の幅モデル** — 👨‍👩‍👧 は 2 セルの 1 クラスタ（従来は 6 セル）、🇯🇵 と ｶﾞ もそれぞれ 1 クラスタになり、❤️ はホスト端末がそう描く場合にだけ 2 セルに広げます（起動時に測定）。設計は `docs/design-width-model.md` を参照。
