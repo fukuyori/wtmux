@@ -1,3 +1,18 @@
+## [4.0.3] - 2026-09-27
+
+### Fixed
+
+- Windows: in terminals that send keys as text rather than win32-input-mode
+  (e.g. the Windows port of Ghostty), Shift- or Alt-modified keys such as
+  `+`, `*` or Alt+Arrow were not drawn until the next key was pressed.
+  conhost turns such text into a whole burst of records (Shift down, key
+  down, key up, Shift up) at once; the input reader's `poll()` only counted
+  queued records, so the trailing modifier release — which produces no
+  event — made `read()` block waiting for the next keystroke before the
+  pane's echo could be rendered. `poll()` now decodes queued records and
+  reports input only when an event is ready, so `read()` never blocks
+  after it.
+
 ## [4.0.2] - 2026-09-14
 
 ### Fixed

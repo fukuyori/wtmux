@@ -45,7 +45,6 @@ mod windows_input {
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
-    use windows::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::System::Console::{
         GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle,
         ReadConsoleInputW, COORD, DOUBLE_CLICK, FOCUS_EVENT, FROM_LEFT_1ST_BUTTON_PRESSED,
@@ -98,6 +97,8 @@ mod windows_input {
 
     struct WindowsInputReader {
         input: windows::Win32::Foundation::HANDLE,
+        /// Event decoded by `poll` and not yet returned by `read`.
+        pending: Option<Event>,
         surrogate: Option<u16>,
         /// Raw record of the pending high surrogate, so a completed pair
         /// can be replayed as both records in win32-input-mode.
@@ -114,6 +115,7 @@ mod windows_input {
 
             Ok(Self {
                 input,
+                pending: None,
                 surrogate: None,
                 surrogate_raw: None,
                 mouse_left: false,
@@ -122,47 +124,61 @@ mod windows_input {
             })
         }
 
-        fn poll(&self, timeout: Duration) -> io::Result<bool> {
+        /// Report whether `read` can return an event without blocking.
+        ///
+        /// Queued records are decoded here rather than merely counted: many
+        /// produce no event (modifier-only keys, unchanged mouse state), and
+        /// a `true` backed only by such records would leave `read` blocked
+        /// until the next keystroke. Hosts that send text instead of
+        /// win32-input-mode (e.g. Ghostty) make conhost synthesize a whole
+        /// Shift/Alt down…up burst at once, ending in exactly such a record.
+        fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
             let deadline = Instant::now() + timeout;
 
             loop {
-                if self.available_events()? > 0 {
+                if self.pending.is_some() {
                     return Ok(true);
+                }
+                while self.available_events()? > 0 {
+                    if let Some(event) = self.read_record()? {
+                        self.pending = Some(event);
+                        return Ok(true);
+                    }
                 }
 
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                let wait_ms = remaining.as_millis().min(10) as u32;
-                let wait_result = unsafe { WaitForSingleObject(self.input, wait_ms) };
-
-                if wait_result == WAIT_OBJECT_0 && self.available_events()? > 0 {
-                    return Ok(true);
-                }
-                if wait_result == WAIT_TIMEOUT && Instant::now() >= deadline {
+                if remaining.is_zero() {
                     return Ok(false);
                 }
-                if Instant::now() >= deadline {
-                    return Ok(false);
-                }
+                let wait_ms = remaining.as_millis().clamp(1, 10) as u32;
+                unsafe { WaitForSingleObject(self.input, wait_ms) };
             }
         }
 
         fn read(&mut self) -> io::Result<Event> {
+            if let Some(event) = self.pending.take() {
+                return Ok(event);
+            }
             loop {
-                let mut records = [INPUT_RECORD::default(); 1];
-                let mut read = 0;
-                unsafe {
-                    ReadConsoleInputW(self.input, &mut records, &mut read)
-                        .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                }
-
-                if read == 0 {
-                    continue;
-                }
-
-                if let Some(event) = self.parse_record(records[0]) {
+                if let Some(event) = self.read_record()? {
                     return Ok(event);
                 }
             }
+        }
+
+        /// Read one console input record (blocking) and decode it.
+        fn read_record(&mut self) -> io::Result<Option<Event>> {
+            let mut records = [INPUT_RECORD::default(); 1];
+            let mut read = 0;
+            unsafe {
+                ReadConsoleInputW(self.input, &mut records, &mut read)
+                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            }
+
+            if read == 0 {
+                return Ok(None);
+            }
+            Ok(self.parse_record(records[0]))
         }
 
         fn available_events(&self) -> io::Result<u32> {
@@ -415,6 +431,7 @@ mod windows_input {
         fn surrogate_key_up_events_do_not_clear_pending_pair() {
             let mut reader = WindowsInputReader {
                 input: Default::default(),
+                pending: None,
                 surrogate: None,
                 surrogate_raw: None,
                 mouse_left: false,

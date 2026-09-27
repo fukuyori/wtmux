@@ -4,15 +4,17 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-4.0.2-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.0.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 4.0.2 Highlights
+## 4.0.3 Highlights
 
-- **Stable cursor after pane resizes (Windows)** — creating and closing panes no longer leaves the cursor rows above the prompt. wtmux now resizes its screen with the same rules as the console buffer that Console-API programs go by. Enlarging a pane keeps the prompt where it is (as in Windows Terminal) instead of moving it to the bottom row.
+- **Shifted keys no longer lag (Windows)** — in terminals that send keys as text (e.g. the Windows port of Ghostty), `+`, `*`, Alt+Arrow and other Shift/Alt combinations are drawn immediately instead of only after the next key press.
+
+- From 4.0.2: **Stable cursor after pane resizes (Windows)** — creating and closing panes no longer leaves the cursor rows above the prompt. wtmux now resizes its screen with the same rules as the console buffer that Console-API programs go by. Enlarging a pane keeps the prompt where it is (as in Windows Terminal) instead of moving it to the bottom row.
 
 - **Modern ConPTY, bundled** — panes can run in `conpty.dll` + `OpenConsole.exe` (microsoft/terminal, MIT) instead of the inbox `conhost.exe`, which counted combining marks, VS16 emoji, ZWJ sequences and flags as extra cells and shifted positioned output. The Windows packages ship the pair; `wtmux --version` shows which implementation is active. See [Troubleshooting](#emoji-combining-marks-or-flags-shift-text-by-a-column-windows).
 - **Grapheme-cluster width model** — 👨‍👩‍👧 is one two-cell cluster (was six cells), 🇯🇵 and ｶﾞ are one cluster each, and ❤️ is widened to two cells only when the host terminal draws it that way (measured at startup). Design notes in `docs/design-width-model.md`.

@@ -940,7 +940,6 @@ mod tests {
 
     /// Dump the grid: '·' marks a never-written/erased cell (empty grapheme),
     /// a real space means a space was written there.
-    #[cfg(windows)]
     fn repro_dump_grid(session: &Session, rows: u16) -> Vec<String> {
         let mut out = Vec::new();
         for row in session.state.active_screen().rows.iter().take(rows as usize) {
