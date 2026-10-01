@@ -1137,7 +1137,11 @@ mod tests {
     #[test]
     fn report_state_round_trips_through_drop_dir() {
         let pid = std::process::id();
-        cleanup_agent_state_dir();
+        // Only this test's own drop dir: `cleanup_agent_state_dir()` also removes
+        // the requests dir, which `requests_round_trip_between_cli_and_instance`
+        // uses at the same time (tests share the pid, so the dir), and a request
+        // deleted in flight made that test fail now and then.
+        let _ = fs::remove_dir_all(agent_state_dir(pid));
 
         run_report_state(&report_args(pid, "3.2", "Blocked")).unwrap();
         let drained = drain_reported_states();
