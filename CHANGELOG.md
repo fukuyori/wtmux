@@ -8,10 +8,10 @@
   `OSC N ; rgb:RRRR/GGGG/BBBB` ended like the query (BEL or ST). wtmux draws
   every pane cell with the default colour, so these are the colours the pane
   really shows. At startup, right after the VS16 width probe, wtmux asks the
-  host for the three colours followed by a CPR and reads up to the CPR
-  (Windows only for now; on Unix crossterm's reader would take the replies
-  for key presses, so queries stay unanswered there). With no host answer
-  nothing is made up and the query stays unanswered, as before. Setting a
+  host for the three colours followed by a CPR and reads up to the CPR (on
+  Unix straight from the tty, since crossterm's reader would take the
+  replies for key presses). With no host answer nothing is made up and the
+  query stays unanswered, as before. Setting a
   colour is still ignored. Measured on WezTerm, Windows Terminal Preview 1.25
   and the Ghostty Windows port: all three answer with 16-bit `rgb:` specs,
   in query order and ahead of the CPR. The bundled OpenConsole forwards the
