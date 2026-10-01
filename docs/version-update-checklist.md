@@ -53,3 +53,13 @@ rg -n "version =|MyAppVersion|## 1\.|\[1\." Cargo.toml Cargo.lock README.md READ
 - `README` と `CHANGELOG` は原則セットで更新する
 - `docs/` のバージョン記述は、機能説明と強く結びついている場合だけ更新する
 - `Cargo.lock` は `wtmux` パッケージの version だけを変える
+
+## Linux 版のリリース (GitHub Actions)
+
+- `.github/workflows/release-linux.yml` が `.deb` / `.rpm` (x86_64 / aarch64、Ubuntu 22.04 でビルド) を作る
+- `Cargo.toml` の版番号と同じタグ (例 `4.1.0`、`v` なし) を push すると起動する
+  - タグと `Cargo.toml` の版が違えば失敗する
+  - そのタグのリリースが無ければ **ドラフト** で作成する (本文は `CHANGELOG.md` の該当節)
+  - 既にあれば Linux のパッケージを追加 (上書き) するだけ
+- Windows / macOS の配布物は従来どおり利用者が `-Sign` 付きで作成して同じリリースに追加し、最後にドラフトを公開する
+- タグなしの試し実行: Actions > Release (Linux) > Run workflow (`publish` を false のまま)。ビルドと `.deb` の動作確認だけ行い、成果物は実行結果に残る

@@ -1,0 +1,135 @@
+name: Release (Linux)
+
+# Builds the Linux packages (.deb / .rpm for x86_64 and aarch64) and attaches
+# them to the GitHub release of the tag. Windows and macOS packages are signed
+# by hand (scripts/build-*.ps1 -Sign) and uploaded to the same release by the
+# maintainer, so a release that does not exist yet is created as a DRAFT:
+# publish it after the other packages are attached.
+#
+# - Push a tag such as 4.1.0 (no "v" prefix; it must equal Cargo.toml's
+#   version): build, then create the draft release (notes from CHANGELOG.md)
+#   or, if the release already exists, only add/replace the Linux packages.
+# - Run it by hand (Actions > Release (Linux) > Run workflow) to try the build
+#   without a tag: publish=false (the default) builds and smoke-tests the
+#   packages and leaves them as run artifacts; nothing is released.
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag to build
+        required: true
+        default: main
+      publish:
+        description: Create/update the release (the ref must be a tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: release-linux-${{ github.event.inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Ubuntu 22.04 (glibc 2.35) so the binaries also run on older distros.
+          - { os: ubuntu-22.04, arch: x86_64 }
+          - { os: ubuntu-22.04-arm, arch: aarch64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(sed -n 's/^version = "\([0-9.]*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Install packaging tools
+        run: cargo install --locked cargo-deb cargo-generate-rpm
+
+      - name: Build the packages
+        run: ./scripts/build-linux-packages.sh
+
+      - name: Smoke test the .deb
+        run: |
+          ls -l installer/output
+          sudo apt-get install -y ./installer/output/*.deb
+          wtmux --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            installer/output/*.deb
+            installer/output/*.rpm
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: build
+    if: github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref || inputs.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          # The "## [x.y.z] - date" section of this version, heading included
+          # (the same shape as the existing releases).
+          tr -d '\r' < CHANGELOG.md | awk -v ver="$TAG" '
+            index($0, "## [" ver "]") == 1 { found = 1; print; next }
+            /^## \[/ { found = 0 }
+            found
+          ' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::no section for $TAG in CHANGELOG.md"
+            exit 1
+          fi
+          cat notes.md
+
+      - name: Create the draft release, or add to the existing one
+        run: |
+          ls -l dist
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists: only adding the Linux packages"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag \
+              --title "$TAG" --notes-file notes.md
+          fi
