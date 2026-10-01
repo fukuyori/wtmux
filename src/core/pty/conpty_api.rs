@@ -17,7 +17,10 @@
 //! 4. kernel32.
 //!
 //! `conpty.dll` locates `OpenConsole.exe` next to itself, so both files must
-//! sit in the same directory.
+//! sit in the same directory. A directory is only used when it holds the
+//! pair: measured, a `conpty.dll` without `OpenConsole.exe` is not an error
+//! at all, `CreatePseudoConsole` succeeds and the pane silently runs on the
+//! inbox conhost, so wtmux would report a bundled ConPTY it is not using.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -88,10 +91,17 @@ impl ConPtyApi {
             return Self::system();
         }
         for dir in candidate_dirs() {
-            let dll = dir.join("conpty.dll");
-            if !dll.is_file() {
-                continue;
-            }
+            let dll = match check_pair(&dir) {
+                PairCheck::Missing => continue,
+                PairCheck::DllWithoutHost(dll) => {
+                    eprintln!(
+                        "[wtmux] {} has no OpenConsole.exe next to it (conpty.dll would silently fall back to the inbox conhost), trying next",
+                        dll.display()
+                    );
+                    continue;
+                }
+                PairCheck::Complete(dll) => dll,
+            };
             match unsafe { Self::load(&dll) } {
                 Ok(api) => return api,
                 Err(e) => eprintln!("[wtmux] conpty.dll at {} unusable ({}), trying next", dll.display(), e),
@@ -168,6 +178,28 @@ impl ConPtyApi {
 
 use std::os::windows::ffi::OsStrExt;
 
+/// What `dir` holds of the bundled ConPTY pair.
+#[derive(Debug, PartialEq, Eq)]
+enum PairCheck {
+    /// No `conpty.dll`: nothing bundled here.
+    Missing,
+    /// `conpty.dll` without `OpenConsole.exe`: unusable as a bundled ConPTY.
+    DllWithoutHost(PathBuf),
+    /// Both files present (their versions are not compared).
+    Complete(PathBuf),
+}
+
+fn check_pair(dir: &Path) -> PairCheck {
+    let dll = dir.join("conpty.dll");
+    if !dll.is_file() {
+        return PairCheck::Missing;
+    }
+    if !dir.join("OpenConsole.exe").is_file() {
+        return PairCheck::DllWithoutHost(dll);
+    }
+    PairCheck::Complete(dll)
+}
+
 fn candidate_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os("WTMUX_CONPTY_DIR") {
@@ -192,6 +224,44 @@ mod tests {
         match api.backend() {
             Backend::Bundled(p) => assert!(p.is_file()),
             Backend::System => assert!(api.bundled.is_none()),
+        }
+    }
+
+    /// A scratch directory holding the named empty files.
+    fn dir_with(name: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wtmux_conpty_pair_{}_{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            std::fs::write(dir.join(file), b"").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn pair_check_needs_both_files() {
+        let empty = dir_with("empty", &[]);
+        assert_eq!(check_pair(&empty), PairCheck::Missing);
+
+        let host_only = dir_with("host_only", &["OpenConsole.exe"]);
+        assert_eq!(check_pair(&host_only), PairCheck::Missing);
+
+        let dll_only = dir_with("dll_only", &["conpty.dll"]);
+        assert_eq!(
+            check_pair(&dll_only),
+            PairCheck::DllWithoutHost(dll_only.join("conpty.dll"))
+        );
+
+        let both = dir_with("both", &["conpty.dll", "OpenConsole.exe"]);
+        assert_eq!(check_pair(&both), PairCheck::Complete(both.join("conpty.dll")));
+
+        // A directory named like the files does not count.
+        let dirs_not_files = dir_with("dirs", &[]);
+        std::fs::create_dir(dirs_not_files.join("conpty.dll")).unwrap();
+        assert_eq!(check_pair(&dirs_not_files), PairCheck::Missing);
+
+        for dir in [empty, host_only, dll_only, both, dirs_not_files] {
+            let _ = std::fs::remove_dir_all(dir);
         }
     }
 

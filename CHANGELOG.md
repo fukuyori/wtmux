@@ -1,3 +1,60 @@
+## [Unreleased]
+
+### Added
+
+- Pane-side synchronized output (DEC mode 2026). A child that wraps a frame
+  in `CSI ? 2026 h` ... `CSI ? 2026 l` no longer has its half-drawn frame
+  painted: the pane keeps showing what it last drew, output is still parsed
+  into the grid, and one render is released when the frame ends. The hold
+  also ends on RIS, on a real size change, when the session stops, and after
+  one second, so a child that never sends `?2026l` cannot freeze its pane
+  (the timeout clears the mode bit). A frame that begins and ends inside one
+  read is rendered as usual. Known limitation: a full redraw forced by a
+  tab switch or layout change still paints the current grid, half-drawn
+  frame included, the same exception the post-resize ConPTY replay window
+  has.
+- DECRQM. `CSI ? Ps $ p` and `CSI Ps $ p` are answered with
+  `CSI [?] Ps ; Pm $ y` for the modes wtmux actually tracks (DEC 1, 7, 25,
+  47/1047/1049, 1004, 2004, 1000/1002/1003/1006/1015, 2026, 9001; ANSI 4 and
+  20): 1 = set, 2 = reset. Every other mode reports 0 (not recognized) rather
+  than promising behavior wtmux lacks; 47, 1047 and 1049 all report whether
+  the alternate screen is active. The sequence is recognized only with
+  exactly `$` (or `? $`) as intermediates, so DECSTR and DECSCL are
+  unaffected, and a colon subparameter is rejected. Measured 2026-10-01: the
+  bundled OpenConsole forwards these queries (and `?2026h/l`, OSC 10/11,
+  XTVERSION) to wtmux, while the inbox conhost answers DA1, DECRQM and CPR
+  itself and swallows OSC 10/11, so the answers matter with the bundled
+  ConPTY.
+
+### Fixed
+
+- A `conpty.dll` without `OpenConsole.exe` next to it was reported as a
+  bundled ConPTY while the pane silently ran on the inbox conhost.
+  Measured: `CreatePseudoConsole` succeeds without error in that case, and
+  the output is the inbox conhost's. wtmux now uses a directory only when it
+  holds both files; a lone `conpty.dll` is skipped with a warning on stderr
+  and the next candidate (finally kernel32) is tried, so `wtmux --version`
+  and the host actually in use agree. The Inno Setup installer script had
+  `skipifsourcedoesntexist` on each file separately and could package the
+  DLL alone; `build-inno-installer.ps1` now passes `/DBundleConPty` only
+  when `vendor\conpty` holds the pair (compiling `wtmux.iss` by hand
+  bundles nothing). The other packaging scripts already required both.
+  Only the presence of the pair is checked, not that their versions match.
+- Resizing a pane narrower could push the prompt down by rows of nothing.
+  The rewrap counted a row's trailing spaces as content, so a row cleared by
+  writing spaces across its whole width (which is how the OpenConsole host
+  clears a line) became two or three rows. Measured on the inbox conhost and
+  the bundled OpenConsole, which agree: the last row of a logical line does
+  not count its trailing spaces (whatever their attributes), rows that wrap
+  on keep their full width, and a wrapped line whose tail vanishes keeps one
+  extra empty row when its content ends exactly on the new width, with the
+  cursor following onto it. `ConsoleBuffer` (the Windows default) follows
+  this exactly; `LocalReflow` drops only spaces with default attributes, so
+  a background-coloured run survives. Not reproduced: three cursor
+  positions at very small widths (160 spaces to 20 columns, 240 to 30 and
+  20), where the console lands above where its own wrapping puts the end of
+  the text and no rule is known.
+
 ## [4.0.3] - 2026-09-27
 
 ### Fixed

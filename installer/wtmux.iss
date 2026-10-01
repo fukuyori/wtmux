@@ -47,10 +47,15 @@ Source: "..\assets\generated\wtmux.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\config.example.toml"; DestDir: "{userappdata}\.wtmux"; DestName: "config.toml"; Flags: onlyifdoesntexist
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; Bundled ConPTY (optional; see vendor\conpty\README.md). Both binaries must
-; sit next to wtmux.exe. Skipped silently when vendor\conpty is empty.
-Source: "..\vendor\conpty\conpty.dll"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\vendor\conpty\OpenConsole.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
+; sit next to wtmux.exe: a conpty.dll without OpenConsole.exe makes the pane
+; silently run on the inbox conhost. build-inno-installer.ps1 passes
+; /DBundleConPty only when vendor\conpty holds the pair, so a lone file is
+; never packaged. Compiling this script by hand bundles nothing.
+#ifdef BundleConPty
+Source: "..\vendor\conpty\conpty.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "..\vendor\conpty\OpenConsole.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\vendor\conpty\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"; IconFilename: "{app}\wtmux.ico"

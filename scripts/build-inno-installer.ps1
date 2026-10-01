@@ -118,6 +118,18 @@ if ($updatedIssContent -ne $issContent) {
 # Build installer (run from installer directory)
 Write-Host "Building installer..." -ForegroundColor Green
 $isccArgs = @("/Q")
+# Optional modern ConPTY: bundle it only as a pair. A conpty.dll without
+# OpenConsole.exe loads fine but makes the pane silently use the inbox conhost.
+$hasConPtyDll = Test-Path ".\vendor\conpty\conpty.dll"
+$hasConPtyHost = Test-Path ".\vendor\conpty\OpenConsole.exe"
+if ($hasConPtyDll -and $hasConPtyHost) {
+    $isccArgs += "/DBundleConPty"
+    Write-Host "  bundling vendor\conpty (conpty.dll + OpenConsole.exe)" -ForegroundColor Gray
+} elseif ($hasConPtyDll -or $hasConPtyHost) {
+    Write-Host "  vendor\conpty holds only one of conpty.dll / OpenConsole.exe - not bundled; the installer uses the inbox conhost" -ForegroundColor Yellow
+} else {
+    Write-Host "  vendor\conpty not found - the installer uses the inbox conhost" -ForegroundColor Yellow
+}
 if ($Sign) {
     # /DSign activates the SignTool/SignedUninstaller directives in wtmux.iss;
     # Inno Setup then signs both the uninstaller and the setup exe with this command
