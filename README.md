@@ -4,15 +4,25 @@ A tmux-like terminal multiplexer for Windows, macOS, and Linux, written in Rust.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-4.0.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Download from the Microsoft Store](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [日本語版 README](README.ja.md)
 
-## 4.0.3 Highlights
+## 4.1.0 Highlights
 
-- **Shifted keys no longer lag (Windows)** — in terminals that send keys as text (e.g. the Windows port of Ghostty), `+`, `*`, Alt+Arrow and other Shift/Alt combinations are drawn immediately instead of only after the next key press.
+- **Colour queries are answered (OSC 10/11/12)** — a program that asks the terminal for its foreground, background or cursor colour (Neovim uses `OSC 11` to tell a dark theme from a light one) now gets the host terminal's colours instead of waiting for a timeout. wtmux learns them from the host at startup; with no host answer it stays silent rather than guess. Needs the bundled ConPTY on Windows (the inbox conhost swallows the query).
+
+- **Half-drawn frames are not painted (mode 2026)** — a program that wraps a frame in synchronized-output markers no longer shows the half-drawn frame in its pane; the pane keeps its last complete frame and is repainted when the frame ends (one second at most). Known limits are listed in `CHANGELOG.md`.
+
+- **DECRQM answered** — programs can ask which terminal modes wtmux supports and their state (`CSI ? Ps $ p`), and the answers reflect what wtmux really tracks.
+
+- **Narrowing a pane no longer pushes the prompt down** — rows cleared by writing spaces (how the OpenConsole host clears a line) are no longer counted as content when the pane is rewrapped; wtmux now follows the console's own reflow rules, including the cursor.
+
+- **Bundled ConPTY used only as a pair (Windows)** — a `conpty.dll` without `OpenConsole.exe` silently ran on the inbox conhost while `wtmux --version` claimed the bundled one; such a folder is now skipped with a warning, and the Inno Setup installer can no longer package the DLL alone.
+
+- From 4.0.3: **Shifted keys no longer lag (Windows)** — in terminals that send keys as text (e.g. the Windows port of Ghostty), `+`, `*`, Alt+Arrow and other Shift/Alt combinations are drawn immediately instead of only after the next key press.
 
 - From 4.0.2: **Stable cursor after pane resizes (Windows)** — creating and closing panes no longer leaves the cursor rows above the prompt. wtmux now resizes its screen with the same rules as the console buffer that Console-API programs go by. Enlarging a pane keeps the prompt where it is (as in Windows Terminal) instead of moving it to the bottom row.
 

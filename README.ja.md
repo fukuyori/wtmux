@@ -4,15 +4,25 @@ Windows / macOS / Linux 対応のtmuxライクなターミナルマルチプレ�
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](https://github.com/fukuyori/wtmux)
-[![Version](https://img.shields.io/badge/version-4.0.3-green.svg)](https://github.com/fukuyori/wtmux/releases)
+[![Version](https://img.shields.io/badge/version-4.1.0-green.svg)](https://github.com/fukuyori/wtmux/releases)
 
 [![Microsoft Store からダウンロード](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/detail/9PKHJXB67R2N)
 
 [English README](README.md)
 
-## 4.0.3 の主な変更
+## 4.1.0 の主な変更
 
-- **Shift / Alt 付きキーの表示遅れを解消（Windows）** — キーを文字として送る端末（Windows 版 Ghostty など）で、`+`・`*`・Alt+矢印などの Shift / Alt 付きキーが、次のキーを押すまで表示されない問題を修正しました。
+- **色の問い合わせに応答（OSC 10/11/12）** — 端末の前景色・背景色・カーソル色を問い合わせるプログラム（Neovim は `OSC 11` で暗い配色か明るい配色かを判定します）が、タイムアウトを待たずにホスト端末の色を受け取れるようになりました。色は起動時にホスト端末から取得し、ホストが答えない場合は推測せずに無応答のままにします。Windows では同梱の ConPTY が必要です（標準の conhost は問い合わせを握りつぶします）。
+
+- **描きかけのフレームを表示しない（mode 2026）** — 同期出力のマーカーでフレームを囲むプログラムの、描きかけのフレームがペインに出なくなりました。ペインは直前の完成したフレームを保ち、フレームの終了時（最長 1 秒）に描き直します。既知の制限は `CHANGELOG.md` に記載しています。
+
+- **DECRQM に応答** — プログラムが、端末のモードの対応状況と現在の状態を問い合わせ（`CSI ? Ps $ p`）、wtmux が実際に管理している内容で答えます。
+
+- **ペインを狭めてもプロンプトが押し下げられない** — スペースを行の全幅に書いて消去する方式（OpenConsole ホストの行消去）で埋まった行を、再配置の際に内容として数えなくなりました。カーソルを含め、コンソール自身の再配置規則に従います。
+
+- **同梱 ConPTY は組になっているときだけ使用（Windows）** — `OpenConsole.exe` のない `conpty.dll` は、`wtmux --version` が同梱版と表示しながら、実際は標準の conhost で動いていました。そのようなフォルダーは警告を出して飛ばし、Inno Setup のインストーラーも DLL 単独では作れなくなりました。
+
+- 4.0.3 より: **Shift / Alt 付きキーの表示遅れを解消（Windows）** — キーを文字として送る端末（Windows 版 Ghostty など）で、`+`・`*`・Alt+矢印などの Shift / Alt 付きキーが、次のキーを押すまで表示されない問題を修正しました。
 
 - 4.0.2 より: **ペインのリサイズ後もカーソル位置が安定（Windows）** — ペインの作成と削除を繰り返してもカーソルがプロンプトの上にずれなくなりました。Console API を使うプログラムが基準にするコンソールバッファと同じ規則で画面を変形します。ペインを広げたときにプロンプトが最下行へ移動しなくなります（Windows Terminal と同じ挙動）。
 
