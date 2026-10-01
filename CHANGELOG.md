@@ -23,10 +23,15 @@
   also ends on RIS, on a real size change, when the session stops, and after
   one second, so a child that never sends `?2026l` cannot freeze its pane
   (the timeout clears the mode bit). A frame that begins and ends inside one
-  read is rendered as usual. Known limitation: a full redraw forced by a
-  tab switch or layout change still paints the current grid, half-drawn
-  frame included, the same exception the post-resize ConPTY replay window
-  has.
+  read is rendered as usual. Known limitations: a full redraw (the first
+  paint, a tab switch, a focus move between panes, which advances the
+  layout generation without changing any size, or a layout change that
+  keeps a pane's size) still paints the pane's current grid, and so do the
+  copy-mode view and popups, so a half-drawn frame can show until the frame
+  ends and the held lines are painted (the post-resize ConPTY replay window
+  has the same exception). How long that can last has not been measured;
+  the one-second cap bounds it. A resize ends the hold itself but not the
+  Windows ConPTY replay window that follows it.
 - DECRQM. `CSI ? Ps $ p` and `CSI Ps $ p` are answered with
   `CSI [?] Ps ; Pm $ y` for the modes wtmux actually tracks (DEC 1, 7, 25,
   47/1047/1049, 1004, 2004, 1000/1002/1003/1006/1015, 2026, 9001; ANSI 4 and
