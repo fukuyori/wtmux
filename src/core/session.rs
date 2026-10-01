@@ -100,6 +100,9 @@ pub struct Session {
     /// When the child's synchronized-output hold (`?2026h`) began; renders
     /// are suppressed while this is set.
     sync_since: Option<Instant>,
+    /// A hold was ended from outside the output stream (a resize); the next
+    /// `update_sync_hold` reports it so its held-back render is released.
+    sync_release_pending: bool,
 }
 
 // ConPty needs to be Send + Sync for Arc (the Unix pty is naturally both)
@@ -126,6 +129,7 @@ impl Session {
             #[cfg(windows)]
             resize_settle: None,
             sync_since: None,
+            sync_release_pending: false,
         }
     }
 
@@ -275,6 +279,7 @@ impl Session {
             }
             self.state.modes.synchronized_output = false;
             self.sync_since = None;
+            self.sync_release_pending = false;
             return Ok(false);
         }
 
@@ -339,7 +344,8 @@ impl Session {
     /// since it began (the mode bit is cleared then, so DECRQM and the next
     /// `?2026h` start from a clean state), or when the session stopped.
     fn update_sync_hold(&mut self) -> bool {
-        match (self.state.modes.synchronized_output, self.sync_since) {
+        let ended_outside = std::mem::take(&mut self.sync_release_pending);
+        let ended = match (self.state.modes.synchronized_output, self.sync_since) {
             (true, None) => {
                 self.sync_since = Some(Instant::now());
                 false
@@ -358,7 +364,8 @@ impl Session {
                 true
             }
             (false, None) => false,
-        }
+        };
+        ended || ended_outside
     }
 
     /// Feed raw bytes into the terminal.
@@ -506,10 +513,15 @@ impl Session {
         // when this pane's size didn't actually change.
         let unchanged = cols == self.state.cols && rows == self.state.rows;
 
-        // A real size change ends the child's synchronized-output hold; the
-        // next process_output releases the render it was holding back.
+        // A real size change ends the child's synchronized-output hold. The
+        // timer goes with it, so a `?2026h` the child sends before the next
+        // process_output starts a fresh hold instead of inheriting this one's
+        // age; that call still releases the render the old hold held back.
         if !unchanged {
             self.state.modes.synchronized_output = false;
+            if self.sync_since.take().is_some() {
+                self.sync_release_pending = true;
+            }
         }
 
         if self.defer_pty_resize {
@@ -847,6 +859,26 @@ mod tests {
         assert!(!session.process_output().unwrap());
         session.resize(40, 10).unwrap();
         assert!(session.is_render_held());
+    }
+
+    #[test]
+    fn sync_output_after_resize_starts_a_fresh_hold_timer() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hold frame".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+        // The old hold is nearly out of time when the pane is resized ...
+        session.sync_since = Some(Instant::now() - SYNC_OUTPUT_MAX + Duration::from_millis(50));
+        session.resize(40, 10).unwrap();
+
+        // ... and the child starts a new frame before process_output runs.
+        tx.send(b"\x1b[?2026hnew frame".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap(), "new frame is held");
+        let since = session.sync_since.expect("a new hold began");
+        assert!(since.elapsed() < Duration::from_millis(40), "with its own timer");
+        assert!(session.is_render_held());
+
+        tx.send(b"\x1b[?2026l".to_vec()).unwrap();
+        assert!(session.process_output().unwrap(), "the new frame's end renders");
     }
 
     #[test]
