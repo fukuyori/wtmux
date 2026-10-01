@@ -2017,7 +2017,7 @@ impl WmRenderer {
         if tab.is_zoomed() {
             if let Some(zoomed_id) = tab.zoomed_pane_id() {
                 if let Some(pane) = tab.panes.get(&zoomed_id) {
-                    if needs_full_redraw || !pane.session.is_settling() {
+                    if needs_full_redraw || !pane.session.is_render_held() {
                         self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;
                     }
                 }
@@ -2026,14 +2026,16 @@ impl WmRenderer {
             for pane in tab.panes.values() {
                 let screen = pane.session.state.active_screen();
                 // Skip panes with no new content unless forced by layout
-                // change. Panes settling after a resize are also skipped:
+                // change. Panes whose child is mid-frame (synchronized
+                // output, `?2026h`) are skipped until it ends the frame.
+                // Panes settling after a resize are also skipped:
                 // ConPTY is replaying the whole buffer into them and painting
                 // the intermediate states would show old content scrolling
                 // past; their accumulated dirty lines are painted in one
                 // frame once the replay finishes.
                 let pane_needs_render = needs_full_redraw
                     || ((screen.full_redraw || screen.has_dirty_lines())
-                        && !pane.session.is_settling());
+                        && !pane.session.is_render_held());
 
                 if pane_needs_render {
                     self.render_pane(stdout, pane, wm.tab_bar_height, needs_full_redraw)?;

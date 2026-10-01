@@ -629,7 +629,7 @@ impl WindowManager {
             // A settling pane was skipped by the renderer; keep its dirty
             // lines so the deferred paint after the resize replay still
             // covers everything that changed.
-            if pane.session.is_settling() {
+            if pane.session.is_render_held() {
                 continue;
             }
             pane.session.state.active_screen_mut().clear_dirty();

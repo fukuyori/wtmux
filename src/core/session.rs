@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 use super::pty::{Pty, PtyError};
@@ -37,6 +36,11 @@ const RESIZE_SETTLE_QUIET: Duration = Duration::from_millis(60);
 /// output continuously (e.g. `ping -t`) cannot keep the pane frozen.
 #[cfg(windows)]
 const RESIZE_SETTLE_MAX: Duration = Duration::from_millis(400);
+
+/// Longest a child's synchronized-output hold (`?2026h`) may keep the pane
+/// from rendering. A child that never sends `?2026l` (crashed, killed, or
+/// stuck mid-frame) must not freeze its pane for good.
+const SYNC_OUTPUT_MAX: Duration = Duration::from_millis(1000);
 
 /// Tracks the ConPTY buffer replay that follows `ResizePseudoConsole`.
 ///
@@ -93,6 +97,9 @@ pub struct Session {
     /// In-progress ConPTY buffer replay after a resize (renders suppressed)
     #[cfg(windows)]
     resize_settle: Option<ResizeSettle>,
+    /// When the child's synchronized-output hold (`?2026h`) began; renders
+    /// are suppressed while this is set.
+    sync_since: Option<Instant>,
 }
 
 // ConPty needs to be Send + Sync for Arc (the Unix pty is naturally both)
@@ -118,6 +125,7 @@ impl Session {
             pty_size: (cols, rows),
             #[cfg(windows)]
             resize_settle: None,
+            sync_since: None,
         }
     }
 
@@ -265,6 +273,8 @@ impl Session {
             {
                 self.resize_settle = None;
             }
+            self.state.modes.synchronized_output = false;
+            self.sync_since = None;
             return Ok(false);
         }
 
@@ -290,6 +300,11 @@ impl Session {
             }
         }
 
+        // A child inside `?2026h ... ?2026l` is mid-frame: keep parsing but
+        // signal no render until the hold ends, then release exactly one.
+        let sync_released = self.update_sync_hold();
+        let held = self.sync_since.is_some();
+
         // While the post-resize buffer replay is in flight, keep parsing but
         // hold back the "render needed" signal until the stream goes quiet
         // (or the hard cap expires), then release one render with the final
@@ -307,12 +322,43 @@ impl Session {
             if quiet || expired {
                 let render = settle.pending;
                 self.resize_settle = None;
-                return Ok(render || processed);
+                return Ok(!held && (render || processed || sync_released));
             }
             return Ok(false);
         }
 
-        Ok(processed)
+        if held {
+            return Ok(false);
+        }
+        Ok(processed || sync_released)
+    }
+
+    /// Follow the child's synchronized-output mode (2026) and return whether
+    /// a hold ended during this call. A hold ends when the child resets the
+    /// mode (also through RIS or a resize), when `SYNC_OUTPUT_MAX` has passed
+    /// since it began (the mode bit is cleared then, so DECRQM and the next
+    /// `?2026h` start from a clean state), or when the session stopped.
+    fn update_sync_hold(&mut self) -> bool {
+        match (self.state.modes.synchronized_output, self.sync_since) {
+            (true, None) => {
+                self.sync_since = Some(Instant::now());
+                false
+            }
+            (true, Some(since)) => {
+                if since.elapsed() >= SYNC_OUTPUT_MAX || !self.running.load(Ordering::SeqCst) {
+                    self.state.modes.synchronized_output = false;
+                    self.sync_since = None;
+                    true
+                } else {
+                    false
+                }
+            }
+            (false, Some(_)) => {
+                self.sync_since = None;
+                true
+            }
+            (false, None) => false,
+        }
     }
 
     /// Feed raw bytes into the terminal.
@@ -460,6 +506,12 @@ impl Session {
         // when this pane's size didn't actually change.
         let unchanged = cols == self.state.cols && rows == self.state.rows;
 
+        // A real size change ends the child's synchronized-output hold; the
+        // next process_output releases the render it was holding back.
+        if !unchanged {
+            self.state.modes.synchronized_output = false;
+        }
+
         if self.defer_pty_resize {
             // A split-border drag is in progress: update local state only.
             // The PTY gets one resize (and the shell one SIGWINCH) when the
@@ -519,9 +571,16 @@ impl Session {
         }
     }
 
+    /// Whether the renderer should leave this session's pane as it is: the
+    /// child is inside a synchronized-output frame (`?2026h`) or the
+    /// post-resize ConPTY replay is still in flight. Dirty lines keep
+    /// accumulating and are painted in one frame once the hold ends.
+    pub fn is_render_held(&self) -> bool {
+        self.sync_since.is_some() || self.is_settling()
+    }
+
     /// Whether the post-resize ConPTY buffer replay is still in flight.
-    /// The renderer skips incremental paints of this session while true.
-    pub fn is_settling(&self) -> bool {
+    fn is_settling(&self) -> bool {
         #[cfg(windows)]
         {
             self.resize_settle.is_some()
@@ -714,6 +773,90 @@ mod tests {
 
         assert!(!session.process_output().unwrap());
         assert!(!session.is_settling());
+    }
+
+    /// A session fed through a channel, marked as running (a session that
+    /// was never started counts as stopped and would end every hold).
+    fn running_session_with_channel() -> (Session, mpsc::Sender<Vec<u8>>) {
+        let mut session = Session::new(1, 80, 24);
+        let (tx, rx) = mpsc::channel();
+        session.output_rx = Some(rx);
+        session.running.store(true, Ordering::SeqCst);
+        (session, tx)
+    }
+
+    #[test]
+    fn sync_output_holds_render_until_the_frame_ends() {
+        let (mut session, tx) = running_session_with_channel();
+
+        tx.send(b"\x1b[?2026hpartial".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap(), "mid-frame: no render");
+        assert!(session.is_render_held());
+        assert_eq!(screen_text(&session, 0).trim_end(), "partial", "still parsed into the grid");
+
+        tx.send(b" frame\x1b[?2026l".to_vec()).unwrap();
+        assert!(session.process_output().unwrap(), "frame end releases one render");
+        assert!(!session.is_render_held());
+        assert!(!session.process_output().unwrap(), "and only one");
+    }
+
+    #[test]
+    fn sync_output_frame_inside_one_chunk_renders_normally() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hwhole frame\x1b[?2026l".to_vec()).unwrap();
+        assert!(session.process_output().unwrap());
+        assert!(!session.is_render_held());
+    }
+
+    #[test]
+    fn sync_output_hold_times_out_and_clears_the_mode() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hstuck".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+
+        // Pretend the hold began longer ago than the cap, with no new output.
+        session.sync_since = Some(Instant::now() - SYNC_OUTPUT_MAX);
+        assert!(session.process_output().unwrap(), "timeout releases the render");
+        assert!(!session.is_render_held());
+        assert!(!session.state.modes.synchronized_output);
+        assert_eq!(session.state.query_mode(false, 2026), 2);
+    }
+
+    #[test]
+    fn sync_output_hold_ends_with_the_session() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hhalf".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+        session.running.store(false, Ordering::SeqCst);
+        assert!(session.process_output().unwrap());
+        assert!(!session.is_render_held());
+    }
+
+    #[test]
+    fn sync_output_hold_ends_on_resize() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hhalf".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+
+        session.resize(40, 10).unwrap();
+        assert!(session.process_output().unwrap(), "resize ends the hold");
+        assert!(!session.is_render_held());
+
+        // A resize to the size it already has changes nothing.
+        tx.send(b"\x1b[?2026hmore".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+        session.resize(40, 10).unwrap();
+        assert!(session.is_render_held());
+    }
+
+    #[test]
+    fn sync_output_hold_ends_on_full_reset() {
+        let (mut session, tx) = running_session_with_channel();
+        tx.send(b"\x1b[?2026hhalf".to_vec()).unwrap();
+        assert!(!session.process_output().unwrap());
+        tx.send(b"\x1bc".to_vec()).unwrap();
+        assert!(session.process_output().unwrap(), "RIS drops the mode and the hold");
+        assert!(!session.is_render_held());
     }
 
     #[test]

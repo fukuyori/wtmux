@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::state::{Cell, Row, ScreenBuffer};
+use super::state::{Cell, CellAttrs, Row, ScreenBuffer};
 
 // Additional policies are introduced in Phase 1 so later releases can switch
 // resize behavior without re-entangling the implementation.
@@ -17,7 +17,10 @@ pub enum ResizePolicy {
     /// and every Console-API application go by (measured on the inbox
     /// conhost 26100 and OpenConsole 1.22/1.24, both identical):
     /// - width change: the visible rows are rewrapped and the cursor follows
-    ///   its logical position;
+    ///   its logical position. Spaces are content only inside a line or on
+    ///   a row that wraps on; the trailing spaces of a line's last row are
+    ///   dropped, and a wrapped line whose tail vanishes keeps one extra
+    ///   empty row when its content ends exactly on the new width;
     /// - height shrink: rows leave through the top only as far as needed to
     ///   keep the cursor visible; rows below the cursor that no longer fit
     ///   are discarded;
@@ -102,7 +105,7 @@ pub(crate) fn reflow_screen(
             }
         }
 
-        let extracted = extract_reflow_cells(row, preserve_until_col);
+        let extracted = extract_reflow_cells(row, preserve_until_col, true);
         current_width += extracted
             .iter()
             .map(|cell| cell.width.max(1) as usize)
@@ -257,8 +260,12 @@ pub(crate) fn console_buffer_resize_screen(
         // their logical offset like the console's own reflow does.
         let mut anchor_meta: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
         let mut logical_lines: Vec<Vec<Cell>> = Vec::new();
+        // Per logical line: it spans several rows and its last row was
+        // trimmed to nothing (see the extra-row rule below).
+        let mut line_tail_empty: Vec<bool> = Vec::new();
         let mut current_line: Vec<Cell> = Vec::new();
         let mut current_width = 0usize;
+        let mut rows_in_line = 0usize;
         for (row_idx, row) in screen.rows.iter().take(visible_len).enumerate() {
             let mut preserve_until_col = None;
             for (idx, anchor) in anchors.iter().enumerate() {
@@ -269,27 +276,53 @@ pub(crate) fn console_buffer_resize_screen(
                         Some(preserve_until_col.map_or(anchor.col, |col: u16| col.max(anchor.col)));
                 }
             }
-            let extracted = extract_reflow_cells(row, preserve_until_col);
+            let extracted = extract_reflow_cells(row, preserve_until_col, false);
             current_width += extracted.iter().map(|cell| cell.width.max(1) as usize).sum::<usize>();
+            let tail_empty = extracted.is_empty();
             current_line.extend(extracted);
+            rows_in_line += 1;
             if !row.wrapped {
+                line_tail_empty.push(rows_in_line > 1 && tail_empty);
                 logical_lines.push(current_line);
                 current_line = Vec::new();
                 current_width = 0;
+                rows_in_line = 0;
             }
         }
         if !current_line.is_empty() {
+            line_tail_empty.push(false);
             logical_lines.push(current_line);
         }
 
         for (line_idx, line_cells) in logical_lines.into_iter().enumerate() {
             let line_start_abs_row = physical_rows.len();
+            let line_width: usize = line_cells.iter().map(|cell| cell.width.max(1) as usize).sum();
             let row_start_offsets = append_wrapped_line(&mut physical_rows, line_cells, new_cols);
+            // The console keeps one more (empty) row when a wrapped line's
+            // trimmed tail leaves its content ending exactly on the new
+            // width: the wrap flag of the last full row still has a row to
+            // continue on.
+            let extra_row =
+                line_tail_empty[line_idx] && line_width > 0 && line_width % new_cols as usize == 0;
+            if extra_row {
+                if let Some(last) = physical_rows.last_mut() {
+                    last.wrapped = true;
+                }
+                physical_rows.push(Row::new(new_cols));
+            }
             for (anchor_idx, meta) in anchor_meta.iter().enumerate() {
                 let Some((anchor_line_idx, anchor_offset)) = meta else {
                     continue;
                 };
                 if *anchor_line_idx != line_idx {
+                    continue;
+                }
+                // A cursor sitting at the start of the emptied tail moves
+                // onto that extra row, as in the console, instead of
+                // staying on the last column of the row above.
+                if extra_row && *anchor_offset == line_width {
+                    anchor_positions_abs[anchor_idx] =
+                        Some((line_start_abs_row + row_start_offsets.len(), 0));
                     continue;
                 }
                 let mut row_in_line = 0usize;
@@ -399,13 +432,27 @@ fn remap_scroll_offset(
     })
 }
 
-fn extract_reflow_cells(row: &Row, preserve_until_col: Option<u16>) -> Vec<Cell> {
+/// Cells of `row` that take part in a rewrap. Rows that continue on the next
+/// one are full by definition and keep every cell; the last row of a logical
+/// line loses its trailing spaces (as in the console buffer: a full-width row
+/// of spaces is not content), but keeps everything up to `preserve_until_col`
+/// (the cursor). The console drops them whatever their attributes; with
+/// `keep_styled_spaces` only spaces with default attributes go, so a
+/// background-coloured run survives the rewrap.
+fn extract_reflow_cells(
+    row: &Row,
+    preserve_until_col: Option<u16>,
+    keep_styled_spaces: bool,
+) -> Vec<Cell> {
     let mut last_used_col = preserve_until_col.unwrap_or(0) as usize;
     for (col_idx, cell) in row.cells.iter().enumerate() {
         if cell.is_continuation() {
             continue;
         }
-        if !cell.grapheme.is_empty() {
+        let trailing_blank = !row.wrapped
+            && cell.grapheme == " "
+            && (!keep_styled_spaces || cell.attrs == CellAttrs::default());
+        if !cell.grapheme.is_empty() && !trailing_blank {
             last_used_col = last_used_col.max(col_idx + cell.width.max(1) as usize);
         }
     }

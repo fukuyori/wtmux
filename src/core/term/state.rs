@@ -937,6 +937,45 @@ impl TerminalState {
         }
     }
 
+    /// DECRQM: the DECRPM status of a mode, 1 = set, 2 = reset, 0 = not
+    /// recognized. A mode is recognized only if `set_private_mode` (or the
+    /// ANSI `h`/`l` handler) changes some state for it, so the answer never
+    /// promises behavior wtmux does not have; modes that merely trigger an
+    /// action (1048) and modes it ignores (2027) stay 0. 47, 1047 and
+    /// 1049 all report whether the alternate screen is active, since the
+    /// number that switched to it is not recorded.
+    pub fn query_mode(&self, ansi: bool, mode: u16) -> u8 {
+        let on = if ansi {
+            match mode {
+                4 => self.modes.insert_mode,
+                20 => self.modes.linefeed_newline,
+                _ => return 0,
+            }
+        } else {
+            match mode {
+                1 => self.modes.application_cursor,
+                7 => self.modes.auto_wrap,
+                25 => self.active_cursor().visible,
+                47 | 1047 | 1049 => self.using_alternate,
+                1004 => self.modes.focus_reporting,
+                2004 => self.modes.bracketed_paste,
+                9001 => self.modes.win32_input,
+                2026 => self.modes.synchronized_output,
+                1000 => self.modes.mouse_tracking,
+                1002 => self.modes.mouse_button_tracking,
+                1003 => self.modes.mouse_any_event,
+                1006 => self.modes.mouse_sgr_mode,
+                1015 => self.modes.mouse_urxvt_mode,
+                _ => return 0,
+            }
+        };
+        if on {
+            1
+        } else {
+            2
+        }
+    }
+
     /// Set private mode
     pub fn set_private_mode(&mut self, mode: u16, enable: bool) {
         match mode {
@@ -974,6 +1013,7 @@ impl TerminalState {
             1004 => self.modes.focus_reporting = enable,
             2004 => self.modes.bracketed_paste = enable,
             9001 => self.modes.win32_input = enable,
+            2026 => self.modes.synchronized_output = enable,
             
             // Mouse tracking modes
             1000 => self.modes.mouse_tracking = enable,
@@ -1734,7 +1774,7 @@ pub struct SavedCursor {
 }
 
 /// Terminal modes
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TerminalModes {
     pub application_cursor: bool,
     #[allow(dead_code)]
@@ -1751,6 +1791,10 @@ pub struct TerminalModes {
     /// full Win32 key records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), which preserves
     /// modifier state legacy VT cannot express (e.g. Shift+Enter)
     pub win32_input: bool,
+    /// 2026 - synchronized output: the child is mid-frame and the pane must
+    /// keep showing its last complete frame (`Session` holds renders and
+    /// releases them on reset, timeout, resize or exit)
+    pub synchronized_output: bool,
     
     // Mouse tracking modes
     /// 1000 - X10 mouse reporting (click only)
@@ -1777,6 +1821,7 @@ impl Default for TerminalModes {
             bracketed_paste: false,
             focus_reporting: false,
             win32_input: false,
+            synchronized_output: false,
             mouse_tracking: false,
             mouse_button_tracking: false,
             mouse_any_event: false,
@@ -2646,5 +2691,215 @@ mod tests {
         assert_eq!(state.primary_cursor.row, 11);
         assert_eq!(visible_row_text(&state, 2), "L".repeat(80));
         assert_eq!(visible_row_text(&state, 11), ">");
+    }
+
+    /// "text0", then one logical line of `lead_x? + spaces + trail_x?`, then
+    /// a prompt; returns the prompt's 1-based row before and after resizing
+    /// to `new_cols` under ConsoleBuffer.
+    fn space_line_prompt_rows(
+        spaces: usize,
+        lead_x: bool,
+        trail_x: bool,
+        new_cols: u16,
+    ) -> (usize, usize) {
+        let mut state = TerminalState::new(80, 24);
+        for ch in "text0".chars() {
+            state.put_char(ch);
+        }
+        state.carriage_return();
+        state.linefeed();
+        if lead_x {
+            state.put_char('x');
+        }
+        for _ in 0..spaces {
+            state.put_char(' ');
+        }
+        if trail_x {
+            state.put_char('x');
+        }
+        state.carriage_return();
+        state.linefeed();
+        for ch in "$ prompt".chars() {
+            state.put_char(ch);
+        }
+        let before = state.primary_cursor.row as usize + 1;
+        state.resize_with_policy(new_cols, 24, ResizePolicy::ConsoleBuffer);
+        (before, state.primary_cursor.row as usize + 1)
+    }
+
+    #[test]
+    fn console_buffer_space_rows_follow_console_reflow() {
+        // Measured 2026-10-01 on the inbox conhost and the bundled
+        // OpenConsole (identical): a child that wrote runs of spaces, then
+        // the window narrowed from 80 columns. Each case is
+        // (spaces, lead_x, trail_x, new_cols, prompt row before, after).
+        // The trailing spaces of a line's last row are not content (even
+        // exactly 80 of them), the full rows before it are, and a vanished
+        // tail ending exactly on the new width keeps one extra empty row.
+        let cases = [
+            (40, false, false, 40, 3, 3),
+            (79, false, false, 40, 3, 3),
+            (80, false, false, 40, 3, 3),
+            (81, false, false, 40, 4, 5),
+            (120, false, false, 40, 4, 5),
+            (160, false, false, 40, 4, 5),
+            (161, false, false, 40, 5, 7),
+            (240, false, false, 40, 5, 7),
+            (80, false, true, 40, 4, 5),
+            (100, false, true, 40, 4, 5),
+            (160, false, true, 40, 5, 7),
+            (100, true, false, 40, 4, 5),
+            (120, false, false, 30, 4, 5),
+            (120, false, false, 20, 4, 7),
+            (120, false, false, 60, 4, 4),
+            (161, false, false, 30, 5, 8),
+            (161, false, false, 20, 5, 11),
+            (161, false, false, 60, 5, 5),
+            (100, true, false, 30, 4, 5),
+            (100, true, false, 20, 4, 7),
+            (100, true, false, 60, 4, 4),
+        ];
+        for (spaces, lead_x, trail_x, new_cols, before, after) in cases {
+            assert_eq!(
+                space_line_prompt_rows(spaces, lead_x, trail_x, new_cols),
+                (before, after),
+                "{spaces} spaces (lead x {lead_x}, trail x {trail_x}) -> {new_cols} cols"
+            );
+        }
+    }
+
+    /// "ab", 40 spaces drawn with `bg`, CR LF, a prompt; narrowed from 80 to
+    /// 20 columns under `policy`. Returns the prompt's row afterwards and
+    /// whether any cell of the first line still carries the background.
+    fn styled_space_line_after_narrowing(policy: ResizePolicy, bg: super::Color) -> (usize, bool) {
+        let mut state = TerminalState::new(80, 24);
+        for ch in "ab".chars() {
+            state.put_char(ch);
+        }
+        state.current_attrs.bg = bg;
+        for _ in 0..40 {
+            state.put_char(' ');
+        }
+        state.current_attrs = Default::default();
+        state.carriage_return();
+        state.linefeed();
+        for ch in "$ prompt".chars() {
+            state.put_char(ch);
+        }
+        assert_eq!(state.primary_cursor.row, 1);
+        state.resize_with_policy(20, 24, policy);
+        let kept_bg = (0..3).any(|row| {
+            state.active_screen().rows[row]
+                .cells
+                .iter()
+                .any(|cell| cell.grapheme == " " && cell.attrs.bg != super::Color::Default)
+        });
+        (state.primary_cursor.row as usize, kept_bg)
+    }
+
+    #[test]
+    fn local_reflow_keeps_background_coloured_trailing_spaces() {
+        let red = super::Color::Indexed(1);
+        // "ab" + 40 coloured spaces = 42 cells = 3 rows of 20; the prompt
+        // moves from row 1 to row 3 and the colour is still there.
+        assert_eq!(
+            styled_space_line_after_narrowing(ResizePolicy::LocalReflow, red),
+            (3, true)
+        );
+        // The same spaces with default attributes are not content.
+        assert_eq!(
+            styled_space_line_after_narrowing(ResizePolicy::LocalReflow, super::Color::Default),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn console_buffer_drops_trailing_spaces_whatever_their_attributes() {
+        // Measured on the inbox conhost: 160 red-background spaces behaved
+        // exactly like default ones.
+        let red = super::Color::Indexed(1);
+        assert_eq!(
+            styled_space_line_after_narrowing(ResizePolicy::ConsoleBuffer, red),
+            (1, false)
+        );
+    }
+
+    #[test]
+    fn console_buffer_cursor_on_emptied_continuation_row_follows_console() {
+        // Measured 2026-10-01 on the inbox conhost and the bundled
+        // OpenConsole (identical): "text0", then `spaces` spaces and an `x`
+        // that wraps onto a new row, CR + erase-to-end-of-line so the cursor
+        // sits at column 0 of that now empty continuation row, narrowed from
+        // 80 columns. Each case is (spaces, new_cols, row, col), 1-based.
+        // Left out: (160, 20), (240, 30) and (240, 20), where the console
+        // lands 2, 1 and 5 rows above where its own wrapping puts the end of
+        // the text; no rule for that is known.
+        let cases = [
+            (80, 40, 4, 1),
+            (80, 30, 4, 21),
+            (80, 20, 6, 1),
+            (80, 60, 3, 21),
+            (100, 40, 4, 1),
+            (100, 30, 4, 21),
+            (100, 20, 6, 1),
+            (100, 60, 3, 21),
+            (160, 40, 6, 1),
+            (160, 30, 7, 11),
+            (160, 60, 4, 41),
+            (240, 40, 8, 1),
+            (240, 60, 6, 1),
+        ];
+        for (spaces, new_cols, row, col) in cases {
+            let mut state = TerminalState::new(80, 24);
+            for ch in "text0".chars() {
+                state.put_char(ch);
+            }
+            state.carriage_return();
+            state.linefeed();
+            for _ in 0..spaces {
+                state.put_char(' ');
+            }
+            state.put_char('x');
+            state.carriage_return();
+            state.erase_in_line(0);
+            state.resize_with_policy(new_cols, 24, ResizePolicy::ConsoleBuffer);
+            assert_eq!(
+                (state.primary_cursor.row as usize + 1, state.primary_cursor.col as usize + 1),
+                (row, col),
+                "{spaces} spaces -> {new_cols} cols"
+            );
+        }
+    }
+
+    #[test]
+    fn console_buffer_full_width_space_rows_with_line_breaks_do_not_grow() {
+        // The OpenConsole clear-by-spaces case: four rows of 80 spaces, each
+        // ended by CR LF, narrowed to 40 columns. The prompt stays put (the
+        // measured console moved it by 0 rows; counting the spaces as
+        // content moved it by 4).
+        for policy in [ResizePolicy::ConsoleBuffer, ResizePolicy::LocalReflow] {
+            let mut state = TerminalState::new(80, 24);
+            for i in 0..4 {
+                for ch in format!("text{i}").chars() {
+                    state.put_char(ch);
+                }
+                state.carriage_return();
+                state.linefeed();
+            }
+            for _ in 0..4 {
+                for _ in 0..80 {
+                    state.put_char(' ');
+                }
+                state.carriage_return();
+                state.linefeed();
+            }
+            for ch in "$ prompt".chars() {
+                state.put_char(ch);
+            }
+            assert_eq!(state.primary_cursor.row, 8);
+            state.resize_with_policy(40, 24, policy);
+            assert_eq!(state.primary_cursor.row, 8, "{policy:?}");
+            assert_eq!(visible_row_text(&state, 8), "$ prompt", "{policy:?}");
+        }
     }
 }

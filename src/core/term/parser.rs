@@ -39,6 +39,9 @@ pub enum Response {
     SecondaryDeviceAttributes,
     /// Kitty keyboard protocol flag report: ESC [ ? flags u
     KittyKeyboardFlags(u8),
+    /// DECRPM mode report: ESC [ [?] mode ; status $ y (status as in
+    /// `TerminalState::query_mode`)
+    ModeReport { ansi: bool, mode: u16, status: u8 },
 }
 
 impl Response {
@@ -57,6 +60,10 @@ impl Response {
             }
             Response::KittyKeyboardFlags(flags) => {
                 format!("\x1b[?{}u", flags).into_bytes()
+            }
+            Response::ModeReport { ansi, mode, status } => {
+                let prefix = if *ansi { "" } else { "?" };
+                format!("\x1b[{}{};{}$y", prefix, mode, status).into_bytes()
             }
         }
     }
@@ -525,6 +532,28 @@ impl VtParser {
                 None
             } else {
                 None
+            };
+            self.state = ParserState::Ground;
+            return response;
+        }
+
+        // DECRQM: CSI Ps $ p (ANSI mode) / CSI ? Ps $ p (DEC mode). The
+        // intermediates must be exactly `$` / `? $`, so DECSTR (`CSI ! p`),
+        // DECSCL (`CSI Ps ; Ps " p`) and mixed prefixes stay unknown CSIs.
+        // A colon subparameter makes the sequence malformed: no answer. A
+        // trailing colon with no value after it leaves `current_is_sub` set
+        // without filing anything in `subparams`.
+        if final_byte == b'p' && matches!(self.intermediates.as_slice(), [b'$'] | [b'?', b'$']) {
+            let ansi = self.intermediates.len() == 1;
+            let response = if self.current_is_sub || self.subparams.iter().any(|sub| !sub.is_empty()) {
+                None
+            } else {
+                let mode = params.first().copied().unwrap_or(0);
+                Some(Response::ModeReport {
+                    ansi,
+                    mode,
+                    status: state.query_mode(ansi, mode),
+                })
             };
             self.state = ParserState::Ground;
             return response;
@@ -1344,6 +1373,214 @@ mod tests {
             }
         }
         responses
+    }
+
+    /// Feed `input` and return the bytes of every response, in order.
+    fn response_bytes(parser: &mut VtParser, state: &mut TerminalState, input: &str) -> Vec<Vec<u8>> {
+        feed_str(parser, state, input)
+            .iter()
+            .map(Response::to_bytes)
+            .collect()
+    }
+
+    #[test]
+    fn decrqm_reports_set_and_reset_dec_modes() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2004$p"),
+            [b"\x1b[?2004;2$y".to_vec()]
+        );
+        feed_str(&mut parser, &mut state, "\x1b[?2004h\x1b[?1000h\x1b[?25l\x1b[?7l");
+        let got = response_bytes(
+            &mut parser,
+            &mut state,
+            "\x1b[?2004$p\x1b[?1000$p\x1b[?25$p\x1b[?7$p\x1b[?1002$p",
+        );
+        assert_eq!(
+            got,
+            [
+                b"\x1b[?2004;1$y".to_vec(),
+                b"\x1b[?1000;1$y".to_vec(),
+                b"\x1b[?25;2$y".to_vec(),
+                b"\x1b[?7;2$y".to_vec(),
+                b"\x1b[?1002;2$y".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn decrqm_reports_synchronized_output() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2026$p"),
+            [b"\x1b[?2026;2$y".to_vec()]
+        );
+        feed_str(&mut parser, &mut state, "\x1b[?2026h");
+        assert!(state.modes.synchronized_output);
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2026$p"),
+            [b"\x1b[?2026;1$y".to_vec()]
+        );
+        feed_str(&mut parser, &mut state, "\x1b[?2026l");
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2026$p"),
+            [b"\x1b[?2026;2$y".to_vec()]
+        );
+    }
+
+    #[test]
+    fn decrqm_ansi_modes_have_no_question_mark() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[4$p\x1b[20$p"),
+            [b"\x1b[4;2$y".to_vec(), b"\x1b[20;2$y".to_vec()]
+        );
+        feed_str(&mut parser, &mut state, "\x1b[4h");
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[4$p"),
+            [b"\x1b[4;1$y".to_vec()]
+        );
+        // DEC and ANSI numbers are separate namespaces.
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?4$p\x1b[1$p"),
+            [b"\x1b[?4;0$y".to_vec(), b"\x1b[1;0$y".to_vec()]
+        );
+    }
+
+    #[test]
+    fn decrqm_unrecognized_modes_report_zero() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        // 2027 is not tracked, 1048 is only a save/restore command and
+        // 65535 is what an over-long number saturates to.
+        let got = response_bytes(
+            &mut parser,
+            &mut state,
+            "\x1b[?2027$p\x1b[?1048$p\x1b[?65535$p\x1b[?99999$p",
+        );
+        assert_eq!(
+            got,
+            [
+                b"\x1b[?2027;0$y".to_vec(),
+                b"\x1b[?1048;0$y".to_vec(),
+                b"\x1b[?65535;0$y".to_vec(),
+                b"\x1b[?65535;0$y".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn decrqm_missing_and_extra_params() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        // No number is mode 0; only the first parameter counts.
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?$p\x1b[$p"),
+            [b"\x1b[?0;0$y".to_vec(), b"\x1b[0;0$y".to_vec()]
+        );
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2004;1006$p"),
+            [b"\x1b[?2004;2$y".to_vec()]
+        );
+    }
+
+    #[test]
+    fn decrqm_only_matches_exact_dollar_intermediate() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        for seq in [
+            "\x1b[!p",             // DECSTR
+            "\x1b[61;1\"p",        // DECSCL
+            "\x1b[>2004$p",        // wrong prefix
+            "\x1b[?!2004$p",       // mixed prefixes
+            "\x1b[?2004 $p",       // extra intermediate
+            "\x1b[?1:2$p",         // colon subparameter: malformed
+            "\x1b[?2004:$p",       // trailing colon with no value
+            "\x1b[2004:$p",
+            "\x1b[?1;2004:$p",
+        ] {
+            assert!(
+                response_bytes(&mut parser, &mut state, seq).is_empty(),
+                "{seq:?} must not be answered"
+            );
+        }
+        // The parser is back in Ground afterwards.
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b[?2004$p"),
+            [b"\x1b[?2004;2$y".to_vec()]
+        );
+    }
+
+    #[test]
+    fn decrqm_as_forwarded_by_openconsole() {
+        // Bytes the bundled OpenConsole forwards when a child writes the
+        // query (measured 2026-10-01; the inbox conhost answers it itself and
+        // never forwards it): the query arrives unchanged between other text.
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        let got = response_bytes(
+            &mut parser,
+            &mut state,
+            "<<DECRQM2026>>\x1b[?2026$p<<DECRQM2004>>\x1b[?2004$p\x1b[c",
+        );
+        assert_eq!(
+            got,
+            [
+                b"\x1b[?2026;2$y".to_vec(),
+                b"\x1b[?2004;2$y".to_vec(),
+                b"\x1b[?62;c".to_vec(),
+            ],
+            "answers keep the order of the queries, DA1 last"
+        );
+    }
+
+    #[test]
+    fn decrqm_alt_screen_modes_report_whether_alternate_is_active() {
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        let query = "\x1b[?47$p\x1b[?1047$p\x1b[?1049$p";
+        let off = [b"\x1b[?47;2$y".to_vec(), b"\x1b[?1047;2$y".to_vec(), b"\x1b[?1049;2$y".to_vec()];
+        let on = [b"\x1b[?47;1$y".to_vec(), b"\x1b[?1047;1$y".to_vec(), b"\x1b[?1049;1$y".to_vec()];
+        assert_eq!(response_bytes(&mut parser, &mut state, query), off);
+        feed_str(&mut parser, &mut state, "\x1b[?1049h");
+        assert_eq!(response_bytes(&mut parser, &mut state, query), on);
+        feed_str(&mut parser, &mut state, "\x1b[?1049l");
+        assert_eq!(response_bytes(&mut parser, &mut state, query), off);
+    }
+
+    #[test]
+    fn decrqm_recognizes_exactly_the_modes_that_change_state() {
+        // Drift guard: a mode counts as recognized iff setting or resetting
+        // it through the parser changes observable state. Each number runs
+        // on a fresh state because 47/1047/1049 rebuild the alternate screen.
+        fn snapshot(state: &TerminalState) -> (super::super::state::TerminalModes, bool, bool) {
+            (state.modes.clone(), state.using_alternate, state.active_cursor().visible)
+        }
+        let baseline = snapshot(&TerminalState::new(80, 24));
+        let mut numbers: Vec<u16> = (0..=2100).collect();
+        numbers.extend(9000..=9010);
+        numbers.push(65535);
+        for ansi in [false, true] {
+            let prefix = if ansi { "" } else { "?" };
+            for &mode in &numbers {
+                let mut changed = false;
+                for final_byte in ['h', 'l'] {
+                    let mut parser = VtParser::new();
+                    let mut state = TerminalState::new(80, 24);
+                    feed_str(&mut parser, &mut state, &format!("\x1b[{prefix}{mode}{final_byte}"));
+                    changed |= snapshot(&state) != baseline;
+                }
+                let fresh = TerminalState::new(80, 24);
+                assert_eq!(
+                    fresh.query_mode(ansi, mode) != 0,
+                    changed,
+                    "mode {prefix}{mode}: query_mode and the h/l handler disagree"
+                );
+            }
+        }
     }
 
     #[test]
