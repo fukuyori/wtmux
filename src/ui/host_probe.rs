@@ -17,8 +17,25 @@ pub(crate) fn measure_vs16_emoji_cells() -> Option<u16> {
     imp::measure(SEQ)
 }
 
+/// Ask the host for its default foreground, background and cursor colours
+/// (OSC 10 / 11 / 12) and remember them for answering the same queries from
+/// panes (`core::term::host_colors`). Meant to run right after
+/// `measure_vs16_emoji_cells` succeeded, i.e. only on a host that answers a
+/// CPR: the CPR sent after the queries then ends the wait at once even if the
+/// host ignores OSC 10/11/12. Does nothing on hosts that cannot be asked.
+pub(crate) fn learn_host_colors() {
+    use crate::core::term::host_colors::{set_host_colors, HostColors};
+    if let Some(colors) = imp::measure_colors() {
+        if colors != HostColors::default() {
+            set_host_colors(colors);
+        }
+    }
+}
+
 #[cfg(windows)]
 mod imp {
+    use crate::core::term::host_colors::{parse_host_replies, HostColors};
+
     use std::os::windows::ffi::OsStrExt;
     use std::time::{Duration, Instant};
 
@@ -39,6 +56,16 @@ mod imp {
     /// needs ENABLE_VIRTUAL_TERMINAL_INPUT, and the modes are restored before
     /// the regular input reader (INPUT_RECORD based) starts.
     pub(super) fn measure(seq: &str) -> Option<u16> {
+        with_console(|hin, hout| unsafe { probe(hin, hout, seq) })
+    }
+
+    /// The host's reply to OSC 10 / 11 / 12 queries, or `None` when it did
+    /// not even answer the CPR sent after them.
+    pub(super) fn measure_colors() -> Option<HostColors> {
+        with_console(|hin, hout| unsafe { probe_colors(hin, hout) })
+    }
+
+    fn with_console<T>(f: impl FnOnce(HANDLE, HANDLE) -> Option<T>) -> Option<T> {
         unsafe {
             let hout = open("CONOUT$")?;
             let hin = match open("CONIN$") {
@@ -48,7 +75,7 @@ mod imp {
                     return None;
                 }
             };
-            let result = probe(hin, hout, seq);
+            let result = f(hin, hout);
             let _ = CloseHandle(hin);
             let _ = CloseHandle(hout);
             result
@@ -72,12 +99,14 @@ mod imp {
         .ok()
     }
 
-    unsafe fn probe(hin: HANDLE, hout: HANDLE, seq: &str) -> Option<u16> {
+    /// Put both handles in VT mode with line editing off, flush stale input,
+    /// and restore the modes when the guard drops.
+    unsafe fn raw_modes(hin: HANDLE, hout: HANDLE) -> Option<RestoreModes> {
         let mut in_mode = CONSOLE_MODE(0);
         let mut out_mode = CONSOLE_MODE(0);
         GetConsoleMode(hin, &mut in_mode).ok()?;
         GetConsoleMode(hout, &mut out_mode).ok()?;
-        let _restore = RestoreModes { hin, in_mode, hout, out_mode };
+        let restore = RestoreModes { hin, in_mode, hout, out_mode };
 
         SetConsoleMode(
             hout,
@@ -90,6 +119,23 @@ mod imp {
         )
         .ok()?;
         let _ = FlushConsoleInputBuffer(hin);
+        Some(restore)
+    }
+
+    /// Ask for the three colours, then for the cursor: hosts answer in query
+    /// order (measured on WezTerm, Windows Terminal and Ghostty), so the CPR
+    /// arrives after every colour the host will give and ends the read.
+    /// Nothing is read after the CPR: the handle can be signalled by events
+    /// that carry no text, and `ReadConsoleW` would then block.
+    unsafe fn probe_colors(hin: HANDLE, hout: HANDLE) -> Option<HostColors> {
+        let _restore = raw_modes(hin, hout)?;
+        write(hout, "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\\x1b[6n");
+        let (acc, _cpr) = read_until_cpr(hin, Duration::from_millis(500))?;
+        Some(parse_host_replies(&acc))
+    }
+
+    unsafe fn probe(hin: HANDLE, hout: HANDLE, seq: &str) -> Option<u16> {
+        let _restore = raw_modes(hin, hout)?;
 
         // Home, clear the line, write the sequence, ask for the cursor.
         write(hout, &format!("\x1b[H\x1b[2K{}\x1b[6n", seq));
@@ -106,24 +152,39 @@ mod imp {
 
     /// Read until a `ESC [ row ; col R` arrives or the deadline passes.
     unsafe fn read_cpr(hin: HANDLE, deadline: Duration) -> Option<(u16, u16)> {
+        read_until_cpr(hin, deadline).map(|(_, cpr)| cpr)
+    }
+
+    /// Like `read_cpr`, but also returns everything read so far.
+    unsafe fn read_until_cpr(hin: HANDLE, deadline: Duration) -> Option<(String, (u16, u16))> {
         let start = Instant::now();
         let mut acc = String::new();
-        let mut buf = [0u16; 256];
         while start.elapsed() < deadline {
-            let remaining = deadline.saturating_sub(start.elapsed()).as_millis().max(1) as u32;
-            if WaitForSingleObject(hin, remaining) != WAIT_OBJECT_0 {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            if !read_chunk(hin, &mut acc, remaining) {
                 break;
             }
-            let mut read = 0u32;
-            if ReadConsoleW(hin, buf.as_mut_ptr() as *mut _, buf.len() as u32, &mut read, None).is_err() {
-                break;
-            }
-            acc.push_str(&String::from_utf16_lossy(&buf[..read as usize]));
             if let Some(cpr) = parse_cpr(&acc) {
-                return Some(cpr);
+                return Some((acc, cpr));
             }
         }
         None
+    }
+
+    /// Wait up to `wait` for input and append it to `acc`; false when nothing
+    /// came or reading failed.
+    unsafe fn read_chunk(hin: HANDLE, acc: &mut String, wait: Duration) -> bool {
+        let mut buf = [0u16; 256];
+        let ms = wait.as_millis().max(1) as u32;
+        if WaitForSingleObject(hin, ms) != WAIT_OBJECT_0 {
+            return false;
+        }
+        let mut read = 0u32;
+        if ReadConsoleW(hin, buf.as_mut_ptr() as *mut _, buf.len() as u32, &mut read, None).is_err() {
+            return false;
+        }
+        acc.push_str(&String::from_utf16_lossy(&buf[..read as usize]));
+        true
     }
 
     struct RestoreModes {
@@ -149,7 +210,14 @@ mod imp {
 
 #[cfg(unix)]
 mod imp {
+    use crate::core::term::host_colors::HostColors;
     use std::io::Write;
+
+    /// Not implemented: crossterm's reader would take the OSC replies for
+    /// key presses, so reading them needs its own raw stdin read.
+    pub(super) fn measure_colors() -> Option<HostColors> {
+        None
+    }
 
     /// crossterm's `cursor::position()` issues DSR on the tty and parses the
     /// CPR (with its own timeout); raw mode is already on when this runs.

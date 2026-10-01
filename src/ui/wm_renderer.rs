@@ -360,6 +360,12 @@ impl WmRenderer {
         let vs16 = super::host_probe::measure_vs16_emoji_cells();
         crate::core::term::width::set_vs16_emoji_wide(vs16 == Some(2));
 
+        // The same host that answered the CPR is asked for its default
+        // colours, to answer OSC 10/11/12 queries from panes.
+        if vs16.is_some() {
+            super::host_probe::learn_host_colors();
+        }
+
         self.initialized = true;
         self.invalidate_cursor_cache();
         Ok(())

@@ -42,6 +42,9 @@ pub enum Response {
     /// DECRPM mode report: ESC [ [?] mode ; status $ y (status as in
     /// `TerminalState::query_mode`)
     ModeReport { ansi: bool, mode: u16, status: u8 },
+    /// Answer to `OSC 10/11/12 ; ?`: the host terminal's colour, ended with
+    /// BEL when the query was
+    HostColor { osc: u8, color: super::host_colors::Rgb16, bel: bool },
 }
 
 impl Response {
@@ -65,8 +68,18 @@ impl Response {
                 let prefix = if *ansi { "" } else { "?" };
                 format!("\x1b[{}{};{}$y", prefix, mode, status).into_bytes()
             }
+            Response::HostColor { osc, color, bel } => {
+                super::host_colors::format_reply(*osc, *color, *bel)
+            }
         }
     }
+}
+
+/// How an OSC string ended: the terminator decides how a reply ends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OscEnd {
+    Bel,
+    St,
 }
 
 /// Parser state machine
@@ -263,16 +276,18 @@ impl VtParser {
     fn escape_in_osc(&mut self, byte: u8, state: &mut TerminalState) -> Option<Response> {
         if byte == 0x5C {
             // ST (ESC \ = 0x5C) - String Terminator
-            self.execute_osc(state);
+            let response = self.execute_osc(state, OscEnd::St);
             self.state = ParserState::Ground;
+            response
         } else {
-            // Not ST, execute OSC and process this byte as new escape sequence
-            self.execute_osc(state);
+            // Not ST: the string was cut short. Run it, but never answer a
+            // query that was not terminated, and process this byte as a new
+            // escape sequence.
+            let _ = self.execute_osc(state, OscEnd::St);
             // Re-enter escape mode and process this byte
             self.enter_escape();
-            return self.escape(byte, state);
+            self.escape(byte, state)
         }
-        None
     }
 
     fn enter_escape(&mut self) {
@@ -484,27 +499,32 @@ impl VtParser {
         match byte {
             0x07 => {
                 // BEL terminates OSC
-                self.execute_osc(state);
+                let response = self.execute_osc(state, OscEnd::Bel);
                 self.state = ParserState::Ground;
+                response
             }
             0x1B => {
                 // Could be ST (ESC \)
                 // Move to EscapeInOsc state to check for backslash
                 self.state = ParserState::EscapeInOsc;
+                None
             }
             0x9C => {
-                // ST (String Terminator)
-                self.execute_osc(state);
+                // 8-bit ST. Only reachable by feeding the parser bytes
+                // directly: `Session` decodes UTF-8 first, so a C1 ST from a
+                // child arrives as U+009C and never ends the string there.
+                let response = self.execute_osc(state, OscEnd::St);
                 self.state = ParserState::Ground;
+                response
             }
             _ => {
                 // Cap accumulation so a missing terminator can't grow memory unboundedly
                 if self.osc_string.len() < MAX_OSC_LEN {
                     self.osc_string.push(byte as char);
                 }
+                None
             }
         }
-        None
     }
 
     fn execute_csi(&mut self, final_byte: u8, state: &mut TerminalState) -> Option<Response> {
@@ -1006,7 +1026,7 @@ impl VtParser {
         Some(out)
     }
 
-    fn execute_osc(&mut self, state: &mut TerminalState) {
+    fn execute_osc(&mut self, state: &mut TerminalState, end: OscEnd) -> Option<Response> {
         // Parse OSC: "code;text"
         if let Some(pos) = self.osc_string.find(';') {
             let code = &self.osc_string[..pos];
@@ -1025,6 +1045,26 @@ impl VtParser {
                 "7" => {
                     if let Some(path) = osc7_to_path(text) {
                         state.current_path = path;
+                    }
+                }
+                // OSC 10 / 11 / 12 ; ? asks for the foreground, background or
+                // cursor colour. wtmux draws with the host's defaults, so the
+                // answer is whatever the host reported at startup; with
+                // nothing known the query goes unanswered. Setting a colour
+                // (anything but `?`) is ignored.
+                "10" | "11" | "12" => {
+                    if text == "?" {
+                        let osc: u8 = code.parse().unwrap_or(0);
+                        let colors = state
+                            .host_colors
+                            .unwrap_or_else(super::host_colors::host_colors);
+                        if let Some(color) = colors.get(osc) {
+                            return Some(Response::HostColor {
+                                osc,
+                                color,
+                                bel: end == OscEnd::Bel,
+                            });
+                        }
                     }
                 }
                 // ── OSC 8: hyperlink ──────────────────────────────────────
@@ -1093,6 +1133,7 @@ impl VtParser {
             // OSC with no semicolon (e.g. OSC 133 ; A with empty text part)
             // Shouldn't normally occur but guard against it.
         }
+        None
     }
 
     /// Handle OSC 133 / 633 shell-integration markers.
@@ -1381,6 +1422,126 @@ mod tests {
             .iter()
             .map(Response::to_bytes)
             .collect()
+    }
+
+    /// A state that answers OSC 10/11/12 with fixed host colours (the
+    /// process-wide ones are not touched).
+    fn state_with_host_colors() -> TerminalState {
+        use crate::core::term::host_colors::{HostColors, Rgb16};
+        let mut state = TerminalState::new(80, 24);
+        state.host_colors = Some(HostColors {
+            fg: Some(Rgb16 { r: 0xb2b2, g: 0xb2b2, b: 0xb2b2 }),
+            bg: Some(Rgb16 { r: 0x0c0c, g: 0x0c0c, b: 0x0c0c }),
+            cursor: Some(Rgb16 { r: 0xffff, g: 0xffff, b: 0xffff }),
+        });
+        state
+    }
+
+    #[test]
+    fn osc_colour_queries_are_answered_with_the_host_colours() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        let got = response_bytes(
+            &mut parser,
+            &mut state,
+            "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\",
+        );
+        assert_eq!(
+            got,
+            [
+                b"\x1b]10;rgb:b2b2/b2b2/b2b2\x1b\\".to_vec(),
+                b"\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\".to_vec(),
+                b"\x1b]12;rgb:ffff/ffff/ffff\x1b\\".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn osc_colour_reply_ends_like_the_query() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        // BEL asks for BEL, ST for ST. (A C1 ST cannot end a query that
+        // comes through `Session`, see `osc_string_state`, so it is not
+        // tested here.)
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b]11;?\x07"),
+            [b"\x1b]11;rgb:0c0c/0c0c/0c0c\x07".to_vec()]
+        );
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b]11;?\x1b\\"),
+            [b"\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\".to_vec()]
+        );
+    }
+
+    #[test]
+    fn osc_colour_queries_without_a_known_colour_stay_unanswered() {
+        use crate::core::term::host_colors::{HostColors, Rgb16};
+        let mut parser = VtParser::new();
+        let mut state = TerminalState::new(80, 24);
+        // The host told us nothing: no answer (and no invented colour).
+        state.host_colors = Some(HostColors::default());
+        assert!(response_bytes(&mut parser, &mut state, "\x1b]11;?\x07\x1b]10;?\x1b\\").is_empty());
+
+        // Only the background is known: foreground and cursor stay silent.
+        state.host_colors = Some(HostColors {
+            bg: Some(Rgb16 { r: 0, g: 0, b: 0 }),
+            ..HostColors::default()
+        });
+        let got = response_bytes(&mut parser, &mut state, "\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
+        assert_eq!(got, [b"\x1b]11;rgb:0000/0000/0000\x07".to_vec()]);
+    }
+
+    #[test]
+    fn osc_colour_setting_and_odd_forms_are_ignored() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        for seq in [
+            "\x1b]11;rgb:ffff/0000/0000\x07", // setting the colour
+            "\x1b]11;\x07",
+            "\x1b]11;?;?\x07",
+            "\x1b]11?\x07",
+            "\x1b]13;?\x07",
+        ] {
+            assert!(
+                response_bytes(&mut parser, &mut state, seq).is_empty(),
+                "{seq:?} must not be answered"
+            );
+        }
+    }
+
+    #[test]
+    fn osc_colour_query_cut_short_by_escape_is_not_answered() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        // The string is aborted by the CSI that follows; only DA1 answers.
+        assert_eq!(
+            response_bytes(&mut parser, &mut state, "\x1b]11;?\x1b[c"),
+            [b"\x1b[?62;c".to_vec()]
+        );
+    }
+
+    #[test]
+    fn osc_colour_answers_keep_the_order_of_the_queries() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        // The way a Neovim-style probe asks: colour queries, then DA1.
+        let got = response_bytes(&mut parser, &mut state, "\x1b]11;?\x07\x1b]10;?\x07\x1b[c");
+        assert_eq!(
+            got,
+            [
+                b"\x1b]11;rgb:0c0c/0c0c/0c0c\x07".to_vec(),
+                b"\x1b]10;rgb:b2b2/b2b2/b2b2\x07".to_vec(),
+                b"\x1b[?62;c".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn osc_titles_still_work_after_the_colour_arms() {
+        let mut parser = VtParser::new();
+        let mut state = state_with_host_colors();
+        assert!(response_bytes(&mut parser, &mut state, "\x1b]0;hello\x07").is_empty());
+        assert_eq!(state.title, "hello");
     }
 
     #[test]

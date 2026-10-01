@@ -21,6 +21,10 @@ pub struct TerminalState {
     pub alternate_cursor: CursorState,
     pub current_attrs: CellAttrs,
     pub modes: TerminalModes,
+    /// Host colours to answer OSC 10/11/12 queries with, instead of the
+    /// process-wide ones learned at startup (`host_colors::host_colors`).
+    /// Only tests set it.
+    pub host_colors: Option<super::host_colors::HostColors>,
     pub title: String,
     /// Best-known current working directory for this pane.
     ///
@@ -95,6 +99,7 @@ impl TerminalState {
             alternate_cursor: CursorState::default(),
             current_attrs: CellAttrs::default(),
             modes: TerminalModes::default(),
+            host_colors: None,
             title: String::from("RustTerm"),
             current_path: std::env::current_dir()
                 .ok()
